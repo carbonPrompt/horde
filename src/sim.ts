@@ -51,6 +51,9 @@ export interface Unit {
   post?: [number, number]; // where you put it; it roams within its leash of this
   hp?: number;
   ai?: "hunt" | "hold" | "flee" | "home" | "reload" | "leave";
+  recallFrom?: [number, number]; // 0.24: its post before a Recall
+  crushT?: number; // 0.25: seconds left slowed from crushing infected
+  yieldCiv?: boolean; // 0.25: civilians in its way this tick: it creeps
   goal?: number; nav?: Uint16Array; thinkT?: number; reloadT?: number;
 }
 
@@ -61,7 +64,7 @@ interface Pending { kind: C.AbilityKind | "bomb" | "shell"; at: number; x: numbe
 export interface Fire { x: number; y: number; r: number; until: number }
 export interface Fallout { x: number; y: number; r: number; until: number }
 export interface Blast { x: number; y: number; r: number; t: number; color: string }
-export interface Crater { x: number; y: number; r: number; t: number }
+export interface Crater { x: number; y: number; r: number; t: number; seq: number } // seq: 1, 2, 3... (the renderer paints each once)
 export interface SupplyCrate { x: number; y: number; until: number }
 export type TransportKind = "helo_uh60" | "helo_ch47" | "helo_extract" | "c130_para" | "c130_supply" | "c130_apc" | "jet_strike" | "drone_supply";
 export interface Transport {
@@ -182,6 +185,50 @@ export class Sim {
   damage: Uint8Array;
   rubble: Uint8Array;
   craters: Crater[] = [];
+  craterSeq = 0;
+  /** 0.23: how deep in a crater each cell is (0 clean .. 255 bottom): rough ground that slows movers. */
+  rough: Uint8Array;
+  /** 0.24: cells covered by a ground unit's footprint (turret, mortar, howitzer, HIMARS, APC, tank).
+   *  Nobody walks through them; infected claw at the unit like a wall. Rebuilt every tick in battle. */
+  occ: Uint8Array;
+  private rebuildOcc(dt = 0) {
+    this.occ.fill(0);
+    for (const u of this.units) {
+      const spec = C.UNITS[u.kind];
+      if (spec.on !== "ground" || u.extractT !== undefined || (u.hp !== undefined && u.hp <= 0)) continue;
+      const [x0, y0, x1, y1] = this.footRect(spec.foot, Math.floor(u.x), Math.floor(u.y));
+      if (spec.crushSlow !== undefined && !(u.deployT && u.deployT > 0)) this.crushUnder(u, x0, y0, x1, y1, dt);
+      for (let y = Math.max(0, y0); y <= Math.min(this.h - 1, y1); y++) for (let x = Math.max(0, x0); x <= Math.min(this.w - 1, x1); x++) this.occ[y * this.w + x] = 1;
+    }
+  }
+  /** 0.25: a tank or APC kills every infected under its footprint (its kills) and slows for a moment;
+   *  civilians under or right around it make it creep instead (they step aside; it never runs people over). */
+  private crushUnder(u: Unit, x0: number, y0: number, x1: number, y1: number, dt: number) {
+    if (u.crushT && u.crushT > 0) u.crushT -= dt;
+    let crushed = 0, civ = false;
+    const b0x = Math.max(0, ((x0 - 1) / BUCKET) | 0), b1x = Math.min(this.bw - 1, ((x1 + 2) / BUCKET) | 0);
+    const b0y = Math.max(0, ((y0 - 1) / BUCKET) | 0), b1y = Math.min(this.bh - 1, ((y1 + 2) / BUCKET) | 0);
+    for (let by = b0y; by <= b1y; by++) for (let bx = b0x; bx <= b1x; bx++) {
+      for (let k = this.head[by * this.bw + bx]; k !== -1; k = this.next[k]) {
+        if (this.state[k] !== INF) continue;
+        const x = this.ax[k], y = this.ay[k];
+        if (x >= x0 && x < x1 + 1 && y >= y0 && y < y1 + 1) { this.state[k] = DEAD; this.hp[k] = 0; this.recordKill(k, u); crushed++; }
+      }
+      if (!civ) for (let k = this.headC[by * this.bw + bx]; k !== -1; k = this.next[k]) {
+        if (this.state[k] !== CIV && this.state[k] !== SAFE_CIV) continue;
+        const x = this.ax[k], y = this.ay[k];
+        if (x >= x0 - 1 && x < x1 + 2 && y >= y0 - 1 && y < y1 + 2) { civ = true; break; }
+      }
+    }
+    if (crushed) u.crushT = C.CRUSH_SLOW_S;
+    u.yieldCiv = civ;
+  }
+  /** Speed multiplier on cell i from craters and rubble (the stronger of the two; they don't stack). */
+  roughMul(i: number) {
+    let m = this.rough[i] ? 1 - (1 - C.CRATER_SLOW_MUL) * (this.rough[i] / 255) : 1;
+    if ((this.rubble[i] || this.damage[i] >= 140) && C.RUBBLE_SLOW_MUL < m) m = C.RUBBLE_SLOW_MUL;
+    return m;
+  }
   buildingsCollapsed = 0;
 
   // Abilities, air/ground deployment transports, parachutes, supply crates, and bridges.
@@ -242,6 +289,8 @@ export class Sim {
     this.killGrid = new Uint16Array(cells);
     this.damage = new Uint8Array(cells);
     this.rubble = new Uint8Array(cells);
+    this.rough = new Uint8Array(cells);
+    this.occ = new Uint8Array(cells);
     this.inZone = new Uint8Array(cells);
     this.wallHp = new Float32Array(cells);
     this.gnawTick = new Uint32Array(cells);
@@ -337,6 +386,7 @@ export class Sim {
 
   /** Walkable for a mover of this kind: interior/gate cells; walls block until breached. */
   passable(i: number, infected: boolean, swimmer = false) {
+    if (this.occ[i]) return false; // 0.24: a ground unit stands here
     const t = this.map.tile[i];
     if (!walkable(t) && !(swimmer && t === WATER)) return false;
     const z = this.inZone[i];
@@ -563,8 +613,28 @@ export class Sim {
     if (spec.on === "water" && t !== WATER) return `${spec.name}s go on the river.`;
     if (spec.on === "zone" && this.inZone[this.idx(x, y)] !== 1) return `${spec.name}s take off from inside a safe zone.`;
     if (spec.on === "any") return "That unit can't be built.";
-    if (this.units.some(u => Math.abs(u.x - x) < 2 && Math.abs(u.y - y) < 2) || this.supports.some(b => Math.abs(b.x - x) < 2 && Math.abs(b.y - y) < 2)) return "Too close to another unit or building.";
+    const near = this.overlapAt(spec.foot, x, y);
+    if (near) return near;
     if (this.remaining() < this.unitCost(kind, x, y)) return "Not enough budget.";
+    return null;
+  }
+
+  /** 0.23: true while a saved plan loads; old plans may overlap under the new footprints and keep the old 2-cell rule. */
+  ignoreFootprint = false;
+  /** Cells a footprint of side n covers when centered on cell (x, y): [x0, y0, x1, y1] inclusive. */
+  footRect(n: number, x: number, y: number): [number, number, number, number] {
+    const lo = (n - 1) >> 1, hi = n - 1 - lo;
+    return [x - lo, y - lo, x + hi, y + hi];
+  }
+  /** Why a footprint of side n at (x, y) can't go there (overlaps a unit or support building), or null. */
+  overlapAt(n: number, x: number, y: number): string | null {
+    if (this.ignoreFootprint) {
+      return this.units.some(u => Math.abs(u.x - x) < 2 && Math.abs(u.y - y) < 2) || this.supports.some(b => Math.abs(b.x - x) < 2 && Math.abs(b.y - y) < 2) ? "Too close to another unit or building." : null;
+    }
+    const [ax0, ay0, ax1, ay1] = this.footRect(n, x, y);
+    const hit = (m: number, bx: number, by: number) => { const [x0, y0, x1, y1] = this.footRect(m, bx, by); return ax0 <= x1 && x0 <= ax1 && ay0 <= y1 && y0 <= ay1; };
+    for (const u of this.units) if (hit(C.UNITS[u.kind].foot, u.x, u.y)) return `Would overlap the ${C.UNITS[u.kind].name}.`;
+    for (const b of this.supports) if (hit(C.SUPPORTS[b.kind].foot, b.x, b.y)) return `Would overlap the ${C.SUPPORTS[b.kind].name}.`;
     return null;
   }
 
@@ -625,14 +695,18 @@ export class Sim {
     const cy0 = Math.max(0, Math.floor(y - r - 0.5)), cy1 = Math.min(this.h - 1, Math.ceil(y + r + 0.5));
     const centerTile = (x >= 0 && y >= 0 && x < this.w && y < this.h) ? this.tileAt(x | 0, y | 0) : WATER;
     if (strDmg >= 35 && centerTile !== WATER && centerTile !== BRIDGE) {
-      const existing = this.craters.find(c => hyp(c.x - x, c.y - y) < 2.2);
-      if (existing) {
-        existing.r = Math.min(6.5, Math.max(existing.r, r * 0.7) + 0.15);
-        existing.t = this.time;
-      } else {
-        if (this.craters.length >= 240) this.craters.shift();
-        this.craters.push({ x, y, r: Math.min(6, Math.max(1.2, r * 0.6)), t: this.time });
-      }
+      // 0.23: every hit leaves its own crater (they stack), dug into the ground as rough terrain
+      const cr = Math.min(6, Math.max(1.2, r * 0.6));
+      if (this.craters.length >= 600) this.craters.shift();
+      this.craters.push({ x, y, r: cr, t: this.time, seq: ++this.craterSeq });
+      const R = cr + 0.5;
+      for (let yy = Math.max(0, Math.floor(y - R)); yy <= Math.min(this.h - 1, Math.ceil(y + R)); yy++)
+        for (let xx = Math.max(0, Math.floor(x - R)); xx <= Math.min(this.w - 1, Math.ceil(x + R)); xx++) {
+          const d = hyp(xx + 0.5 - x, yy + 0.5 - y);
+          if (d > R) continue;
+          const i = yy * this.w + xx, v = Math.round(255 * Math.min(1, 1.15 - d / R));
+          if (this.map.tile[i] !== WATER && this.map.tile[i] !== BRIDGE && v > this.rough[i]) this.rough[i] = v;
+        }
     }
     let changed = false;
     for (let cy = cy0; cy <= cy1; cy++) {
@@ -692,6 +766,7 @@ export class Sim {
       cooldown: 0, kills: 0, shotX: 0, shotY: 0, shotT: -1, paid: cost,
     };
     if (spec.mobile) { u.post = [x, y]; u.hp = spec.mobile.hp; u.ai = "hunt"; u.thinkT = 0; }
+    else if (spec.hp) u.hp = spec.hp; // 0.24: street emplacements can be clawed down
     this.units.push(u);
     if (this.phase === "plan") this.refreshUnitAmmo();
     else {
@@ -721,7 +796,9 @@ export class Sim {
     const spec = C.SUPPORTS[kind];
     if (this.tileAt(x, y) !== BUILDING) return `${spec.name}s go on buildings.`;
     if (!this.unitInZone({ x, y })) return `${spec.name}s must be placed on a building inside a safe zone.`;
-    if (this.units.some(u => Math.abs(u.x - x) < 2 && Math.abs(u.y - y) < 2) || this.supports.some(b => Math.abs(b.x - x) < 2 && Math.abs(b.y - y) < 2)) return "Too close to another unit or building.";
+    if (kind === "militia" && this.supports.filter(b => b.kind === "militia").length >= C.MILITIA_MAX) return `Only ${C.MILITIA_MAX} Armories per battle.`;
+    const near = this.overlapAt(spec.foot, x, y);
+    if (near) return near;
     if (this.remaining() < this.supportCost(kind, x, y)) return "Not enough budget.";
     return null;
   }
@@ -1105,9 +1182,36 @@ export class Sim {
     if (x < 0 || y < 0 || x >= this.w || y >= this.h) return "Off the map.";
     const t = this.map.tile[this.idx(x, y)];
     if (mob.nav !== "air" && (mob.nav === "water" ? t !== WATER : !walkable(t))) return mob.nav === "water" ? "Boats go on the river." : "Send it to a street or park.";
-    u.post = [x, y]; u.goal = undefined; u.thinkT = 0;
+    u.post = [x, y]; u.goal = undefined; u.thinkT = 0; u.recallFrom = undefined;
     if (u.ai !== "reload") u.ai = "hunt";
     return null;
+  }
+
+  /** 0.24: every mobile unit (not boats) goes to the nearest safe zone and holds there; called again,
+   *  they all go back to their posts. A strike order on a unit takes it off the recall. Returns how many moved. */
+  recalled = false;
+  recallAll(): number {
+    let n = 0;
+    if (this.recalled) {
+      for (const u of this.units) if (u.recallFrom) { u.post = u.recallFrom; u.recallFrom = undefined; u.goal = undefined; u.thinkT = 0; n++; }
+      this.recalled = false;
+      return n;
+    }
+    const cells: number[] = [];
+    for (let i = 0; i < this.inZone.length; i++) if (this.inZone[i] === 1 && walkable(this.map.tile[i])) cells.push(i);
+    if (!cells.length) return 0;
+    for (const u of this.units) {
+      const mob = C.UNITS[u.kind].mobile;
+      if (!mob || mob.nav === "water" || !u.post || u.extractT !== undefined) continue;
+      let best = -1, bd = Infinity;
+      for (const i of cells) { const dx = (i % this.w) - u.x, dy = ((i / this.w) | 0) - u.y, d = dx * dx + dy * dy; if (d < bd) { bd = d; best = i; } }
+      u.recallFrom = u.post;
+      u.post = [best % this.w, (best / this.w) | 0]; u.goal = undefined; u.thinkT = 0;
+      if (u.ai !== "reload" && u.ai !== "leave") u.ai = "hunt";
+      n++;
+    }
+    this.recalled = n > 0;
+    return n;
   }
 
   /** The mobile unit nearest (x, y) within r, or null. */
@@ -1133,8 +1237,8 @@ export class Sim {
         const cap = shortage && spec.reloadsInZone && this.unitInZone(u) ? spec.ammo * 2 : spec.ammo;
         u.ammo = Math.max(u.ammo, cap);
       }
-      if (spec.mobile && spec.mobile.hp !== Infinity && u.hp !== undefined && u.hp > 0) {
-        u.hp = spec.mobile.hp;
+      if (C.maxHp(spec) !== undefined && u.hp !== undefined && u.hp > 0) {
+        u.hp = C.maxHp(spec)!;
         if (u.ai === "home" || u.ai === "reload") { u.ai = "hunt"; u.thinkT = 0; }
       }
     }
@@ -1350,6 +1454,20 @@ export class Sim {
       sites.push([x, y]);
     }
     this.sites = sites; // the first cases: they turn when the warning runs out
+    // 0.24: more outbreaks roll in after the first cases, at random times inside the difficulty's window
+    const d = this.diff, nSpread = d.spreadMin + Math.floor(r() * (d.spreadMax - d.spreadMin + 1));
+    const spread: { x: number; y: number; t: number }[] = [];
+    guard = 0;
+    while (spread.length < nSpread && guard++ < 20000) {
+      const x = 2 + Math.floor(r() * (this.w - 4)), y = 2 + Math.floor(r() * (this.h - 4));
+      const i = this.idx(x, y);
+      if (!walkable(this.map.tile[i]) || this.inZone[i]) continue;
+      if (this.zoneClosed && this.distToZone(x, y) < C.OUTBREAK_MIN_ZONE_DIST) continue;
+      if (sites.some(([sx, sy]) => hyp(sx - x, sy - y) < 40) || spread.some(p => hyp(p.x - x, p.y - y) < 40)) continue;
+      spread.push({ x, y, t: C.WARNING_S + Math.max(0.5, r() * d.spreadS) });
+    }
+    this.spreadSites = spread.sort((a, b) => a.t - b.t);
+    this.spreadNext = 0;
     this.findEntries();
     this.planWave(r);
     this.lockedSpend = this.spent();
@@ -1360,6 +1478,9 @@ export class Sim {
   }
   sites: [number, number][] = [];
   outbreak = false; // the warning is over and the first cases have turned
+  /** 0.24: outbreaks rolled after the first cases (sorted by time); spreadNext = the next one to turn. */
+  spreadSites: { x: number; y: number; t: number }[] = [];
+  private spreadNext = 0;
   wave = 0;
   nextWaveT = Infinity;
   entries: Entry[] = [];
@@ -1603,12 +1724,17 @@ export class Sim {
       for (const [x, y] of this.sites) for (let j = 0; j < C.INFECTED_PER_SITE; j++) this.spawnInfected(x + r() * 2, y + r() * 2, C.INF_HP * this.infHpMul, false);
       this.nextWaveT = this.time + rollGap(this.diff, this.heatNow(), r, this.mutators.has("blitz_hordes"));
     }
+    while (this.outbreak && this.spreadNext < this.spreadSites.length && this.time >= this.spreadSites[this.spreadNext].t) {
+      const p = this.spreadSites[this.spreadNext++];
+      for (let j = 0; j < C.INFECTED_PER_SITE; j++) this.spawnInfected(p.x + r() * 2, p.y + r() * 2, C.INF_HP * this.infHpMul, false);
+    }
     if (this.time >= this.nextWaveT) {
       const h = this.heatNow();
       if (this.dev.waves) this.spawnWave(r, infHpScale, h);
       this.nextWaveT = this.time + rollGap(this.diff, h, r, this.mutators.has("blitz_hordes"));
     }
     if (this.marching.length) this.stepMarch(r, dt);
+    this.rebuildOcc(dt);
 
     for (let k = 0; k < this.n; k++) {
       const s = this.state[k];
@@ -1620,8 +1746,14 @@ export class Sim {
       const cellTile = this.map.tile[cellIdx];
       const cellInfra = (cellTile === 0 || cellTile === BRIDGE) ? this.map.height[cellIdx] : 0;
       let vx = 0, vy = 0, speed: number;
+      if (s === CIV && this.occ[cellIdx]) { // 0.24: a unit was put down or drove onto them: step out
+        const out = this.wallExit(cx, cy, false);
+        if (out >= 0) { this.ax[k] = (out % this.w) + 0.5; this.ay[k] = ((out / this.w) | 0) + 0.5; }
+        continue;
+      }
       if (s === CIV) {
-        speed = C.CIV_SPEED * (cellInfra === INFRA_HIGHWAY ? C.HIGHWAY_SPEED_MUL : cellInfra === INFRA_RAIL || cellInfra === INFRA_STATION ? C.RAIL_SPEED_MUL : 1);
+        speed = C.CIV_SPEED * (cellInfra === INFRA_HIGHWAY ? C.HIGHWAY_SPEED_MUL : cellInfra === INFRA_RAIL || cellInfra === INFRA_STATION ? C.RAIL_SPEED_MUL : 1)
+        if (this.rough[cellIdx]) speed *= this.roughMul(cellIdx); // 0.23: craters slow everyone
         // Flee: steer away from the nearest infected (checked every 4th tick, staggered).
         if ((k + this.tick) % 4 === 0) {
           const e = this.nearest(x, y, C.CIV_SENSE, INF);
@@ -1643,12 +1775,22 @@ export class Sim {
         }
       } else {
         const swimmer = this.mutant[k] === 1;
+        // 0.22.1: an infected caught inside a standing wall or gate (a person bitten in a gateway,
+        // a gate locked or a zone drawn on top of it) could not step out and jittered there. Put it on the
+        // nearest open cell, outside the zone first.
+        if (!this.passable(cellIdx, true, swimmer)) {
+          const inUnit = this.occ[cellIdx] === 1;
+          const out = this.wallExit(cx, cy, swimmer, !inUnit); // under a unit: the nearest open cell; in a wall: outside first
+          if (!inUnit) this.wallEjects++;
+          if (out >= 0) { this.ax[k] = (out % this.w) + 0.5; this.ay[k] = ((out / this.w) | 0) + 0.5; }
+          continue;
+        }
         const onWater = swimmer && cellTile === WATER;
         speed = infSpeed * (swimmer ? (onWater ? C.SWIMMER_SPEED_WATER : C.SWIMMER_SPEED_LAND) : 1);
         if (!onWater) {
           if (cellInfra === INFRA_HIGHWAY) speed *= C.HIGHWAY_SPEED_MUL;
           else if (cellInfra === INFRA_RAIL || cellInfra === INFRA_STATION) speed *= C.RAIL_SPEED_MUL;
-          if (this.rubble[cellIdx] || this.damage[cellIdx] >= 140) speed *= C.RUBBLE_SLOW_MUL;
+          speed *= this.roughMul(cellIdx);
         }
         // Chase the nearest civilian in sight (retarget every 5th tick), else follow the field to the zone.
         if ((k + this.tick) % 6 === 0) {
@@ -1701,7 +1843,7 @@ export class Sim {
       if (s === CIV) { const z = this.inZone[this.idx(this.ax[k] | 0, this.ay[k] | 0)]; if (z === 1 || z === 3) this.state[k] = SAFE_CIV; } // a gate is a guarded checkpoint
     }
 
-    if (this.tick % 20 === 0) { this.refreshAuras(); this.hasPads = this.supports.some(b => b.kind === "evac"); }
+    if (this.tick % 20 === 0) { this.refreshAuras(); this.hasPads = this.supports.some(b => b.kind === "evac"); if (this.hasPads) this.buildPadField(); }
     this.stepSupports(dt);
     this.fireUnits(dt);
     this.units = this.units.filter(u => {
@@ -1727,6 +1869,31 @@ export class Sim {
     this.checkEnd();
   }
   evacEarned = 0;
+  /** Infected put back out of a wall or gate they were caught in (0.22.1; logged). */
+  wallEjects = 0;
+  /** Infected standing inside a standing wall or gate right now (should stay 0). */
+  get stuckInWall() {
+    let n = 0;
+    for (let k = this.civN; k < this.n; k++) if (this.state[k] === INF && !this.passable(this.idx(this.ax[k] | 0, this.ay[k] | 0), true, this.mutant[k] === 1)) n++;
+    return n;
+  }
+  /** Nearest open cell around a wall cell, ring by ring: outside the zone first, then inside; -1 if none in 4 cells. */
+  private wallExit(cx: number, cy: number, swimmer: boolean, preferOutside = true) {
+    let inside = -1;
+    for (let r = 1; r <= 4; r++) {
+      for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) {
+        if (Math.abs(dx) !== r && Math.abs(dy) !== r) continue;
+        const x = cx + dx, y = cy + dy;
+        if (x < 0 || y < 0 || x >= this.w || y >= this.h) continue;
+        const i = this.idx(x, y);
+        if (!this.passable(i, true, swimmer)) continue;
+        if (this.inZone[i] === 0) return i;
+        if (inside < 0) inside = i;
+      }
+      if (inside >= 0 && (r >= 2 || !preferOutside)) return inside;
+    }
+    return inside;
+  }
   private hasPads = false;
   chase: Uint8Array;
   gnawTick: Uint32Array;
@@ -1756,6 +1923,15 @@ export class Sim {
   }
 
   private mill(k: number, r: () => number, dt: number) {
+    if (this.occ[this.idx(this.ax[k] | 0, this.ay[k] | 0)]) { // 0.24: step out from under a unit
+      for (let rr = 1; rr <= 5; rr++) for (let dy = -rr; dy <= rr; dy++) for (let dx = -rr; dx <= rr; dx++) {
+        const x = (this.ax[k] | 0) + dx, y = (this.ay[k] | 0) + dy;
+        if (x < 0 || y < 0 || x >= this.w || y >= this.h) continue;
+        const i = this.idx(x, y);
+        if (!this.occ[i] && this.inZone[i] === 1 && walkable(this.map.tile[i])) { this.ax[k] = x + 0.5; this.ay[k] = y + 0.5; return; }
+      }
+      return;
+    }
     let sp = C.CIV_SPEED * 0.35 * dt;
     const e = this.breaches && (k + this.tick) % 8 === 0 ? this.nearest(this.ax[k], this.ay[k], C.CIV_SENSE, INF) : -1;
     if (e >= 0) {
@@ -1763,25 +1939,25 @@ export class Sim {
       this.hx[k] = dx / l; this.hy[k] = dy / l; this.hp[k] = 2;
     }
     if (this.hp[k] > 0) { this.hp[k] -= dt; sp = C.CIV_SPEED * dt; }
-    else if (r() < 0.05) {
-      // people know where the Evac Points are and make their way over; otherwise they mill about
-      const pad = this.hasPads ? this.nearestPad(this.ax[k], this.ay[k]) : null;
-      const dx = pad ? pad.x + 0.5 - this.ax[k] : 0, dy = pad ? pad.y + 0.5 - this.ay[k] : 0, l = hyp(dx, dy);
-      if (pad && l > 3) { this.hx[k] = dx / l; this.hy[k] = dy / l; }
-      else { const a = r() * 6.283; this.hx[k] = Math.cos(a); this.hy[k] = Math.sin(a); }
-    }
+    else if (r() < 0.05) { const a = r() * 6.283; this.hx[k] = Math.cos(a); this.hy[k] = Math.sin(a); }
     const ci = this.idx(this.ax[k] | 0, this.ay[k] | 0);
     if (this.inZone[ci] !== 1) { // still in the gateway (or on a broken wall): step inside
       const d = this.downhill(this.civField, this.ax[k] | 0, this.ay[k] | 0);
       if (d) { this.hx[k] = d[0]; this.hy[k] = d[1]; }
     }
+    // 0.22: people know where the Evac Points are and walk the zone's streets to the nearest one
+    const pf = this.hasPads && this.inZone[ci] === 1 && this.hp[k] <= 0 ? this.padField[ci] : 65535;
+    if (pf !== 65535 && pf > C.EVAC_GATHER_D) {
+      const d = this.downhill(this.padField, this.ax[k] | 0, this.ay[k] | 0);
+      if (d) { this.hx[k] = d[0]; this.hy[k] = d[1]; sp = C.CIV_SPEED * C.EVAC_WALK_MUL * dt; }
+    }
     let hx = this.hx[k], hy = this.hy[k];
-    if (this.inZone[ci] === 1 && this.hp[k] <= 0) { this.spread(this.ax[k] | 0, this.ay[k] | 0); hx += this.spx * 1.5; hy += this.spy * 1.5; } // fill the zone evenly
+    if (this.inZone[ci] === 1 && this.hp[k] <= 0 && pf === 65535) { this.spread(this.ax[k] | 0, this.ay[k] | 0); hx += this.spx * 1.5; hy += this.spy * 1.5; } // fill the zone evenly
     const nx = Math.fround(this.ax[k] + hx * sp), ny = Math.fround(this.ay[k] + hy * sp);
     const ok = (x: number, y: number) => {
       if (x < 0 || y < 0 || x >= this.w || y >= this.h) return false;
       const i = this.idx(x | 0, y | 0);
-      return walkable(this.map.tile[i]) && (this.inZone[i] === 1 || i === ci || this.inZone[ci] !== 1 && this.inZone[i] === 3);
+      return walkable(this.map.tile[i]) && !this.occ[i] && (this.inZone[i] === 1 || i === ci || this.inZone[ci] !== 1 && this.inZone[i] === 3);
     };
     if (ok(nx, this.ay[k])) this.ax[k] = nx; else this.hx[k] = -this.hx[k];
     if (ok(this.ax[k], ny)) this.ay[k] = ny; else this.hy[k] = -this.hy[k];
@@ -1848,10 +2024,10 @@ export class Sim {
           }
         }
         for (const u of this.units) {
-          const mob = C.UNITS[u.kind].mobile;
-          if (!mob || mob.hp === Infinity || u.hp === undefined || u.hp <= 0 || u.hp >= mob.hp) continue;
+          const max = C.maxHp(C.UNITS[u.kind]); // 0.24: emplacements too
+          if (max === undefined || u.hp === undefined || u.hp <= 0 || u.hp >= max) continue;
           const dx = u.x - b.x, dy = u.y - b.y;
-          if (dx * dx + dy * dy <= R2) u.hp = Math.min(mob.hp, u.hp + C.REPAIR_UNIT_HPS * dt4);
+          if (dx * dx + dy * dy <= R2) u.hp = Math.min(max, u.hp + C.REPAIR_UNIT_HPS * dt4);
         }
       } else if (b.kind === "supply" && this.tick % 4 === 0) {
         const dt4 = dt * 4;
@@ -1936,15 +2112,31 @@ export class Sim {
     this.spawnHelo("helo_ch47", x, y, 6, 1.5, C.SUPPORTS.evac.color, "EVAC LIFT");
   }
 
-  /** The active Evac Point nearest (x, y) within range, or null. */
-  private nearestPad(x: number, y: number): Support | null {
-    let best: Support | null = null, bd = C.EVAC_PULL_R * C.EVAC_PULL_R;
+  /** 0.22: walking distance inside the zone to the nearest active Evac Point (65535 = no pad reachable). */
+  padField = new Uint16Array(0);
+  private padQ = new Int32Array(0);
+  private buildPadField() {
+    const cells = this.w * this.h;
+    if (this.padField.length !== cells) { this.padField = new Uint16Array(cells); this.padQ = new Int32Array(cells); }
+    const f = this.padField, q = this.padQ;
+    f.fill(65535);
+    let qh = 0, qt = 0;
     for (const b of this.supports) {
       if (b.kind !== "evac" || b.extractT !== undefined || (b.deployT && b.deployT > 0)) continue;
-      const dx = b.x + 0.5 - x, dy = b.y + 0.5 - y, d = dx * dx + dy * dy;
-      if (d < bd) { bd = d; best = b; }
+      for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) { // the street cells around the pad's building
+        const x = b.x + dx, y = b.y + dy;
+        if (x < 0 || y < 0 || x >= this.w || y >= this.h) continue;
+        const i = this.idx(x, y);
+        if (f[i] === 65535 && this.inZone[i] === 1 && walkable(this.map.tile[i])) { f[i] = 0; q[qt++] = i; }
+      }
     }
-    return best;
+    while (qh < qt) {
+      const c = q[qh++], cx = c % this.w, d = f[c] + 1;
+      for (const n of [cx > 0 ? c - 1 : -1, cx < this.w - 1 ? c + 1 : -1, c - this.w, c + this.w]) {
+        if (n < 0 || n >= cells || f[n] !== 65535 || this.inZone[n] !== 1 || !walkable(this.map.tile[n])) continue;
+        f[n] = d; q[qt++] = n;
+      }
+    }
   }
 
   private findSquadSpawn(bx: number, by: number): [number, number] | null {
@@ -1975,6 +2167,11 @@ export class Sim {
         continue;
       }
       if (u.deployT && u.deployT > 0) { u.deployT -= dt; if (u.deployT <= 0) { u.deployT = 0; this.refreshAuras(); } else continue; }
+      // 0.24: infected pressing on a street emplacement claw at it like a wall (it keeps shooting)
+      if (!spec.mobile && spec.hp && u.hp !== undefined && u.hp > 0 && (this.tick + u.x) % 4 === 0 && this.dev.unitDamage) {
+        const [x0, y0, x1, y1] = this.footRect(spec.foot, u.x, u.y);
+        u.hp -= this.countInf((x0 + x1 + 1) / 2, (y0 + y1 + 1) / 2, spec.foot * 0.7 + 1.2, 16) * C.MOBILE_HURT_DPS * dt * 4; // footprint plus the ring of cells around it
+      }
       if (spec.mobile) { this.think(u, dt); if (u.ai === "home" || u.ai === "reload" || u.ai === "leave") continue; }
       while (u.cooldown <= 0 && u.ammo >= 1) {
         const t = spec.minRange ? this.farTarget(u, spec.minRange) : this.pickTarget(u);
@@ -2090,7 +2287,7 @@ export class Sim {
       }
     }
     // Getting bitten: infected touching it wear it down (boats are out of reach).
-    if (mob.hp !== Infinity && (this.tick + u.post![0]) % 4 === 0) u.hp! -= this.dev.unitDamage ? this.countInf(fx, fy, 1.3, 12) * C.MOBILE_HURT_DPS * dt * 4 : 0;
+    if (mob.hp !== Infinity && (this.tick + u.post![0]) % 4 === 0) u.hp! -= this.dev.unitDamage ? this.countInf(fx, fy, spec.on === "ground" ? Math.max(1.3, spec.foot * 0.7 + 1.2) : 1.3, spec.on === "ground" ? 16 : 12) * C.MOBILE_HURT_DPS * (spec.clawMul ?? 1) * dt * 4 : 0; // 0.25: armor
     if (u.ai === "reload") {
       u.reloadT! -= dt * (u.supplied ? 2 : 1);
       if (u.reloadT! <= 0) { u.ammo = spec.ammo; u.hp = Math.min(mob.hp, u.hp! + mob.hp * 0.5); u.ai = "hunt"; u.thinkT = 0; }
@@ -2146,7 +2343,8 @@ export class Sim {
     const cx = fx | 0, cy = fy | 0;
     const mIdx = this.idx(cx, cy);
     const mInfra = (this.map.tile[mIdx] === 0 || this.map.tile[mIdx] === BRIDGE) ? this.map.height[mIdx] : 0;
-    const sp = mob.speed * (mInfra === INFRA_HIGHWAY ? C.HIGHWAY_SPEED_MUL : 1) * dt;
+    const sp = mob.speed * (mInfra === INFRA_HIGHWAY ? C.HIGHWAY_SPEED_MUL : 1) * (mob.nav === "water" ? 1 : this.roughMul(mIdx)) * dt // 0.23: rough ground (air returns above)
+      * (u.crushT && u.crushT > 0 ? spec.crushSlow ?? 1 : 1) * (u.yieldCiv ? C.CRUSH_YIELD_MUL : 1); // 0.25: crushing slows it; people in the way, it creeps
     let d: [number, number] | null = null;
     if (mob.nav === "air") { // flies straight to its goal (or home to its post to rearm)
       if (u.ai === "hunt" && hyp(fx - u.post![0], fy - u.post![1]) < mob.leash * 0.6 && this.nearest(fx, fy, u.range * 0.75, INF, 255, 120) >= 0) return;

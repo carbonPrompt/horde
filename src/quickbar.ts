@@ -1,8 +1,8 @@
-/** The 9-slot quick bar under the map: tool ids the player dragged in from the picker (0.19). Pure, no DOM. */
-export const QUICK_SLOTS = 9;
+/** The 7-slot quick bar under the map (keys Z X C V B N M since 0.22): tool ids the player dragged in from the picker (0.19). Pure, no DOM. */
+export const QUICK_SLOTS = 7;
 export type Slots = (string | null)[];
 
-/** Any saved value to exactly 9 slots; non-strings and tools the game does not know become empty. */
+/** Any saved value to exactly QUICK_SLOTS slots (an old 9-slot bar keeps its first 7); non-strings and tools the game does not know become empty. */
 export function cleanQuickbar(v: unknown, known: (t: string) => boolean): Slots {
   const a = Array.isArray(v) ? v : [];
   return Array.from({ length: QUICK_SLOTS }, (_, i) => (typeof a[i] === "string" && known(a[i]) ? a[i] : null));

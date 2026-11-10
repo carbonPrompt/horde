@@ -205,18 +205,19 @@ export class Sound {
     this.fire = fg;
   }
   /** Call every ~250 ms. horde 0..1 (infected on screen), fire 0..1, zoom 0..1 (zoomed in = 1),
-   *  panic 0..1 (fleeing people on screen), warning: the siren phase before the outbreak, battle: any battle at all. */
-  ambience(horde: number, fire: number, zoom = 0.5, panic = 0, warning = false, battle = false) {
+   *  panic 0..1 (fleeing people on screen), warning: the siren phase before the outbreak, battle: any battle at all,
+   *  near 0..1: how close the camera is (0.22: zombie and crowd sounds are silent at 0, full at 1). */
+  ambience(horde: number, fire: number, zoom = 0.5, panic = 0, warning = false, battle = false, near = 1) {
     if (!this.ctx) return;
     const t = this.ctx.currentTime, set = (n: Loop, v: number, tc = 0.6) => this.loops[n]?.gain.setTargetAtTime(Math.max(0, Math.min(1, v)), t, tc);
     const real = !!this.loops["horde-far-1"];
-    if (this.amb) this.amb.g.gain.setTargetAtTime(real ? 0 : Math.min(1, horde) * 0.55, t, 0.5);
+    if (this.amb) this.amb.g.gain.setTargetAtTime(real ? 0 : Math.min(1, horde) * 0.55 * near, t, 0.5);
     if (this.fire) this.fire.gain.setTargetAtTime(this.loops["fire-1"] ? 0 : Math.min(1, fire) * 0.12 * (0.7 + 0.3 * Math.random()), t, 0.1);
     const h = Math.min(1, horde);
-    set("horde-far-1", h * (0.25 + 0.45 * (1 - zoom)));            // the distant chorus, strongest zoomed out
-    set("horde-close-1", h * zoom * zoom * 0.9);                   // growls up close when zoomed in
-    set("crowd-panic-1", Math.min(1, panic) * (0.15 + 0.75 * zoom)); // screaming people near the camera
-    set("crowd-far-1", battle ? 0.12 + 0.15 * (1 - zoom) : 0);
+    set("horde-far-1", h * 0.35 * near);                           // the chorus around you
+    set("horde-close-1", h * near * 0.9);                          // growls up close
+    set("crowd-panic-1", Math.min(1, panic) * 0.9 * near);         // screaming people near the camera
+    set("crowd-far-1", battle ? 0.2 * near : 0);
     set("fire-1", Math.min(1, fire) * 0.7, 0.3);
     set("siren-1", warning ? 0.45 : 0, warning ? 0.3 : 0.8);
   }

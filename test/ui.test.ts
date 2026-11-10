@@ -6,8 +6,9 @@ const known = (t: string) => ["mortar", "howitzer", "nuke"].includes(t);
 const empty = () => Array(QUICK_SLOTS).fill(null) as (string | null)[];
 
 test("cleanQuickbar handles junk", () => {
-  expect(cleanQuickbar(undefined, known)).toEqual(Array(9).fill(null));
-  expect(cleanQuickbar("x", known)).toEqual(Array(9).fill(null));
+  expect(QUICK_SLOTS).toBe(7); // 0.22: Z X C V B N M
+  expect(cleanQuickbar(undefined, known)).toEqual(Array(7).fill(null));
+  expect(cleanQuickbar("x", known)).toEqual(Array(7).fill(null));
   const s = cleanQuickbar(["mortar", 7, "bogus", null, "nuke", ...Array(10).fill("howitzer")], known);
   expect(s.length).toBe(QUICK_SLOTS);
   expect(s.slice(0, 5)).toEqual(["mortar", null, null, null, "nuke"]);
@@ -261,3 +262,18 @@ test("save keeps a valid difficulty, drops junk", () => {
 });
 
 
+
+test("an old 9-slot quick bar keeps its first 7 slots", () => {
+  expect(cleanQuickbar(["mortar", null, null, null, null, null, "nuke", "howitzer", null], known)).toEqual(["mortar", null, null, null, null, null, "nuke"]);
+});
+
+test("save clean keeps updater settings and the game version only when well formed", () => {
+  const base = { settings: { fullscreen: true, edgeScroll: false, showRanges: false }, best: {}, plans: {} } as any;
+  const ok = clean({ ...base, gameVersion: "0.26.0", settings: { ...base.settings, autoUpdate: true, checkUpdates: false, updatePin: "0.24.0" } });
+  expect(ok.gameVersion).toBe("0.26.0");
+  expect(ok.settings).toMatchObject({ autoUpdate: true, checkUpdates: false, updatePin: "0.24.0" });
+  const bad = clean({ ...base, gameVersion: "<b>", settings: { ...base.settings, autoUpdate: "yes", updatePin: "../x" } });
+  expect(bad.gameVersion).toBeUndefined();
+  expect(bad.settings.autoUpdate).toBeUndefined();
+  expect(bad.settings.updatePin).toBeUndefined();
+});

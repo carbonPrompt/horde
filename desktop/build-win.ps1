@@ -1,6 +1,6 @@
 # Builds the Windows game and installer on a Windows PC with Inno Setup 6. The build folder ($env:HORDE_BUILD,
 # default C:\horde-build) holds:
-#   app\    horde.html (from `bun build.ts`), main.js, preload.js, package.json, icon.ico, installer.iss
+#   app\    horde.html (from `bun build.ts`), main.js, preload.js, updates.js, package.json, icon.ico, installer.iss
 #   tools\  rcedit-x64.exe (github.com/electron/rcedit v2.0.0)
 # Output: <build folder>\out\Horde-Setup-<ver>.exe (also copied to $env:HORDE_OUT when set)
 $ErrorActionPreference = "Stop"
@@ -25,7 +25,7 @@ Rename-Item "$out\Horde\electron.exe" "Horde.exe"
 Remove-Item "$out\Horde\resources\default_app.asar" -ErrorAction SilentlyContinue
 Get-ChildItem "$out\Horde\locales" -Exclude "en-US.pak" | Remove-Item  # the game is English-only
 New-Item -ItemType Directory "$out\Horde\resources\app" -Force | Out-Null
-foreach ($f in "horde.html", "main.js", "preload.js", "package.json", "icon.ico") { Copy-Item "$root\app\$f" "$out\Horde\resources\app\" }
+foreach ($f in "horde.html", "main.js", "preload.js", "updates.js", "package.json", "icon.ico") { Copy-Item "$root\app\$f" "$out\Horde\resources\app\" }
 $ver = (Get-Content "$root\app\package.json" | ConvertFrom-Json).version
 & $rcedit "$out\Horde\Horde.exe" --set-icon "$root\app\icon.ico" `
   --set-version-string ProductName Horde --set-version-string FileDescription Horde `

@@ -1,5 +1,5 @@
 // Horde for Windows: a plain Electron window around the same single-file game the browser build uses.
-const { app, BrowserWindow, ipcMain, shell } = require("electron");
+const { app, BrowserWindow, ipcMain, shell, net } = require("electron");
 const path = require("path");
 
 if (!app.requestSingleInstanceLock()) app.quit();
@@ -67,6 +67,52 @@ ipcMain.on("save-write", (_e, text) => {
   if (typeof text !== "string" || text.length > 5e6) return;
   try { const tmp = saveFile() + ".tmp"; fs.writeFileSync(tmp, text); fs.renameSync(tmp, saveFile()); } catch (err) { mlog("ERROR", "save-failed", { stack: String(err && err.stack) }); }
 });
+// ---------- Updates (0.26): GitHub releases of this repo only; the page asks, this process does the work ----------
+const updates = require("./updates.js");
+const backupDir = () => path.join(app.getPath("userData"), "save-backups");
+let installing = false;
+ipcMain.handle("updates-list", async () => {
+  const r = await updates.listVersions(net.fetch, app.getVersion());
+  if (r.error) mlog("WARN", "updates-list", { error: r.error });
+  return r;
+});
+ipcMain.handle("updates-install", async (e, version) => {
+  if (installing) return { error: "Already installing." };
+  if (!updates.isVersion(version)) return { error: "No such version." };
+  installing = true;
+  try {
+    const r = await updates.listVersions(net.fetch, app.getVersion()); // look it up again here: the page only names a version
+    const rel = r.versions && r.versions.find(v => v.version === version);
+    if (!rel) throw new Error(r.error || "That version isn't published.");
+    mlog("INFO", "update-download", { from: app.getVersion(), to: version });
+    const file = await updates.download(net.fetch, rel, path.join(app.getPath("userData"), "updates"), app.getVersion(),
+      pct => { if (!e.sender.isDestroyed()) e.sender.send("updates-progress", pct); });
+    const backup = updates.backupSave(saveFile(), backupDir(), app.getVersion());
+    mlog("INFO", "update-run", { from: app.getVersion(), to: version, backup });
+    const { spawn } = require("child_process");
+    spawn(file, ["/SILENT", "/SUPPRESSMSGBOXES", "/CLOSEAPPLICATIONS", "/NORESTART", "/LAUNCH"], { detached: true, stdio: "ignore" }).unref();
+    setTimeout(() => app.quit(), 300);
+    return { ok: true };
+  } catch (err) {
+    installing = false;
+    mlog("ERROR", "update-failed", { to: version, error: String(err && err.message || err) });
+    return { error: String(err && err.message || err) };
+  }
+});
+// Coming back up from an older version: the backup to offer (or null). saveVersion = what last wrote the save.
+ipcMain.on("restore-offer", (e, saveVersion) => { e.returnValue = updates.restoreOffer(saveVersion, app.getVersion(), updates.listBackups(backupDir())); });
+ipcMain.on("backup-restore", (e, name) => {
+  const b = updates.parseBackup(name);
+  if (!b) { e.returnValue = false; return; }
+  try {
+    updates.backupSave(saveFile(), backupDir(), app.getVersion()); // the current save is kept too
+    fs.copyFileSync(path.join(backupDir(), b.name), saveFile());
+    mlog("INFO", "save-restored", { from: b.name });
+    e.returnValue = true;
+  } catch (err) { mlog("ERROR", "save-restore-failed", { stack: String(err && err.stack) }); e.returnValue = false; }
+});
+ipcMain.on("app-version", e => { e.returnValue = app.getVersion(); });
+ipcMain.on("open-releases", () => shell.openExternal(`https://github.com/${updates.REPO}/releases`));
 ipcMain.on("fullscreen", (_e, on) => { if (win) win.setFullScreen(!!on); });
 ipcMain.on("quit", () => { mlog("INFO", "quit"); app.quit(); });
 app.on("second-instance", () => { if (win) { if (win.isMinimized()) win.restore(); win.focus(); } });

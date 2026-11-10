@@ -3,7 +3,8 @@
 A free zombie-outbreak strategy game that runs in your browser. Hold a city, get people out.
 
 **Play in your browser:** https://carbonprompt.github.io/horde/ (Windows players can grab the installer from the
-Releases page instead.)
+Releases page instead. From 0.26 on, the Windows app finds new versions itself: Versions on the title screen lists
+every release, and Settings can install updates automatically. Your save is backed up before any switch.)
 
 ## How it plays
 
@@ -12,12 +13,17 @@ Releases page instead.)
 - **Pick a difficulty.** Easy, Medium, Hard or Insane. Harder means more outbreak sites and bigger, more frequent
   hordes. Every city keeps its own medals for each difficulty.
 - **Warning.** An emergency broadcast goes out and people head for your zones. Nobody knows where it starts.
-- **Outbreak.** After 20 seconds the first cases turn somewhere outside your zones and it spreads person to person.
+- **Outbreak.** After 20 seconds the first cases turn somewhere outside your zones, more outbreaks pop up around the
+  city over the next stretch (more on harder difficulties), and it spreads person to person.
 - **Hordes.** Then hordes walk in from outside the city on real land routes (highways, rail, bridges; swimmers use
   the river). They come almost on a rhythm, but not quite, and grow bigger and more frequent as time passes and the
   city empties.
 - **Round end.** The round ends when everyone left alive is out. You get a score out of 100 (people saved, speed,
   city intact, zombies killed) and a medal. Then keep fighting endless, harder hordes for a Mayhem score, or end there.
+
+Units take up real space: tanks and turrets block streets, infected claw at them like walls, and tanks and APCs
+crush infected they drive over. Shelling leaves craters that slow everyone crossing them, buildings collapse into
+rubble, and a Recall button pulls your mobile units back to the zone.
 
 Real-world prices (budgets in the millions), an arsenal from rifle squads to HIMARS, Abrams, Apaches, AC-130s and
 Tomahawks (with per-battle stockpiles), strike orders, XP unlocks, achievements, daily challenges, mutators, mods

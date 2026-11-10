@@ -36,3 +36,11 @@ Name: "{userdesktop}\Horde"; Filename: "{app}\Horde.exe"; Tasks: desktopicon
 
 [Run]
 Filename: "{app}\Horde.exe"; Description: "Play Horde now"; Flags: nowait postinstall skipifsilent
+; 0.26: an update started from inside the game passes /LAUNCH so the game reopens after a silent install
+Filename: "{app}\Horde.exe"; Flags: nowait; Check: WantLaunch
+
+[Code]
+function WantLaunch: Boolean;
+begin
+  Result := Pos('/LAUNCH', UpperCase(GetCmdTail)) > 0;
+end;

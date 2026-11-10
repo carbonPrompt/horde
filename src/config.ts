@@ -48,12 +48,13 @@ export interface DifficultyDef {
   toughMul: number;
   sitesMul: number;
   xpMul: number;
+  spreadMin: number; spreadMax: number; spreadS: number; // 0.24: extra outbreaks rolled after the first cases, inside spreadS seconds
 }
 export const DIFFICULTY: Record<Difficulty, DifficultyDef> = {
-  easy:   { name: "Easy",   gapMin: 30, gapMax: 45, gapFloor: 14, sizeMul: 0.6, rampPerMin: 0.15, emptyHeat: 1,   gapHeat: 0.3, toughMul: 0.6, sitesMul: 0.5, xpMul: 0.75 },
-  medium: { name: "Medium", gapMin: 20, gapMax: 35, gapFloor: 10, sizeMul: 1,   rampPerMin: 0.25, emptyHeat: 1.5, gapHeat: 0.4, toughMul: 1,   sitesMul: 1,   xpMul: 1 },
-  hard:   { name: "Hard",   gapMin: 15, gapMax: 26, gapFloor: 7,  sizeMul: 1.4, rampPerMin: 0.4,  emptyHeat: 2,   gapHeat: 0.5, toughMul: 1.3, sitesMul: 1.5, xpMul: 1.25 },
-  insane: { name: "Insane", gapMin: 10, gapMax: 18, gapFloor: 5,  sizeMul: 2,   rampPerMin: 0.6,  emptyHeat: 3,   gapHeat: 0.6, toughMul: 1.7, sitesMul: 2,   xpMul: 1.5 },
+  easy:   { name: "Easy",   gapMin: 30, gapMax: 45, gapFloor: 14, sizeMul: 0.6, rampPerMin: 0.15, emptyHeat: 1,   gapHeat: 0.3, toughMul: 0.6, sitesMul: 0.5, xpMul: 0.75, spreadMin: 1, spreadMax: 2, spreadS: 15 },
+  medium: { name: "Medium", gapMin: 20, gapMax: 35, gapFloor: 10, sizeMul: 1,   rampPerMin: 0.25, emptyHeat: 1.5, gapHeat: 0.4, toughMul: 1,   sitesMul: 1,   xpMul: 1, spreadMin: 2, spreadMax: 4, spreadS: 20 },
+  hard:   { name: "Hard",   gapMin: 15, gapMax: 26, gapFloor: 7,  sizeMul: 1.4, rampPerMin: 0.4,  emptyHeat: 2,   gapHeat: 0.5, toughMul: 1.3, sitesMul: 1.5, xpMul: 1.25, spreadMin: 3, spreadMax: 6, spreadS: 25 },
+  insane: { name: "Insane", gapMin: 10, gapMax: 18, gapFloor: 5,  sizeMul: 2,   rampPerMin: 0.6,  emptyHeat: 3,   gapHeat: 0.6, toughMul: 1.7, sitesMul: 2,   xpMul: 1.5, spreadMin: 5, spreadMax: 8, spreadS: 30 },
 };
 
 // 0.20 round score and Keep fighting. Tuned often: keep them here.
@@ -76,7 +77,9 @@ export let EVAC_EVERY_S = 12; // seconds between lifts at one Evac Point
 export let EVAC_CAP = 80; // people per lift (x crowd size)
 export let EVAC_PAY = 24_000; // federal evacuation funding per person flown out (same money at any crowd size)
 export let EVAC_ABORT_INF = 8; // this many infected near the pad and the lift waves off
-export let EVAC_PULL_R = 30; // cells: people inside the zone walk toward an Evac Point within this range
+export let SOUND_NEAR_ZOOM = 0.5; // 0.22: zombie and crowd sounds are silent until zoomed in past this (0 = all the way out, 1 = all the way in)
+export let EVAC_WALK_MUL = 0.8; // 0.22: people in a zone walk to the nearest Evac Point (any distance, along the zone's streets) at this x CIV_SPEED
+export let EVAC_GATHER_D = 6; // cells from the pad where they stop and wait for the lift
 export let AGENT_RESERVE = 25000; // slots for infected beyond the civilians
 
 export let CIV_SPEED = 2.8; // cells per second
@@ -113,6 +116,8 @@ export let INCOME_EVERY_S = 10;
 export let INCOME_PER_SAFE = 180; // dollars per sheltered person per 10 s (emergency aid)
 export let KILL_BOUNTY = 1_000;
 export let EXTRACT_MUL = 1.5; // selling mid-battle: the unit sits out 1.5x its deploy time (at least 5 s) before it is pulled out
+export let CRUSH_SLOW_S = 0.8; // 0.25: seconds a tank or APC stays slowed after crushing infected
+export let CRUSH_YIELD_MUL = 0.3; // speed when civilians are in its way (it never runs people over)
 export let MOBILE_HURT_DPS = 6; // per infected touching an APC or squad
 export let GATE_HP = 3000; // gates let civilians in but break sooner than walls (WALL_HP)
 
@@ -122,10 +127,14 @@ export const BUILDABLE: UnitKind[] = ["garrison", "sniper", "turret", "mortar", 
 
 export interface UnitSpec {
   name: string;
+  foot: number; // 0.23: placement footprint, cells per side (matches how big it is drawn); footprints may not overlap
   cost: number;
   deploy: number; // seconds to set up when bought mid-battle (stronger units take longer)
   on: "building" | "ground" | "water" | "zone" | "any"; // zone: any cell inside a safe zone (air units take off from there)
   /** Mobile units think for themselves: speed in cells/s, hit points, how far they roam from where you put them. */
+  crushSlow?: number; // 0.25: drives over infected and crushes them; speed kept while crushing (1 = no slowdown)
+  clawMul?: number; // 0.25: share of claw damage that gets through its armor
+  hp?: number; // 0.24: emplacements on the street have armor too (infected claw at them); mobile units use mobile.hp
   mobile?: { speed: number; hp: number; leash: number; nav: "road" | "water" | "air"; flee: number; rearmS?: number }; // air: flies straight over everything, out of reach
   splash?: number; // cells: blast radius (infected only)
   minRange?: number; // cells: can't hit closer than this
@@ -144,74 +153,74 @@ export interface UnitSpec {
 
 export const UNITS: Record<UnitKind, UnitSpec> = {
   garrison: {
-    name: "Garrison", cost: 1_200_000, deploy: 5, on: "building", range: 16, roofBonus: 0.5,
+    name: "Garrison", foot: 2, cost: 1_200_000, deploy: 5, on: "building", range: 16, roofBonus: 0.5,
     rate: 8, damage: 100, ammo: 800, reloadsInZone: true, color: "#4fc3f7",
   },
   sniper: {
-    name: "Sniper", cost: 800_000, deploy: 6, on: "building", range: 22, roofBonus: 2.5,
+    name: "Sniper", foot: 2, cost: 800_000, deploy: 6, on: "building", range: 22, roofBonus: 2.5,
     rate: 1.2, damage: 1000, ammo: 80, reloadsInZone: true, color: "#ffd54f",
   },
   turret: {
-    name: "Turret", cost: 1_100_000, deploy: 8, on: "ground", range: 14, roofBonus: 0,
+    name: "Turret", hp: 1200, foot: 2, cost: 1_100_000, deploy: 8, on: "ground", range: 14, roofBonus: 0,
     rate: 16, damage: 60, ammo: 1800, reloadsInZone: false, color: "#ff8a65",
   },
   mortar: {
-    name: "Mortar", cost: 1_500_000, deploy: 10, on: "ground", range: 48, roofBonus: 0,
+    name: "Mortar", hp: 800, foot: 2, cost: 1_500_000, deploy: 10, on: "ground", range: 48, roofBonus: 0,
     rate: 0.25, damage: 400, ammo: 60, reloadsInZone: true, color: "#c792ea", splash: 2.2, minRange: 8, maxHits: 12,
   },
   howitzer: {
-    name: "Howitzer", cost: 3_700_000, deploy: 20, on: "ground", range: 130, roofBonus: 0,
+    name: "Howitzer", hp: 1600, foot: 3, cost: 3_700_000, deploy: 20, on: "ground", range: 130, roofBonus: 0,
     rate: 0.1, damage: 600, ammo: 30, reloadsInZone: true, color: "#f48fb1", splash: 4, minRange: 20, maxHits: 30,
   },
   apc: {
-    name: "APC", cost: 4_900_000, deploy: 8, on: "ground", range: 13, roofBonus: 0,
+    name: "APC", crushSlow: 0.55, clawMul: 0.25, foot: 3, cost: 4_900_000, deploy: 8, on: "ground", range: 13, roofBonus: 0,
     rate: 9, damage: 100, ammo: 300, reloadsInZone: false, color: "#80cbc4",
     cannon: { range: 17, rate: 1.2, damage: 350, splash: 1.4, maxHits: 6 },
     mobile: { speed: 7, hp: 900, leash: 50, nav: "road", flee: 7 },
   },
   himars: {
-    name: "HIMARS", cost: 5_100_000, deploy: 18, on: "ground", range: 230, roofBonus: 0,
+    name: "HIMARS", hp: 2000, foot: 4, cost: 5_100_000, deploy: 18, on: "ground", range: 230, roofBonus: 0,
     rate: 1 / 14, damage: 900, ammo: 12, reloadsInZone: true, color: "#ff80ab", splash: 3.5, minRange: 30, maxHits: 20, salvo: 6,
   },
   tank: {
-    name: "M1 Abrams", cost: 10_000_000, deploy: 15, on: "ground", range: 15, roofBonus: 0,
+    name: "M1 Abrams", crushSlow: 0.8, clawMul: 0.08, foot: 4, cost: 10_000_000, deploy: 15, on: "ground", range: 15, roofBonus: 0,
     rate: 10, damage: 100, ammo: 1200, reloadsInZone: false, color: "#a1887f",
     cannon: { range: 20, rate: 0.35, damage: 1800, splash: 2.5, maxHits: 14 },
     mobile: { speed: 4.5, hp: 3000, leash: 60, nav: "road", flee: 16 },
   },
   apache: {
-    name: "AH-64 Apache", cost: 35_000_000, deploy: 12, on: "zone", range: 16, roofBonus: 0,
+    name: "AH-64 Apache", foot: 3, cost: 35_000_000, deploy: 12, on: "zone", range: 16, roofBonus: 0,
     rate: 10, damage: 140, ammo: 1200, reloadsInZone: false, color: "#dce775",
     cannon: { range: 22, rate: 0.7, damage: 500, splash: 2, maxHits: 8 },
     mobile: { speed: 10, hp: Infinity, leash: 80, nav: "air", flee: 999, rearmS: 15 },
   },
   reaper: {
-    name: "MQ-9 Reaper", cost: 16_000_000, deploy: 10, on: "zone", range: 32, roofBonus: 0,
+    name: "MQ-9 Reaper", foot: 3, cost: 16_000_000, deploy: 10, on: "zone", range: 32, roofBonus: 0,
     rate: 0.35, damage: 1200, ammo: 8, reloadsInZone: false, color: "#b0bec5", splash: 2.5, maxHits: 10,
     mobile: { speed: 6, hp: Infinity, leash: 130, nav: "air", flee: 999, rearmS: 12 },
   },
   gunboat: {
-    name: "Gunboat", cost: 9_000_000, deploy: 12, on: "water", range: 18, roofBonus: 0,
+    name: "Gunboat", foot: 4, cost: 9_000_000, deploy: 12, on: "water", range: 18, roofBonus: 0,
     rate: 6, damage: 120, ammo: Infinity, reloadsInZone: false, color: "#90caf9",
     mobile: { speed: 4.5, hp: Infinity, leash: 90, nav: "water", flee: 999 },
   },
   battleship: {
-    name: "Battleship", cost: 12_000_000, deploy: 25, on: "water", range: 200, roofBonus: 0,
+    name: "Battleship", foot: 5, cost: 12_000_000, deploy: 25, on: "water", range: 200, roofBonus: 0,
     rate: 0.3, damage: 900, ammo: Infinity, reloadsInZone: false, color: "#b0bec5", splash: 4, minRange: 12, maxHits: 25, salvo: 3,
     mobile: { speed: 1.8, hp: Infinity, leash: 120, nav: "water", flee: 999 },
   },
   para: {
-    name: "Paratroopers", cost: 0, deploy: 0, on: "any", range: 15, roofBonus: 0,
+    name: "Paratroopers", foot: 2, cost: 0, deploy: 0, on: "any", range: 15, roofBonus: 0,
     rate: 10, damage: 100, ammo: 450, reloadsInZone: false, color: "#a5d6a7",
     mobile: { speed: 2.4, hp: 350, leash: 35, nav: "road", flee: 4 },
   },
   police: {
-    name: "Police Squad", cost: 0, deploy: 0, on: "any", range: 14, roofBonus: 0,
+    name: "Police Squad", foot: 2, cost: 0, deploy: 0, on: "any", range: 14, roofBonus: 0,
     rate: 7, damage: 110, ammo: 350, reloadsInZone: false, color: "#64b5f6",
     mobile: { speed: 3.2, hp: 450, leash: 55, nav: "road", flee: 5 },
   },
   militia: {
-    name: "Militia", cost: 0, deploy: 0, on: "any", range: 15, roofBonus: 0,
+    name: "Militia", foot: 2, cost: 0, deploy: 0, on: "any", range: 15, roofBonus: 0,
     rate: 5, damage: 90, ammo: 300, reloadsInZone: false, color: "#aed581",
     mobile: { speed: 2.6, hp: 300, leash: 40, nav: "road", flee: 4 },
   },
@@ -221,6 +230,7 @@ export type SupportKind = "evac" | "budget" | "repair" | "radio" | "supply" | "c
 export const SUPPORT_KINDS: SupportKind[] = ["evac", "budget", "repair", "radio", "supply", "command", "police", "militia"];
 export interface SupportSpec {
   name: string;
+  foot: number; // 0.23: placement footprint, cells per side
   cost: number;
   deploy: number;
   radius: number; // cells
@@ -229,38 +239,39 @@ export interface SupportSpec {
 }
 export const SUPPORTS: Record<SupportKind, SupportSpec> = {
   evac: {
-    name: "Evac Point", cost: 3_000_000, deploy: 10, radius: 12, color: "#fff176",
+    name: "Evac Point", foot: 4, cost: 3_000_000, deploy: 10, radius: 12, color: "#fff176",
     hint: "Click a building inside your safe zone. A rooftop helipad: every 12 s a lift flies people out of the zone. Each person evacuated is saved for good and brings $24,000 in federal evacuation funding. Lifts wave off when infected crowd the pad.",
   },
   budget: {
-    name: "Budget Office", cost: 1_000_000, deploy: 6, radius: 50, color: "#ffd54f",
+    name: "Budget Office", foot: 4, cost: 1_000_000, deploy: 6, radius: 50, color: "#ffd54f",
     hint: "Click a building inside your safe zone. Cuts the cost of units and support buildings placed within 100 m by 20%.",
   },
   repair: {
-    name: "Repair Yard", cost: 1_800_000, deploy: 8, radius: 45, color: "#4dd0e1",
+    name: "Repair Yard", foot: 4, cost: 1_800_000, deploy: 8, radius: 45, color: "#4dd0e1",
     hint: "Click a building inside your safe zone. Continuously repairs damaged walls, gates and friendly vehicles within 90 m.",
   },
   radio: {
-    name: "Radio Tower", cost: 2_000_000, deploy: 8, radius: 65, color: "#80deea",
+    name: "Radio Tower", foot: 4, cost: 2_000_000, deploy: 8, radius: 65, color: "#80deea",
     hint: "Click a building inside your safe zone. Expands the firing range of all units within 130 m by 40%.",
   },
   supply: {
-    name: "Supply Depot", cost: 2_000_000, deploy: 8, radius: 50, color: "#ffb74d",
+    name: "Supply Depot", foot: 4, cost: 2_000_000, deploy: 8, radius: 50, color: "#ffb74d",
     hint: "Click a building inside your safe zone. Feeds ammo to turrets, mobile squads and forward units outside the walls within 100 m, and halves vehicle reload time.",
   },
   command: {
-    name: "Command Post", cost: 2_400_000, deploy: 10, radius: 50, color: "#ba68c8",
+    name: "Command Post", foot: 4, cost: 2_400_000, deploy: 10, radius: 50, color: "#ba68c8",
     hint: "Click a building inside your safe zone. Boosts firing rate by 30% and extends patrol range by 25% for units within 100 m.",
   },
   police: {
-    name: "Precinct", cost: 2_600_000, deploy: 10, radius: 55, color: "#64b5f6",
+    name: "Precinct", foot: 4, cost: 2_600_000, deploy: 10, radius: 55, color: "#64b5f6",
     hint: "Click a building inside your safe zone. Dispatches up to 2 autonomous Police Squads that hunt infected and return to reload.",
   },
   militia: {
-    name: "Armory", cost: 2_200_000, deploy: 8, radius: 45, color: "#aed581",
-    hint: "Click a building inside your safe zone. Arms up to 2 Militia squads that guard the walls, and reinforces indoor barricades within 90 m.",
+    name: "Armory", foot: 4, cost: 2_200_000, deploy: 8, radius: 45, color: "#aed581",
+    hint: "Click a building inside your safe zone. Arms up to 2 Militia squads that guard the walls, and reinforces indoor barricades within 90 m. Up to 4 Armories per battle.",
   },
 };
+export let MILITIA_MAX = 4; // 0.22: most Armories per battle
 export let BUDGET_DISCOUNT = 0.2;
 export let REPAIR_WALL_HPS = 30;
 export let REPAIR_UNIT_HPS = 25;
@@ -289,7 +300,7 @@ export let SWIMMER_BASE_FRAC = 0.08;
 export let SWIMMER_WAVE_GROWTH = 0.015;
 export let SWIMMER_MAX_FRAC = 0.25;
 
-export const VERSION = "0.21.1";
+export const VERSION = "0.26.0";
 
 /** The campaign: fixed cities that unlock in order (a medal on one opens the next). */
 export interface CityDef { id: string; name: string; seed: number; budget: number; waveMul: number; sites: number; speedMul: number; blurb: string; real?: boolean; trial?: string } // trial: hardware this city lends you before you unlock it
@@ -381,7 +392,7 @@ export function dailyChallengeFor(dateStr = todayDateStr()): { date: string; cit
 export type AbilityKind = "airstrike" | "firebomb" | "para" | "supply_drop" | "barrage" | "moab" | "nuke" | "a10" | "cluster" | "tomahawk" | "gunship";
 export interface AbilitySpec { name: string; cost: number; max: number; delay: number; color: string; hint: string } // max: available per battle (real-world stockpiles)
 export const ABILITIES: Record<AbilityKind, AbilitySpec> = {
-  airstrike: { name: "Airstrike", cost: 1_200_000, max: 6, delay: 3, color: "#ff5252",
+  airstrike: { name: "Airstrike", cost: 1_200_000, max: 12, delay: 3, color: "#ff5252",
     hint: "Click where the run starts, then where it ends. An F-15E Strike Eagle drops a stick of bombs 3 s later, demolishing buildings and cratering streets. Hurts civilians too." },
   firebomb: { name: "Firebomb", cost: 600_000, max: 6, delay: 1.5, color: "#ff9100",
     hint: "Click a spot. A strike jet drops incendiary canisters that burn for 12 s and scorch terrain. Parks burn wider. Hurts civilians too." },
@@ -435,6 +446,11 @@ export let STRUCT_DMG_HOWITZER = 110;
 export let STRUCT_DMG_AIRSTRIKE = 160;
 export let STRUCT_DMG_DEPOT = 240;
 export let STRUCT_DMG_FIREBOMB = 40;
+export let SCAR_PX = 4; // 0.23: pixels per cell in the ground-damage layer
+export let SMOKE_MAX = 400; // most smoke puffs at once
+export let SMOKE_S = 10; // seconds a plume lasts
+export let SMOKE_WIND = 0.6; // cells per second the smoke drifts
+export let CRATER_SLOW_MUL = 0.6; // 0.23: speed at the bottom of a crater (rough ground, eases toward the rim)
 export let RUBBLE_SLOW_MUL = 0.7; // 30% movement slow through deep shell craters and collapsed building rubble
 
 export type DeployVehicle = "helo_uh60" | "helo_ch47" | "c130_apc" | "c130_para" | "naval" | "ground";
@@ -461,7 +477,7 @@ export const UNIT_INFO: Record<UnitKind, UnitInfoSpec> = {
     vehicle: "helo_uh60",
     structDmg: "None (.50 BMG precision)",
     desc: "High-caliber marksman team placed on tall buildings. Gains massive range bonuses from skyscraper elevation and one-shots standard infected.",
-    specials: ["+5 m range per building floor (press V for heights)", "1,000 dmg/shot counters high-HP Swimmer mutants", "Infinite ammo when inside Safe Zone"],
+    specials: ["+5 m range per building floor (press J for heights)", "1,000 dmg/shot counters high-HP Swimmer mutants", "Infinite ammo when inside Safe Zone"],
   },
   turret: {
     role: "Automated Rotary Sentry",
@@ -549,7 +565,7 @@ export const UNIT_INFO: Record<UnitKind, UnitInfoSpec> = {
     vehicle: "c130_para",
     structDmg: "None",
     desc: "Elite airborne infantry dropped by parachute anywhere on the map. Fights autonomously until out of ammo, then evacuates to the Safe Zone.",
-    specials: ["Deployed via Paratroopers ability (F)", "Can be resupplied in the field by Supply Drops or Supply Depots"],
+    specials: ["Deployed via the Paratroopers ability", "Can be resupplied in the field by Supply Drops or Supply Depots"],
   },
   police: {
     role: "Precinct Tactical Response Unit",
@@ -692,7 +708,10 @@ export const TUNABLE: Record<string, [() => number, (v: number) => void]> = {
   EVAC_CAP: [() => EVAC_CAP, v => { EVAC_CAP = v; }],
   EVAC_PAY: [() => EVAC_PAY, v => { EVAC_PAY = v; }],
   EVAC_ABORT_INF: [() => EVAC_ABORT_INF, v => { EVAC_ABORT_INF = v; }],
-  EVAC_PULL_R: [() => EVAC_PULL_R, v => { EVAC_PULL_R = v; }],
+  MILITIA_MAX: [() => MILITIA_MAX, v => { MILITIA_MAX = v; }],
+  SOUND_NEAR_ZOOM: [() => SOUND_NEAR_ZOOM, v => { SOUND_NEAR_ZOOM = v; }],
+  EVAC_WALK_MUL: [() => EVAC_WALK_MUL, v => { EVAC_WALK_MUL = v; }],
+  EVAC_GATHER_D: [() => EVAC_GATHER_D, v => { EVAC_GATHER_D = v; }],
   AGENT_RESERVE: [() => AGENT_RESERVE, v => { AGENT_RESERVE = v; }],
   CIV_SPEED: [() => CIV_SPEED, v => { CIV_SPEED = v; }],
   INF_SPEED: [() => INF_SPEED, v => { INF_SPEED = v; }],
@@ -720,6 +739,8 @@ export const TUNABLE: Record<string, [() => number, (v: number) => void]> = {
   INCOME_PER_SAFE: [() => INCOME_PER_SAFE, v => { INCOME_PER_SAFE = v; }],
   KILL_BOUNTY: [() => KILL_BOUNTY, v => { KILL_BOUNTY = v; }],
   EXTRACT_MUL: [() => EXTRACT_MUL, v => { EXTRACT_MUL = v; }],
+  CRUSH_SLOW_S: [() => CRUSH_SLOW_S, v => { CRUSH_SLOW_S = v; }],
+  CRUSH_YIELD_MUL: [() => CRUSH_YIELD_MUL, v => { CRUSH_YIELD_MUL = v; }],
   MOBILE_HURT_DPS: [() => MOBILE_HURT_DPS, v => { MOBILE_HURT_DPS = v; }],
   GATE_HP: [() => GATE_HP, v => { GATE_HP = v; }],
   BUDGET_DISCOUNT: [() => BUDGET_DISCOUNT, v => { BUDGET_DISCOUNT = v; }],
@@ -769,6 +790,11 @@ export const TUNABLE: Record<string, [() => number, (v: number) => void]> = {
   GUNSHIP_HOW_DMG: [() => GUNSHIP_HOW_DMG, v => { GUNSHIP_HOW_DMG = v; }],
   GUNSHIP_HOW_EVERY: [() => GUNSHIP_HOW_EVERY, v => { GUNSHIP_HOW_EVERY = v; }],
   GUNSHIP_HOW_SPLASH: [() => GUNSHIP_HOW_SPLASH, v => { GUNSHIP_HOW_SPLASH = v; }],
+  SCAR_PX: [() => SCAR_PX, v => { SCAR_PX = v; }],
+  SMOKE_MAX: [() => SMOKE_MAX, v => { SMOKE_MAX = v; }],
+  SMOKE_S: [() => SMOKE_S, v => { SMOKE_S = v; }],
+  SMOKE_WIND: [() => SMOKE_WIND, v => { SMOKE_WIND = v; }],
+  CRATER_SLOW_MUL: [() => CRATER_SLOW_MUL, v => { CRATER_SLOW_MUL = v; }],
   AIRSTRIKE_LEN: [() => AIRSTRIKE_LEN, v => { AIRSTRIKE_LEN = v; }],
   AIRSTRIKE_RADIUS: [() => AIRSTRIKE_RADIUS, v => { AIRSTRIKE_RADIUS = v; }],
   FIRE_RADIUS: [() => FIRE_RADIUS, v => { FIRE_RADIUS = v; }],
@@ -794,3 +820,6 @@ export const TUNABLE: Record<string, [() => number, (v: number) => void]> = {
   BILLION: [() => BILLION, v => { BILLION = v; }],
 };
 // ---- end TUNABLE ----
+
+/** 0.24: full armor of a unit (mobile units: mobile.hp; street emplacements: hp), or undefined when it can't be hurt. */
+export const maxHp = (spec: UnitSpec) => spec.mobile ? (spec.mobile.hp === Infinity ? undefined : spec.mobile.hp) : spec.hp;

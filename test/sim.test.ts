@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { Sim, INF } from "../src/sim";
+import { Sim, INF, SAFE_CIV } from "../src/sim";
 import type { Support } from "../src/sim";
 import { BUILDING } from "../src/map";
 import * as C from "../src/config";
@@ -167,6 +167,13 @@ test("gunboat patrols the river; battleship shells from it", () => withWarning45
   s.startBattle();
   const boat = s.units[0], ship = s.units[1];
   const start = [boat.x, boat.y];
+  // 0.24: the rolled outbreaks move where the infected are; give the gunboat a crowd on the bank to chase
+  let put = 0;
+  for (let dy = -25; dy <= 25 && put < 60; dy++) for (let dx = -25; dx <= 25 && put < 60; dx++) {
+    const x = (boat.x | 0) + dx, y = (boat.y | 0) + dy;
+    if (Math.hypot(dx, dy) < 12 || x < 0 || y < 0 || x >= s.w || y >= s.h || s.map.tile[s.idx(x, y)] !== 0 || s.inZone[s.idx(x, y)]) continue;
+    s.spawnInfected(x + 0.5, y + 0.5, C.INF_HP); put++;
+  }
   let salvo = 0; // battleship fires 3-shell broadsides
   for (let i = 0; i < 20 * 150; i++) { s.step(); const sh = s.blasts.filter(b => b.color === C.UNITS.battleship.color && b.t === s.time).length; salvo = Math.max(salvo, sh); }
   expect(salvo).toBe(C.UNITS.battleship.salvo!);
@@ -226,6 +233,7 @@ test("howitzer, fuel depots, target priority", () => {
   expect(s.cycleTarget(g![0] + 0.5, g![1] + 0.5)).toBe("civ");
   expect(s.cycleTarget(g![0] + 0.5, g![1] + 0.5)).toBe("near");
   s.cycleTarget(g![0] + 0.5, g![1] + 0.5);
+  s.dev.unitDamage = false; // 0.24: the howitzer has armor now; this test is about its shooting, not its survival
   const d = s.depots.find(d => !s.inZone[s.idx(d.x, d.y)])!;
   expect(s.blowDepot(d.x, d.y)).not.toBeNull(); // not while planning
   s.startBattle();
@@ -1005,3 +1013,215 @@ test("xp scales with difficulty", () => {
 
 
 
+
+// 0.22
+function zoneBuildings(s: Sim) {
+  const spots: [number, number][] = [];
+  for (let i = 0; i < s.inZone.length; i++) if (s.inZone[i] === 1 && s.map.tile[i] === BUILDING) spots.push([i % s.w, (i / s.w) | 0]);
+  return spots;
+}
+
+test("Armory cap: only MILITIA_MAX armories", () => {
+  const s = new Sim(42, { budget: 400_000_000 });
+  s.setZone(zoneAroundCenter(s, 34));
+  let n = 0, err: string | null = null;
+  for (const [x, y] of zoneBuildings(s)) { const e = s.placeSupport("militia", x, y); if (!e) n++; else if (n === C.MILITIA_MAX && !e.startsWith("Too close") && !e.startsWith("Would overlap")) { err = e; break; } }
+  expect(C.MILITIA_MAX).toBe(4);
+  expect(n).toBe(C.MILITIA_MAX);
+  expect(err).toContain(String(C.MILITIA_MAX));
+});
+
+test("Airstrike: 12 per battle", () => {
+  const s = new Sim(42, { budget: 400_000_000 });
+  for (let i = 0; i < 12; i++) expect(s.buyAbility("airstrike")).toBeNull();
+  expect(s.buyAbility("airstrike")).toContain("12");
+});
+
+test("people in the zone walk to the nearest Evac Point, even far away", () => {
+  const keep = C.EVAC_EVERY_S;
+  C.TUNABLE.EVAC_EVERY_S[1](1e6); // no lifts: nobody leaves, so we can see where they gather
+  try {
+    const s = new Sim(42, { budget: 80_000_000 });
+    s.setZone(zoneAroundCenter(s, 34));
+    const spots = zoneBuildings(s);
+    // the pad in the zone's top-left corner, far from most people
+    spots.sort((a, b) => a[0] + a[1] - (b[0] + b[1]));
+    let pad: Support | undefined;
+    for (const [x, y] of spots) if (!s.placeSupport("evac", x, y)) { pad = s.supports[s.supports.length - 1]; break; }
+    expect(pad).toBeDefined();
+    s.dev.bites = false;
+    s.startBattle();
+    while (s.time < 90) s.step();
+    let near = 0, safe = 0;
+    for (let k = 0; k < s.civN; k++) if (s.state[k] === SAFE_CIV) { safe++; if (Math.hypot(s.ax[k] - pad!.x, s.ay[k] - pad!.y) < C.SUPPORTS.evac.radius) near++; }
+    expect(safe).toBeGreaterThan(100);
+    expect(near / safe).toBeGreaterThan(0.5);
+  } finally { C.TUNABLE.EVAC_EVERY_S[1](keep); }
+}, 120000);
+
+test("an infected inside a standing gate or wall steps out to the street outside", () => {
+  const s = new Sim(42, { budget: 80_000_000 });
+  s.setZone(zoneAroundCenter(s, 34));
+  s.startBattle();
+  let gate = -1;
+  for (let i = 0; i < s.inZone.length && gate < 0; i++) if (s.inZone[i] === 3 && s.wallHp[i] > 0) gate = i;
+  expect(gate).toBeGreaterThanOrEqual(0);
+  const gx = gate % s.w, gy = (gate / s.w) | 0;
+  s.closeAllGates(); // the gate becomes a wall with the infected caught in it
+  s.spawnInfected(gx + 0.5, gy + 0.5, 1e9);
+  let k = -1;
+  for (let j = s.civN; j < s.n; j++) if (s.state[j] === INF && Math.abs(s.ax[j] - gx - 0.5) < 0.01 && Math.abs(s.ay[j] - gy - 0.5) < 0.01) k = j;
+  expect(k).toBeGreaterThanOrEqual(0);
+  for (let i = 0; i < 20; i++) s.step();
+  const ci = (s.ay[k] | 0) * s.w + (s.ax[k] | 0);
+  expect(s.passable(ci, true)).toBe(true); // no longer inside the wall
+  expect(s.inZone[ci]).toBe(0); // and out on the street, not let into the zone
+  expect(s.stuckInWall).toBe(0);
+});
+
+// 0.23: placement footprints, craters are rough ground
+function streetSpots(s: Sim) {
+  const out: [number, number][] = [];
+  for (let y = 5; y < s.h - 5; y++) for (let x = 5; x < s.w - 5; x++) if (s.map.tile[s.idx(x, y)] === 0) out.push([x, y]);
+  return out;
+}
+/** A street cell with a straight run of street to its right (x..x+len) */
+function streetRun(s: Sim, len: number): [number, number] {
+  for (const [x, y] of streetSpots(s)) { let ok = true; for (let d = 0; d <= len && ok; d++) ok = s.map.tile[s.idx(x + d, y)] === 0; if (ok) return [x, y]; }
+  throw new Error("no street run");
+}
+
+test("footprints: overlapping refused, touching allowed, bigger units block more", () => {
+  const s = new Sim(42, { budget: 400_000_000 });
+  expect(C.UNITS.turret.foot).toBe(2);
+  expect(C.UNITS.tank.foot).toBeGreaterThan(C.UNITS.turret.foot);
+  const [x, y] = streetRun(s, 12);
+  expect(s.place("turret", x, y)).toBeNull();
+  expect(s.place("turret", x + 1, y)).toContain("overlap"); // 2x2 footprints overlap
+  expect(s.place("turret", x + 2, y)).toBeNull(); // touching is fine
+  const t = new Sim(42, { budget: 400_000_000 });
+  expect(t.place("tank", x, y)).toBeNull();
+  expect(t.place("turret", x + 2, y)).toContain("overlap"); // a tank's footprint reaches further
+  expect(t.place("turret", x + 4, y)).toBeNull();
+});
+
+test("an old plan with overlapping units still loads", () => {
+  const s = new Sim(42, { budget: 400_000_000 });
+  const [x, y] = streetRun(s, 6);
+  s.ignoreFootprint = true; // what importPlan does
+  expect(s.place("turret", x, y)).toBeNull();
+  expect(s.place("turret", x + 1, y)).toContain("Too close"); // the old 2-cell rule still holds
+  expect(s.place("turret", x + 2, y)).toBeNull();
+  s.ignoreFootprint = false;
+  expect(s.units.length).toBe(2);
+});
+
+test("craters are rough ground: infected and civilians cross slower; every hit stacks a crater", () => {
+  const s = new Sim(42, { budget: 80_000_000 });
+  const [x, y] = streetRun(s, 10);
+  const n0 = s.craters.length;
+  s.damageTerrain(x + 5.5, y + 0.5, 3, 200);
+  s.damageTerrain(x + 5.5, y + 0.5, 3, 200); // same spot again: a second crater on top
+  expect(s.craters.length).toBe(n0 + 2);
+  const c = s.idx(x + 5, y);
+  expect(s.rough[c]).toBeGreaterThan(0);
+  expect(s.roughMul(c)).toBeLessThan(1);
+  expect(s.roughMul(c)).toBeGreaterThanOrEqual(C.CRATER_SLOW_MUL - 1e-6);
+  expect(s.roughMul(s.idx(x, y))).toBe(1); // clean street
+});
+
+// 0.24: rolling outbreak, recall, units block and take damage
+test("outbreak spread: extra rolled outbreaks inside the difficulty's window", () => {
+  const s = new Sim(42, { budget: 80_000_000, difficulty: "medium" });
+  s.setZone(zoneAroundCenter(s, 34));
+  s.dev.bites = false;
+  s.startBattle();
+  const d = C.DIFFICULTY.medium;
+  expect(s.spreadSites.length).toBeGreaterThanOrEqual(d.spreadMin);
+  expect(s.spreadSites.length).toBeLessThanOrEqual(d.spreadMax);
+  for (const p of s.spreadSites) { expect(p.t).toBeGreaterThan(C.WARNING_S); expect(p.t).toBeLessThanOrEqual(C.WARNING_S + d.spreadS); }
+  while (s.time < C.WARNING_S + 0.05) s.step();
+  const first = s.infectedEver;
+  expect(first).toBe(s.sites.length * C.INFECTED_PER_SITE);
+  while (s.time < C.WARNING_S + d.spreadS + 0.5) s.step();
+  expect(s.infectedEver).toBe((s.sites.length + s.spreadSites.length) * C.INFECTED_PER_SITE);
+}, 60000);
+
+test("insane rolls more spread outbreaks than easy", () => {
+  expect(C.DIFFICULTY.insane.spreadMax).toBeGreaterThan(C.DIFFICULTY.easy.spreadMax);
+  expect(C.DIFFICULTY.insane.spreadS).toBeGreaterThan(C.DIFFICULTY.easy.spreadS);
+});
+
+test("recall sends mobile units to the nearest zone; again sends them back", () => {
+  const s = new Sim(42, { budget: 80_000_000 });
+  s.setZone(zoneAroundCenter(s, 34));
+  let apc: any;
+  for (const [x, y] of streetSpots(s)) if (!s.inZone[s.idx(x, y)] && s.distToZone(x, y) > 20 && !s.place("apc", x, y)) { apc = s.units[s.units.length - 1]; break; }
+  expect(apc).toBeDefined();
+  const post0 = [...apc.post];
+  s.startBattle();
+  expect(s.recallAll()).toBeGreaterThan(0);
+  expect(s.inZone[s.idx(apc.post[0], apc.post[1])]).toBe(1);
+  expect(s.recalled).toBe(true);
+  s.recallAll();
+  expect(apc.post).toEqual(post0);
+  expect(s.recalled).toBe(false);
+});
+
+test("ground units block movement and get clawed; repair yards fix them", () => {
+  const s = new Sim(42, { budget: 80_000_000 });
+  s.setZone(zoneAroundCenter(s, 34));
+  // a turret on a street inside the zone, a repair yard near it
+  let tur: any;
+  for (const [x, y] of streetSpots(s)) if (s.inZone[s.idx(x, y)] === 1 && !s.place("turret", x, y)) { tur = s.units[s.units.length - 1]; break; }
+  expect(tur).toBeDefined();
+  expect(C.UNITS.turret.hp).toBeGreaterThan(0);
+  s.dev.bites = false;
+  s.startBattle();
+  expect(tur.hp).toBe(C.UNITS.turret.hp);
+  tur.ammo = 0; // it can't shoot back in this test
+  for (let i = 0; i < 6; i++) s.spawnInfected(tur.x + 0.5 + (i % 3) * 0.3, tur.y + 0.5, 1e9); // dropped right on it
+  for (let i = 0; i < 40; i++) s.step();
+  const [x0, y0, x1, y1] = s.footRect(C.UNITS.turret.foot, tur.x, tur.y);
+  let inside = 0;
+  for (let k = s.civN; k < s.n; k++) if (s.state[k] === INF && s.ax[k] >= x0 && s.ax[k] < x1 + 1 && s.ay[k] >= y0 && s.ay[k] < y1 + 1) inside++;
+  expect(inside).toBe(0); // pushed out of the footprint, can't stand in it
+  expect(tur.hp).toBeLessThan(C.UNITS.turret.hp); // clawed
+  // repair: clear the infected, add a repair yard in range
+  s.devClearInfected();
+  const hp1 = tur.hp;
+  s.dev.instantDeploy = true;
+  for (const [x, y] of zoneBuildings(s)) if (Math.hypot(x - tur.x, y - tur.y) < C.SUPPORTS.repair.radius * 0.8 && !s.placeSupport("repair", x, y)) break;
+  for (let i = 0; i < 300; i++) s.step();
+  expect(tur.hp).toBeGreaterThan(hp1);
+}, 60000);
+
+// 0.25: tanks and APCs crush infected they drive over, never people; claws barely scratch them
+test("tanks and APCs crush infected under them, slow down for it, and spare civilians", () => {
+  const s = new Sim(42, { budget: 80_000_000 });
+  s.setZone(zoneAroundCenter(s, 34));
+  const [x, y] = streetRun(s, 8);
+  expect(s.place("tank", x, y)).toBeNull();
+  const tank = s.units[0];
+  s.dev.bites = false;
+  s.startBattle();
+  const k0 = s.kills, tk0 = tank.kills;
+  for (let i = 0; i < 4; i++) s.spawnInfected(tank.x + 0.6 + i * 0.2, tank.y + 0.5, 1e9); // right under it
+  s.step();
+  expect(s.kills - k0).toBe(4);
+  expect(tank.kills - tk0).toBe(4);
+  expect(tank.crushT).toBeGreaterThan(0);
+  expect(C.UNITS.tank.crushSlow!).toBeGreaterThan(C.UNITS.apc.crushSlow!); // a tank keeps more of its speed
+  // a civilian under it is pushed aside, not killed
+  let civ = -1;
+  for (let k = 0; k < s.civN; k++) if (s.state[k] === 0) { civ = k; break; }
+  s.ax[civ] = tank.x + 0.6; s.ay[civ] = tank.y + 0.5;
+  s.step();
+  expect(s.state[civ]).not.toBe(2); // not DEAD
+});
+
+test("claws barely scratch tanks and APCs", () => {
+  expect(C.UNITS.tank.clawMul!).toBeLessThan(0.2);
+  expect(C.UNITS.apc.clawMul!).toBeLessThan(0.5);
+  expect(C.UNITS.tank.clawMul!).toBeLessThan(C.UNITS.apc.clawMul!);
+});

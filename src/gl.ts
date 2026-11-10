@@ -48,7 +48,7 @@ export class GLView {
   private gl!: WebGLRenderingContext;
   private quad!: WebGLProgram; private agent!: WebGLProgram;
   private quadBuf!: WebGLBuffer; private bx!: WebGLBuffer; private by!: WebGLBuffer; private bs!: WebGLBuffer; private bm!: WebGLBuffer;
-  private texMap!: WebGLTexture; private texHeights!: WebGLTexture; private texZone!: WebGLTexture;
+  private texMap!: WebGLTexture; private texHeights!: WebGLTexture; private texZone!: WebGLTexture; private texScar!: WebGLTexture;
   private cap = 0;
 
   constructor(private canvas: HTMLCanvasElement) {
@@ -62,7 +62,7 @@ export class GLView {
       gl.bindBuffer(gl.ARRAY_BUFFER, this.quadBuf);
       gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([0, 0, 1, 0, 0, 1, 0, 1, 1, 0, 1, 1]), gl.STATIC_DRAW);
       this.bx = gl.createBuffer()!; this.by = gl.createBuffer()!; this.bs = gl.createBuffer()!; this.bm = gl.createBuffer()!;
-      this.texMap = this.texture(); this.texHeights = this.texture(); this.texZone = this.texture();
+      this.texMap = this.texture(); this.texHeights = this.texture(); this.texZone = this.texture(); this.texScar = this.texture();
       gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
       this.ok = true;
     } catch (e) {
@@ -97,6 +97,9 @@ export class GLView {
   }
   setMap(base: HTMLCanvasElement, heights: HTMLCanvasElement) { if (this.ok) { this.upload(this.texMap, base); this.upload(this.texHeights, heights); } }
   setZone(zone: HTMLCanvasElement) { if (this.ok) this.upload(this.texZone, zone); }
+  /** 0.23: the ground-damage layer (craters, rubble), drawn over the map and under the zone tint and the crowd. */
+  setScar(scar: HTMLCanvasElement) { if (this.ok) { this.upload(this.texScar, scar); this.hasScar = true; } }
+  private hasScar = false;
 
   draw(cam: Cam, w: number, h: number, mapW: number, mapH: number, showHeights: boolean,
     n: number, ax: Float32Array, ay: Float32Array, state: Uint8Array, dot: number, mutant?: Uint8Array) {
@@ -114,7 +117,7 @@ export class GLView {
     gl.uniform4f(gl.getUniformLocation(this.quad, "cam"), cam.x, cam.y, cam.scale, 0);
     gl.uniform2f(gl.getUniformLocation(this.quad, "view"), w, h);
     gl.uniform2f(gl.getUniformLocation(this.quad, "size"), mapW, mapH);
-    for (const t of [showHeights ? this.texHeights : this.texMap, this.texZone]) {
+    for (const t of [showHeights ? this.texHeights : this.texMap, ...(this.hasScar && !showHeights ? [this.texScar] : []), this.texZone]) {
       gl.bindTexture(gl.TEXTURE_2D, t);
       gl.drawArrays(gl.TRIANGLES, 0, 6);
     }

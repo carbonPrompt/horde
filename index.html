@@ -148,8 +148,10 @@
   footer {
     grid-column: 1; padding: 4px 14px; background: #080a0f;
     border-top: 1px solid #19202c; color: var(--dim); display: flex; gap: 16px; align-items: center; font-size: 11.5px;
+    white-space: nowrap; overflow: hidden; height: 24px; box-sizing: border-box; /* 0.22.1: always one line, never resizes the map */
   }
-  #hint { color: #cbd5e1; font-weight: 500; }
+  footer > span { flex-shrink: 0; }
+  #hint { color: #cbd5e1; font-weight: 500; flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; flex-shrink: 1; }
 
   #msg {
     position: absolute; bottom: 10px; left: 50%; transform: translateX(-50%); max-width: calc(100% - 40px);
@@ -307,6 +309,14 @@
   #classes button { justify-content: center; font-size: clamp(9.5px, 0.75vw, 11px); font-weight: 700; padding: 3px 4px; white-space: nowrap; }
   #quickbar { padding: 0 6px; border-left: 1px solid #202938; border-right: 1px solid #202938; }
   .qslot { width: clamp(40px, 3vw, 56px); min-height: 64px; padding: 2px; justify-content: center; flex-direction: column; gap: 1px; border-style: dashed; background: #0f131a; position: relative; }
+  .upd-banner { margin: 6px auto 0; display: block; background: #3b2f0a; border: 1px solid var(--gold); color: var(--gold); font-weight: 700; }
+  #ver-list { display: flex; flex-direction: column; gap: 8px; max-height: 55vh; overflow-y: auto; width: min(720px, 92vw); }
+  .ver-row { display: flex; gap: 12px; align-items: flex-start; justify-content: space-between; background: #0f131a; border: 1px solid #232a36; border-radius: 6px; padding: 8px 10px; }
+  .ver-row small { color: var(--dim); }
+  .ver-row button { flex-shrink: 0; }
+  .ver-latest { border-color: var(--gold); }
+  .ver-notes { color: #cbd5e1; font-size: 12px; white-space: pre-wrap; max-height: 7.5em; overflow-y: auto; margin-top: 4px; }
+  .qslot::after { content: attr(data-key); position: absolute; top: 1px; left: 3px; font-size: 9px; font-weight: 700; color: var(--dim); pointer-events: none; }
   .qslot.full { border-style: solid; background: var(--card); }
   .qslot img { width: 80%; height: auto; aspect-ratio: 1; }
   .qslot small { font-size: 9px; }
@@ -434,14 +444,15 @@
   </main>
   <nav>
     <div id="classes"><button data-cat="Engineering">Engineering</button><button data-cat="Infantry">Infantry</button><button data-cat="Artillery">Artillery</button><button data-cat="Armor">Armor</button><button data-cat="Naval">Naval</button><button data-cat="Air">Air</button><button data-cat="Strategic">Strategic</button><button data-cat="Support">Support</button></div>
-    <div id="quickbar"><button class="qslot" data-slot="0"></button><button class="qslot" data-slot="1"></button><button class="qslot" data-slot="2"></button><button class="qslot" data-slot="3"></button><button class="qslot" data-slot="4"></button><button class="qslot" data-slot="5"></button><button class="qslot" data-slot="6"></button><button class="qslot" data-slot="7"></button><button class="qslot" data-slot="8"></button></div>
+    <div id="quickbar"><button class="qslot" data-slot="0" data-key="Z"></button><button class="qslot" data-slot="1" data-key="X"></button><button class="qslot" data-slot="2" data-key="C"></button><button class="qslot" data-slot="3" data-key="V"></button><button class="qslot" data-slot="4" data-key="B"></button><button class="qslot" data-slot="5" data-key="N"></button><button class="qslot" data-slot="6" data-key="M"></button></div>
     <div id="controls">
-      <button class="tcard" data-tool="zone" title="Z"><img class="px-ico" data-sprite="zone" alt=""><div class="tc-body"><span class="tc-name">Safe Zone</span><small>Draw</small></div><span class="hk">Z</span></button>
+      <button class="tcard" data-tool="zone"><img class="px-ico" data-sprite="zone" alt=""><div class="tc-body"><span class="tc-name">Safe Zone</span><small>Draw</small></div></button>
       <button class="tcard" data-tool="gate" title="G"><img class="px-ico" data-sprite="gate" alt=""><div class="tc-body"><span class="tc-name">Gate/Wall</span><small>Toggle</small></div><span class="hk">G</span></button>
-      <button class="tcard" data-tool="remove" title="N"><img class="px-ico" data-sprite="remove" alt=""><div class="tc-body"><span class="tc-name">Sell/Evac</span><small>Refund</small></div><span class="hk">N</span></button>
-      <button class="tcard" data-tool="order" title="O"><img class="px-ico" data-sprite="order" alt=""><div class="tc-body"><span class="tc-name">Order</span><small>Send unit</small></div><span class="hk">O</span></button>
-      <button class="tcard" data-tool="pan" title="M"><img class="px-ico" data-sprite="pan" alt=""><div class="tc-body"><span class="tc-name">Move/Aim</span><small>Priority</small></div><span class="hk">M</span></button>
+      <button class="tcard" data-tool="remove"><img class="px-ico" data-sprite="remove" alt=""><div class="tc-body"><span class="tc-name">Sell/Evac</span><small>Refund</small></div></button>
+      <button class="tcard" data-tool="order"><img class="px-ico" data-sprite="order" alt=""><div class="tc-body"><span class="tc-name">Order</span><small>Send unit</small></div></button>
+      <button class="tcard" data-tool="pan"><img class="px-ico" data-sprite="pan" alt=""><div class="tc-body"><span class="tc-name">Move/Aim</span><small>Priority</small></div></button>
       <button class="tcard" id="heatmapbtn" title="H"><img class="px-ico" data-sprite="heatmap" alt=""><div class="tc-body"><span class="tc-name">Heatmap</span><small>Kills</small></div><span class="hk">H</span></button>
+      <button class="ctl2" id="recall" title="Q">Recall<br>Units<span class="hk">Q</span></button>
       <button class="ctl2" id="closegates" title="L">Lock<br>Gates<span class="hk">L</span></button>
       <button class="ctl2" id="clear" title="K">Clear<br>Zone<span class="hk">K</span></button>
       <div class="spd3"><div class="row"><button data-speed="1" title="1">1x<span class="k">1</span></button><button data-speed="2" title="2">2x<span class="k">2</span></button><button data-speed="3" title="3">3x<span class="k">3</span></button></div><button class="pausebar" data-speed="0" title="Space">PAUSE<span class="k">Space</span></button></div>
@@ -454,8 +465,8 @@
         
         
         
-        <button class="tcard" data-tool="c4" title="B"><img class="px-ico" data-sprite="c4" alt=""><div class="tc-body"><span class="tc-name">Bridge C4</span><small id="n-c4"></small></div><span class="hk">B</span></button>
-        <button class="tcard" data-tool="depot" title="X"><img class="px-ico" data-sprite="depot" alt=""><div class="tc-body"><span class="tc-name">Fuel Tank</span><small id="n-depot"></small></div><span class="hk">X</span></button>
+        <button class="tcard" data-tool="c4"><img class="px-ico" data-sprite="c4" alt=""><div class="tc-body"><span class="tc-name">Bridge C4</span><small id="n-c4"></small></div></button>
+        <button class="tcard" data-tool="depot"><img class="px-ico" data-sprite="depot" alt=""><div class="tc-body"><span class="tc-name">Fuel Tank</span><small id="n-depot"></small></div></button>
       </div>
     </div>
     <div class="dock-group cat" data-cat="Infantry">
@@ -463,7 +474,7 @@
       <div class="tool-grid">
         <button class="tcard" data-tool="garrison"><img class="px-ico" data-sprite="garrison" alt=""><div class="tc-body"><span class="tc-name">Garrison</span><small id="cost-garrison"></small></div></button>
         <button class="tcard" data-tool="sniper"><img class="px-ico" data-sprite="sniper" alt=""><div class="tc-body"><span class="tc-name">Sniper</span><small id="cost-sniper"></small></div></button>
-        <button class="tcard" data-tool="para" title="F"><img class="px-ico" data-sprite="para" alt=""><div class="tc-body"><span class="tc-name">Paradrop</span><small id="n-para"></small></div><span class="hk">F</span></button>
+        <button class="tcard" data-tool="para"><img class="px-ico" data-sprite="para" alt=""><div class="tc-body"><span class="tc-name">Paradrop</span><small id="n-para"></small></div></button>
       </div>
     </div>
     <div class="dock-group cat" data-cat="Artillery">
@@ -473,7 +484,7 @@
         <button class="tcard" data-tool="mortar"><img class="px-ico" data-sprite="mortar" alt=""><div class="tc-body"><span class="tc-name">Mortar</span><small id="cost-mortar"></small></div></button>
         <button class="tcard" data-tool="howitzer"><img class="px-ico" data-sprite="howitzer" alt=""><div class="tc-body"><span class="tc-name">Howitzer</span><small id="cost-howitzer"></small></div></button>
         <button class="tcard" data-tool="himars"><img class="px-ico" data-sprite="himars" alt=""><div class="tc-body"><span class="tc-name">HIMARS</span><small id="cost-himars"></small></div></button>
-        <button class="tcard" data-tool="barrage" title="T"><img class="px-ico" data-sprite="barrage" alt=""><div class="tc-body"><span class="tc-name">Barrage</span><small id="n-barrage"></small></div><span class="hk">T</span></button>
+        <button class="tcard" data-tool="barrage"><img class="px-ico" data-sprite="barrage" alt=""><div class="tc-body"><span class="tc-name">Barrage</span><small id="n-barrage"></small></div></button>
       </div>
     </div>
     <div class="dock-group cat" data-cat="Armor">
@@ -496,9 +507,9 @@
         <button class="tcard" data-tool="apache"><img class="px-ico" data-sprite="apache" alt=""><div class="tc-body"><span class="tc-name">Apache</span><small id="cost-apache"></small></div></button>
         <button class="tcard" data-tool="reaper"><img class="px-ico" data-sprite="reaper" alt=""><div class="tc-body"><span class="tc-name">Reaper</span><small id="cost-reaper"></small></div></button>
         <button class="tcard" data-tool="gunship"><img class="px-ico" data-sprite="gunship" alt=""><div class="tc-body"><span class="tc-name">AC-130</span><small id="n-gunship"></small></div></button>
-        <button class="tcard" data-tool="airstrike" title="Q"><img class="px-ico" data-sprite="airstrike" alt=""><div class="tc-body"><span class="tc-name">Airstrike</span><small id="n-airstrike"></small></div><span class="hk">Q</span></button>
+        <button class="tcard" data-tool="airstrike"><img class="px-ico" data-sprite="airstrike" alt=""><div class="tc-body"><span class="tc-name">Airstrike</span><small id="n-airstrike"></small></div></button>
         <button class="tcard" data-tool="a10"><img class="px-ico" data-sprite="a10" alt=""><div class="tc-body"><span class="tc-name">A-10 Run</span><small id="n-a10"></small></div></button>
-        <button class="tcard" data-tool="firebomb" title="E"><img class="px-ico" data-sprite="firebomb" alt=""><div class="tc-body"><span class="tc-name">Firebomb</span><small id="n-firebomb"></small></div><span class="hk">E</span></button>
+        <button class="tcard" data-tool="firebomb"><img class="px-ico" data-sprite="firebomb" alt=""><div class="tc-body"><span class="tc-name">Firebomb</span><small id="n-firebomb"></small></div></button>
         <button class="tcard" data-tool="cluster"><img class="px-ico" data-sprite="cluster" alt=""><div class="tc-body"><span class="tc-name">Cluster</span><small id="n-cluster"></small></div></button>
       </div>
     </div>
@@ -521,7 +532,7 @@
         <button class="tcard" data-tool="command"><img class="px-ico" data-sprite="command" alt=""><div class="tc-body"><span class="tc-name">Command</span><small id="cost-command"></small></div></button>
         <button class="tcard" data-tool="police"><img class="px-ico" data-sprite="police_b" alt=""><div class="tc-body"><span class="tc-name">Precinct</span><small id="cost-police"></small></div></button>
         <button class="tcard" data-tool="militia"><img class="px-ico" data-sprite="militia_b" alt=""><div class="tc-body"><span class="tc-name">Armory</span><small id="cost-militia"></small></div></button>
-        <button class="tcard" data-tool="supply_drop" title="C"><img class="px-ico" data-sprite="supply_drop" alt=""><div class="tc-body"><span class="tc-name">Supply</span><small id="n-supply_drop"></small></div><span class="hk">C</span></button>
+        <button class="tcard" data-tool="supply_drop"><img class="px-ico" data-sprite="supply_drop" alt=""><div class="tc-body"><span class="tc-name">Supply</span><small id="n-supply_drop"></small></div></button>
       </div>
     </div>
     </div>
@@ -531,7 +542,7 @@
     <span class="spacer"></span>
     <span id="osm-credit" hidden>Map data &copy; OpenStreetMap contributors (ODbL)</span>
     <span class="legend"><i style="background:#f5f1e6"></i>civilian<i style="background:#9be7a8"></i>safe<i style="background:#ff3b3b"></i>infected<i style="background:#ff66d1"></i>swimmer</span>
-    <span>V heights · R ranges · H heatmap · right-drag/WASD move · wheel zoom</span>
+    <span>Z-M quick bar · J heights · R ranges · H heatmap · right-drag/WASD move · wheel zoom</span>
   </footer>
 </div>
 
@@ -539,6 +550,7 @@
   <div class="screen" id="s-title">
     <h1>HORDE</h1>
     <p class="tag">Hold the line. Save who you can.</p>
+    <button id="upd-banner" class="upd-banner" hidden></button>
     <div class="col">
       <button class="primary" data-go="cities">Cities &amp; Campaign</button>
       <button id="daily">Daily Challenge</button>
@@ -552,6 +564,7 @@
       <button data-go="record">Service Record</button>
       <button data-go="howto">How to Play</button>
       <button data-go="settings">Settings</button>
+      <button id="versions-btn" hidden>Versions</button>
       <button id="quit" hidden>Quit to Desktop</button>
     </div>
     <div class="ver"></div>
@@ -596,14 +609,14 @@
     <p><b>5. Evacuate.</b> Build <b>Evac Points</b> (rooftop helipads) inside your zone: every 12 s a lift flies people out, and trains carry people out on the rails. Each extra pad costs double the last ($3M, $6M, $12M...), so plan where they go. Each person flown out brings $24,000 in federal evacuation funding. A lift waves off if infected crowd the pad.</p>
     <p><b>Money is real.</b> Prices are real-world US dollars: ground hardware and helicopters at their unit price, ships and jets at the cost of the mission. Ordnance is cheap next to hardware but limited per battle, like a real stockpile (one MOAB, one nuke, four Tomahawks). The end card shows what you spent and the property damage bill.</p>
     <p><b>6. Survive the hordes.</b> Hordes walk in from outside the city along highways, rail lines, bridges and the river (an amber arrow shows where the next one comes in). Each is bigger and comes sooner. <b>The round ends</b> when nobody is left in the city (everyone alive is out), or when only a few stuck stragglers remain. Your round score (0 to 100) is mostly people saved, plus how fast, how intact the city is and how many of the infected you killed: Bronze 10, Silver 30, Gold 50, Platinum 75 points, and at least 5% saved for any medal. Then <b>Keep fighting</b>: endless, harder hordes scored as <b>Mayhem</b> (kills plus city damage, the more the better) until you pull out. Bonus XP for keeping the city intact (Light Touch) or for wrecking it (Scorched Earth, 35% wrecked or a $1 billion damage bill). Pause menu: Pull out ends the battle.</p>
-    <p><b>Abilities &amp; Realistic Deployment.</b> Buy abilities while planning or mid-battle: <b>Airstrike</b> (Q) sends an F-15E Strike Eagle to bomb a line, <b>Firebomb</b> (E) drops incendiary canisters, <b>Paratroopers</b> (F) sends a C-130J Hercules to drop an airborne squad on parachutes, and <b>Supply drop</b> (C) parachutes 4 GPS-guided crates that refill 100% ammo, heal mobile squads, repair walls within 70 m, and leave a field supply depot for 45 s. Mid-battle units arrive via <b>UH-60 Black Hawk</b>, <b>CH-47 Chinook</b> sling-load, or <b>C-130J heavy APC parachute drop</b>, and Supply Depots dispatch autonomous <b>Cargo Drones</b>.</p>
+    <p><b>Abilities &amp; Realistic Deployment.</b> Buy abilities while planning or mid-battle: <b>Airstrike</b> sends an F-15E Strike Eagle to bomb a line, <b>Firebomb</b> drops incendiary canisters, <b>Paratroopers</b> sends a C-130J Hercules to drop an airborne squad on parachutes, and <b>Supply drop</b> parachutes 4 GPS-guided crates that refill 100% ammo, heal mobile squads, repair walls within 70 m, and leave a field supply depot for 45 s. Mid-battle units arrive via <b>UH-60 Black Hawk</b>, <b>CH-47 Chinook</b> sling-load, or <b>C-130J heavy APC parachute drop</b>, and Supply Depots dispatch autonomous <b>Cargo Drones</b>.</p>
     <p><b>Terrain &amp; Structure Destruction.</b> Heavy weapons (Mortars, Howitzers, Battleships, Airstrikes, and Fuel Depots) crater streets, scorch terrain, shear floors off buildings, and collapse heavily shelled buildings into walkable rubble that slows advancing hordes by 30%.</p>
     <p><b>Money.</b> Every 10 seconds of battle you earn money for each person safe in your zones, plus a little for every infected killed. Spend it any time: new units (they take a few seconds to set up), abilities, bridge charges, even extra safe zones (those cost a lot more). Gates can be opened and closed whenever you like. Stronger units take longer to set up. Selling a unit mid-battle (Sell / Evac) dispatches an extraction helicopter to pull it out; then you get its cost back.</p>
     <p><b>More units.</b> The <b>Mortar</b> and <b>Howitzer</b> shell crowds from far away. The <b>APC</b>, the <b>Gunboat</b> (on the river) and <b>Paratroopers</b> think for themselves: they hunt crowds near where you put them, go after infected chasing civilians first, back off before they get swarmed, and go home to reload. APCs also dismount a Mechanized Rifle Team on first contact. The <b>Battleship</b> shells crowds far inland from the river. Click any unit with Move / Aim to change what it shoots first: nearest, closest to the walls, or infected chasing civilians.</p>
     <p><b>Support buildings.</b> Built on buildings inside your safe zone: <b>Budget office</b> cuts the cost of nearby units and buildings by 20%, <b>Repair yard</b> mends damaged walls, gates and vehicles, <b>Radio tower</b> extends nearby firing range by 40%, <b>Supply depot</b> feeds ammo via cargo drones to turrets, mobile squads and forward units outside the walls (and halves vehicle reload time), <b>Command post</b> boosts firing rate by 30% and patrol range by 25%, <b>Precinct</b> dispatches autonomous Police Squads, and <b>Armory</b> arms Militia squads to guard the walls while reinforcing indoor barricades.</p>
     <p><b>Real Cities, Mutators, Daily Challenge &amp; Kill Heatmaps.</b> Play on 8 built-in real OpenStreetMap cities (Castle Rock, Denver, Chicago, Pittsburgh, Boston, Manhattan, Portland, Paris) or search any real city live when online. Toggle <b>Mutators</b> on the Cities screen or play the deterministic <b>Daily Challenge</b>. Press <b>H</b> (or hover over any unit button in battle) to view spatial <b>Kill Heatmaps</b> showing where your defenses did the most damage.</p>
     <p class="credits"><b>Credits.</b> Map data &copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap contributors</a>, available under the Open Database License (ODbL). Music made with ACE-Step 1.5 (MIT license). Sound effects made with Stable Audio Open 1.0, Powered by Stability AI (Stability AI Community License). Built by AI agents (Claude and Gemini) and a human.</p>
-    <p><b>Controls.</b> Right-drag or WASD to move the map, wheel to zoom, Space to pause, 1/2/3 for speed, L locks gates, K clears the zone, M move/aim, N sell, R shows unit ranges, H toggles kill heatmap, Esc opens the menu, F11 fullscreen (Windows app).</p>
+    <p><b>Controls.</b> Right-drag or WASD to move the map, wheel to zoom, Space to pause, 1/2/3 for speed, Q recalls units to the zone (again: back to their posts), L locks gates, K clears the zone, Z X C V B N M use quick bar slots 1-7, J height view, R shows unit ranges, H toggles kill heatmap, Esc opens the menu, F11 fullscreen (Windows app).</p>
     <div class="row"><button data-back>Back</button></div>
   </div>
   <div class="screen" id="s-settings" hidden>
@@ -620,6 +633,8 @@
       <option value="100000">Huge: 100,000 (fast PC)</option>
       <option value="200000">Massive: 200,000 (very fast PC, may run slower than real time)</option>
     </select></label>
+    <label class="opt" id="opt-upd-row" hidden><input type="checkbox" id="opt-checkupd"> Check GitHub for new versions when the game starts</label>
+    <label class="opt" id="opt-autoupd-row" hidden><input type="checkbox" id="opt-autoupd"> Install new versions automatically (your save is backed up first)</label>
     <label class="opt"><input type="checkbox" id="opt-dev"> Developer mode (a DEV button and F10 open the developer panel in battle)</label>
     <div class="subhead">Mods and save file</div>
     <div id="mod-status" class="opt"></div>
@@ -627,6 +642,13 @@
     <div class="row"><button id="save-export">Export save file</button><button id="save-import">Import save file</button></div>
     <input type="file" id="mod-file" accept=".json,application/json" hidden><input type="file" id="save-file" accept=".json,application/json" hidden>
     <div class="row"><button id="logs">Open log folder</button><button id="reset">Reset progress</button><button data-back>Back</button></div>
+  </div>
+  <div class="screen" id="s-versions" hidden>
+    <h2>VERSIONS</h2>
+    <p class="subhead">Every published version of Horde. Your save is backed up before any switch.</p>
+    <div id="ver-status" class="opt"></div>
+    <div id="ver-list"></div>
+    <div class="row"><button id="ver-refresh">Check again</button><button id="ver-releases">Open releases page</button><button data-back>Back</button></div>
   </div>
   <div class="screen" id="s-pause" hidden>
     <h2>PAUSED</h2>
@@ -636,6 +658,7 @@
       <button id="p-restart">Restart city (keep plan)</button>
       <button data-go="howto">How to play</button>
       <button data-go="settings">Settings</button>
+      <button id="p-versions" hidden>Versions</button>
       <button id="p-withdraw">Pull out (end battle, keep who got out)</button>
       <button id="p-title">Quit to menu</button>
       <button id="p-quit">Quit to desktop</button>

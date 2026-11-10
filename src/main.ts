@@ -13,6 +13,8 @@ const modReports: Mods.ModReport[] = [...(Save.desktop?.readMods?.() ?? []), ...
 import type { Plan } from "./save";
 import { log, installErrorHooks, recentLog, Perf } from "./log";
 import { GLView } from "./gl";
+import { Scars } from "./scars";
+import { initUpdater } from "./updaterui";
 import { Sound } from "./audio";
 import { initSprites, SPRITE_CANVAS, SPRITE_URL, SpriteKey, supportSpriteKey } from "./sprites";
 import { AlertQueue } from "./ticker";
@@ -35,6 +37,8 @@ const isAbility = (t: Tool): t is C.AbilityKind => t in C.ABILITIES;
 const isSupport = (t: Tool): t is C.SupportKind => t in C.SUPPORTS;
 let strikeStart: [number, number] | null = null; // first click of an airstrike run
 let mapVersion = 0;
+const scars = new Scars(); // 0.23: craters and rubble in the ground, smoke above
+let scarUploadT = 0;
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const canvas = $<HTMLCanvasElement>("view");
@@ -74,7 +78,7 @@ let showHeights = false;
 let showRanges = false;
 let showHeatmap = false;
 let hoverUnitHeatmap: C.UnitKind | null = null;
-let hoverNavTool: Tool | "heatmap" | "closegates" | "clear" | null = null;
+let hoverNavTool: Tool | "heatmap" | "closegates" | "recall" | "clear" | null = null;
 let lastMapBuildT = 0;
 let message = "";
 let messageT = 0;
@@ -203,6 +207,10 @@ function planSummary() {
 }
 const cityTag = () => ({ city: dailyDate ? `daily:${dailyDate}` : customMap ? `osm:${customMap.name}` : city ? city.id : "quick", seed, difficulty: sim.difficulty, mutators: [...activeMutators] });
 function importPlan(p: Plan) {
+  sim.ignoreFootprint = true; // 0.23: an old plan may overlap under the new footprints; it still loads
+  try { importPlanInner(p); } finally { sim.ignoreFootprint = false; }
+}
+function importPlanInner(p: Plan) {
   for (const z of p.zones ?? (p.poly.length ? [p.poly] : [])) sim.addZone(z);
   for (const i of p.walls) if (sim.inZone[i] === 3) { sim.inZone[i] = 2; sim.wallHp[i] = sim.wallMaxHp(); }
   sim.fieldDirty = true;
@@ -322,6 +330,8 @@ function syncSettings() {
   $<HTMLInputElement>("opt-fs").checked = save.settings.fullscreen;
   $<HTMLInputElement>("opt-edge").checked = save.settings.edgeScroll;
   $<HTMLInputElement>("opt-ranges").checked = save.settings.showRanges;
+  $<HTMLInputElement>("opt-checkupd").checked = save.settings.checkUpdates !== false;
+  $<HTMLInputElement>("opt-autoupd").checked = !!save.settings.autoUpdate;
   $<HTMLInputElement>("opt-dev").checked = !!save.settings.devMode;
   $<HTMLSelectElement>("opt-crowd").value = String(save.settings.crowd ?? C.CIVILIANS);
   const v = save.settings.vol ?? { master: 0.8, sfx: 0.8, music: 0.5 };
@@ -458,6 +468,8 @@ function clearTicker() { alerts.clear(); $("ticker").replaceChildren(); tickerBu
 function say(m: string, ms = 4000) { message = m; messageT = performance.now(); messageMs = ms; }
 let messageMs = 4000;
 
+/** 0.22.1: picking the tool you already hold puts it down (back to Move/Aim). */
+function toggleTool(t: Tool) { if (tool === t && t !== "pan") setTool("pan"); else setTool(t); }
 function setTool(t: Tool) {
   if (!isOpen(t)) { say(`${toolName(t)} unlocks at ${P.UNLOCK_XP[t].toLocaleString()} XP. You have ${(save.xp ?? 0).toLocaleString()}.`, 3500); return; }
   orderSel = null; nukeArm = null;
@@ -472,9 +484,9 @@ function setTool(t: Tool) {
     barrage: C.ABILITIES.barrage.hint, moab: C.ABILITIES.moab.hint, nuke: C.ABILITIES.nuke.hint,
     a10: C.ABILITIES.a10.hint, cluster: C.ABILITIES.cluster.hint, tomahawk: C.ABILITIES.tomahawk.hint, gunship: C.ABILITIES.gunship.hint,
     himars: "Click a street or park, ideally inside your zone (free reloads). Ripples 6 rockets at the thickest crowd up to 460 m away. Nothing closer than 60 m.",
-    tank: "Click a street. An M1 Abrams: machine gun plus a 120 mm main gun, 3,000 HP armor. Patrols, kites, drives home to rearm. Takes strike orders [O].",
-    apache: "Click anywhere inside your safe zone. An AH-64 flies over everything, hunting infected near its post with a 30 mm gun and rockets. Takes strike orders [O] anywhere.",
-    reaper: "Click anywhere inside your safe zone. An MQ-9 drone loiters over a wide area firing Hellfires at the densest packs. Takes strike orders [O] anywhere.",
+    tank: "Click a street. An M1 Abrams: machine gun plus a 120 mm main gun, 3,000 HP armor. Patrols, kites, drives home to rearm. Takes strike orders (Order tool).",
+    apache: "Click anywhere inside your safe zone. An AH-64 flies over everything, hunting infected near its post with a 30 mm gun and rockets. Takes strike orders (Order tool) anywhere.",
+    reaper: "Click anywhere inside your safe zone. An MQ-9 drone loiters over a wide area firing Hellfires at the densest packs. Takes strike orders (Order tool) anywhere.",
     howitzer: "Click a street or park inside your zone. Howitzers shell the thickest crowds far away, slowly. Can't hit anything close.",
     apc: "Click a street, even outside the zone. The APC guards that spot; out of ammo it drives into the zone, reloads and comes back.",
     depot: "Click a fuel depot (orange) to set it off: a huge blast that kills everyone near it, civilians too.",
@@ -482,7 +494,7 @@ function setTool(t: Tool) {
     zone: "Click corners of your safe zone. Click the first corner (or press Enter) to close it. Esc cancels.",
     gate: "Click a crossing to switch gate (blue: civilians get in, weaker) / wall (white: nobody gets in, stronger). In battle you can still close gates.",
     garrison: "Click a building. Garrisons fire fast at short range.",
-    sniper: "Click a building. Taller buildings give snipers more range (press V to see heights).",
+    sniper: "Click a building. Taller buildings give snipers more range (press J to see heights).",
     turret: "Click a street. Turrets fire very fast but never reload.",
     remove: "Planning: click a unit or support building to remove it for a full refund. Battle: it stops working and is pulled out after a while, then refunds.",
     battleship: "Click the river. A slow, heavy warship whose guns shell crowds far inland. Set its target (Move map, click it) to cover your walls or civilians on the run.",
@@ -494,7 +506,7 @@ function setTool(t: Tool) {
     supply_drop: C.ABILITIES.supply_drop.hint,
     c4: "Planning: click a bridge to plant a charge ($500), click again to remove it. Battle: click a charged bridge to blow it.",
   };
-  $("hint").textContent = hints[t];
+  $("hint").textContent = hints[t]; $("hint").title = hints[t]; // one line in the footer; the full text on hover
 }
 
 function closeDraft() {
@@ -580,6 +592,11 @@ function click(cx: number, cy: number) {
       if (planning) { say("Buy abilities with their buttons now; aim them during the battle."); break; }
       if (tool === "nuke" && (!nukeArm || Math.hypot(nukeArm[0] - cx, nukeArm[1] - cy) > 4)) { nukeArm = [cx, cy]; say("Nuclear strike: everything within 160 m dies, people in your zone too. Click the same spot again to confirm.", 6000); break; }
       nukeArm = null;
+      if (!sim.charges[tool]) { // 0.22: the tool stays armed; each click buys the next one, like placing units
+        const be = sim.buyAbility(tool);
+        if (be) { say(be, 2500); strikeStart = null; break; }
+        log("info", "bought-in-battle", { kind: tool, left: sim.remaining() });
+      }
       const line = tool === "airstrike" || tool === "a10";
       if (line && !strikeStart) { strikeStart = [cx, cy]; say("Now click where the run ends."); break; }
       const [sx, sy] = line ? strikeStart! : [cx, cy];
@@ -588,7 +605,7 @@ function click(cx: number, cy: number) {
       if (e) { say(e); break; }
       log("info", "ability", { kind: tool, x: Math.round(sx), y: Math.round(sy), t: +sim.time.toFixed(1), left: sim.charges[tool] });
       say(`${C.ABILITIES[tool].name} inbound.`, 2500);
-      if (!sim.charges[tool]) setTool("pan");
+      if (tool === "nuke") setTool("pan");
       break;
     }
   }
@@ -629,6 +646,8 @@ canvas.addEventListener("wheel", e => {
 }, { passive: false });
 
 const keys = new Set<string>();
+let loggedEjects = 0;
+const QUICK_KEYS = ["z", "x", "c", "v", "b", "n", "m"]; // quick bar slots 1-7 (0.22)
 addEventListener("keydown", e => {
   keys.add(e.key.toLowerCase());
   const k = e.key;
@@ -644,19 +663,14 @@ addEventListener("keydown", e => {
   }
   if (mode !== "game" || stack.length) return;
   if (k === " ") { e.preventDefault(); if (sim.phase === "battle") setSpeed(speed ? 0 : 1); }
-  else if (k === "v" || k === "V") showHeights = !showHeights;
+  else if (k === "j" || k === "J") showHeights = !showHeights; // 0.22: V went to the quick bar
   else if (k === "r" || k === "R") showRanges = !showRanges;
   else if (k === "h" || k === "H") { showHeatmap = !showHeatmap; refreshUi(); }
   else if (k === "Enter" && tool === "zone" && draft.length) closeDraft();
   else if (k === "1") setSpeed(1); else if (k === "2") setSpeed(2); else if (k === "3") setSpeed(3);
+  else if (k === "q" || k === "Q") $("recall").click();
   else if (k === "l" || k === "L") $("closegates").click(); else if (k === "k" || k === "K") $("clear").click();
-  else if (k === "m" || k === "M") setTool("pan"); else if (k === "n" || k === "N") setTool("remove");
-  else if (k === "z" || k === "Z") setTool("zone"); else if (k === "g" || k === "G") setTool("gate");
-  else if (k === "q" || k === "Q") abilityButton("airstrike"); else if (k === "e" || k === "E") abilityButton("firebomb");
-  else if (k === "f" || k === "F") abilityButton("para"); else if (k === "c" || k === "C") abilityButton("supply_drop");
-  else if (k === "b" || k === "B") setTool("c4");
-  else if (k === "t" || k === "T") abilityButton("barrage"); else if (k === "o" || k === "O") setTool("order");
-  else if (k === "x" || k === "X") setTool("depot");
+  else if (!e.ctrlKey && !e.metaKey && !e.altKey && QUICK_KEYS.includes(k.toLowerCase())) useSlot(QUICK_KEYS.indexOf(k.toLowerCase())); // 0.22: 7 quick bar keys
 });
 addEventListener("keyup", e => keys.delete(e.key.toLowerCase()));
 
@@ -682,6 +696,8 @@ function refreshUi() {
   if (sb.textContent !== label) { sb.textContent = label; startLabelT = performance.now(); }
   sb.classList.toggle("restart", !planning);
   $<HTMLButtonElement>("closegates").disabled = sim.phase === "over";
+  $<HTMLButtonElement>("recall").disabled = sim.phase !== "battle";
+  { const rb = $("recall"), want = sim.recalled ? "Send<br>Back<span class=\"hk\">Q</span>" : "Recall<br>Units<span class=\"hk\">Q</span>"; if (rb.innerHTML !== want) rb.innerHTML = want; rb.classList.toggle("on", sim.recalled); }
   $("heatmapbtn").classList.toggle("on", showHeatmap);
   $("mut-badges").innerHTML = [...sim.mutators].map(m => `<span style="border-color:${C.MUTATORS[m].color};color:${C.MUTATORS[m].color}" title="${C.MUTATORS[m].desc}">${C.MUTATORS[m].name}</span>`).join("");
   for (const k of C.BUILDABLE) $(`cost-${k}`).textContent = C.money(sim.unitCost(k));
@@ -870,26 +886,13 @@ function draw(now: number) {
   if (sim.mapVersion !== mapVersion && (now - lastMapBuildT > 200 || sim.phase !== "battle")) buildBase(); // bridge fell or terrain/buildings took damage
   const s = cam.scale;
   if (!glv.ok) ctx.drawImage(showHeights ? heightImg : baseImg, cam.x, cam.y, sim.w * s, sim.h * s);
+  scars.update(sim);
+  if (scars.dirty && (now - scarUploadT > 200 || sim.phase !== "battle")) { scars.dirty = false; scarUploadT = now; glv.setScar(scars.canvas); }
+  if (!glv.ok && !showHeights) ctx.drawImage(scars.canvas, cam.x, cam.y, sim.w * s, sim.h * s);
   if (sim.phase === "battle" && sim.tick % 10 === 0) buildZone();
   if (!glv.ok) ctx.drawImage(zoneImg, cam.x, cam.y, sim.w * s, sim.h * s);
   else glv.draw(cam, W, H, sim.w, sim.h, showHeights, sim.n, sim.ax, sim.ay, sim.state, Math.max(1, s * 0.55), sim.mutant);
   drawHeatmap(now, s);
-
-  // Shell craters & scorched impact pits.
-  for (const c of sim.craters) {
-    const px = cam.x + c.x * s, py = cam.y + c.y * s, R = Math.max(2, c.r * s);
-    if (px < -R || py < -R || px > W + R || py > H + R) continue;
-    ctx.fillStyle = "rgba(18,16,14,0.68)";
-    ctx.beginPath(); ctx.arc(px, py, R, 0, 7); ctx.fill();
-    ctx.strokeStyle = "rgba(95,82,68,0.55)"; ctx.lineWidth = Math.max(1, s * 0.35);
-    ctx.beginPath(); ctx.arc(px, py, R * 0.85, 0, 7); ctx.stroke();
-    const age = sim.time - c.t;
-    if (age >= 0 && age < 6) {
-      const smokeA = (1 - age / 6) * 0.35;
-      ctx.fillStyle = `rgba(170,165,158,${smokeA.toFixed(2)})`;
-      ctx.beginPath(); ctx.arc(px + Math.sin(now / 300 + c.x) * s, py - age * s * 0.6, R * (0.5 + age * 0.12), 0, 7); ctx.fill();
-    }
-  }
 
   // Parachuted field supply crates on the ground.
   for (const sc of sim.supplyCrates) {
@@ -937,7 +940,7 @@ function draw(now: number) {
     if (hov || tool === "depot") {
       ctx.strokeStyle = "rgba(255,109,0,0.8)"; ctx.setLineDash([5, 4]);
       ctx.beginPath(); ctx.arc(px, py, C.DEPOT_RADIUS * s, 0, 7); ctx.stroke(); ctx.setLineDash([]);
-      if (hov) label("Fuel depot: set it off during the battle (X)", px + r + 6, py);
+      if (hov) label("Fuel depot: set it off during the battle", px + r + 6, py);
     }
   }
 
@@ -1137,8 +1140,9 @@ function draw(now: number) {
       ctx.fill(); ctx.stroke();
     }
     ctx.globalAlpha = 1;
-    if (u.hp !== undefined && spec.mobile && spec.mobile.hp !== Infinity && u.hp < spec.mobile.hp) {
-      const k = Math.max(0, u.hp / spec.mobile.hp);
+    const maxHp = C.maxHp(spec);
+    if (u.hp !== undefined && maxHp !== undefined && u.hp < maxHp) {
+      const k = Math.max(0, u.hp / maxHp);
       ctx.fillStyle = "#000"; ctx.fillRect(px - r, py - r - 6, 2 * r, 3);
       ctx.fillStyle = k > 0.5 ? "#7cfc9a" : k > 0.25 ? "#ffd54f" : "#ff5252"; ctx.fillRect(px - r, py - r - 6, 2 * r * k, 3);
     }
@@ -1161,6 +1165,7 @@ function draw(now: number) {
     }
   }
 
+  scars.drawSmoke(ctx, cam.x, cam.y, s, sim.time, W, H); // in the air: above the crowd and units, under the aircraft
   drawTransports(now, s);
   drawDev(now);
   updateInfoPanel();
@@ -1171,6 +1176,7 @@ function draw(now: number) {
     const [hx, hy] = [Math.floor(hover[0]), Math.floor(hover[1])];
     const spec = C.UNITS[kind];
     const ok = !sim.canPlace(kind, hx, hy);
+    drawPlacementGrid(hx, hy, spec.foot, ok, s);
     const lvl = sim.map.height[sim.idx(hx, hy)];
     const range = (spec.range + spec.roofBonus * lvl) * (sim.hasActiveSupport("radio", hx, hy) ? C.RADIO_RANGE_MUL : 1);
     const cost = sim.unitCost(kind, hx, hy);
@@ -1183,6 +1189,7 @@ function draw(now: number) {
     const [hx, hy] = [Math.floor(hover[0]), Math.floor(hover[1])];
     const spec = C.SUPPORTS[kind];
     const ok = !sim.canPlaceSupport(kind, hx, hy);
+    drawPlacementGrid(hx, hy, spec.foot, ok, s);
     const cost = sim.supportCost(kind, hx, hy);
     ctx.strokeStyle = ok ? spec.color : "#ff4444"; ctx.setLineDash([6, 4]);
     ctx.beginPath(); ctx.arc(cam.x + (hx + 0.5) * s, cam.y + (hy + 0.5) * s, spec.radius * s, 0, 7); ctx.stroke();
@@ -1237,6 +1244,27 @@ function label(t: string, x: number, y: number) {
 }
 
 /** Render descending parachutes (paratroopers, GPS supply crates, heavy APC extraction rigs) and aircraft/helicopters/drones. */
+/** 0.23: while placing, a faint cell grid near the cursor, the footprints already standing there,
+ *  and this unit's footprint: green where it fits, red where it can't go. */
+function drawPlacementGrid(hx: number, hy: number, foot: number, ok: boolean, s: number) {
+  const R = 10, rect = (x0: number, y0: number, x1: number, y1: number) => [cam.x + x0 * s, cam.y + y0 * s, (x1 - x0 + 1) * s, (y1 - y0 + 1) * s] as const;
+  if (s >= 4) {
+    ctx.lineWidth = 1;
+    for (let y = hy - R; y <= hy + R; y++) for (let x = hx - R; x <= hx + R; x++) {
+      const d = Math.hypot(x - hx, y - hy); if (d > R) continue;
+      ctx.strokeStyle = `rgba(255,255,255,${(0.16 * (1 - d / R)).toFixed(3)})`;
+      ctx.strokeRect(cam.x + x * s + 0.5, cam.y + y * s + 0.5, s, s);
+    }
+  }
+  ctx.lineWidth = Math.max(1, s * 0.08);
+  const near = (x: number, y: number) => Math.abs(x - hx) <= R + 3 && Math.abs(y - hy) <= R + 3;
+  ctx.strokeStyle = "rgba(226,232,240,0.35)";
+  for (const u of sim.units) if (near(u.x, u.y)) ctx.strokeRect(...rect(...sim.footRect(C.UNITS[u.kind].foot, u.x, u.y)));
+  for (const b of sim.supports) if (near(b.x, b.y)) ctx.strokeRect(...rect(...sim.footRect(C.SUPPORTS[b.kind].foot, b.x, b.y)));
+  const r = rect(...sim.footRect(foot, hx, hy));
+  ctx.fillStyle = ok ? "rgba(74,222,128,0.30)" : "rgba(239,68,68,0.32)"; ctx.fillRect(...r);
+  ctx.strokeStyle = ok ? "#4ade80" : "#ef4444"; ctx.lineWidth = Math.max(1.5, s * 0.12); ctx.strokeRect(...r);
+}
 function drawTransports(now: number, s: number) {
   // 1. Descending parachutes
   for (const ch of sim.chutes) {
@@ -1447,7 +1475,7 @@ function toolInfoHtml(t: string): { html: string; accent: string } | null {
         `<div><span>Ammo</span><b>${ammoStr}</b></div>` +
         `<div><span>Deployment</span><b>${spec.deploy}s (${info.transport.split(" ")[0]})</b></div>` +
         `<div><span>Struct. Dmg</span><b>${info.structDmg.split(" ")[0]}</b></div>` +
-        (spec.mobile ? `<div><span>Armor / Speed</span><b>${spec.mobile.hp === Infinity ? "Invulnerable" : `${spec.mobile.hp} HP`} · ${(spec.mobile.speed * C.CELL_M).toFixed(1)}m/s</b></div>` : "") +
+        (spec.mobile ? `<div><span>Armor / Speed</span><b>${spec.mobile.hp === Infinity ? "Invulnerable" : `${spec.mobile.hp} HP`} · ${(spec.mobile.speed * C.CELL_M).toFixed(1)}m/s</b></div>` : spec.hp ? `<div><span>Armor</span><b>${spec.hp} HP · blocks the street</b></div>` : "") +
         (sim.phase !== "plan" ? `<div><span>Active / Kills</span><b>${activeCount} deployed · ${classKills.toLocaleString()} kills</b></div>` : "") +
       `</div>` +
       `<div class="ip-tags">${info.specials.map(s => `<div>${s}</div>`).join("")}</div>`,
@@ -1477,7 +1505,6 @@ function toolInfoHtml(t: string): { html: string; accent: string } | null {
   if (isAbility(t as Tool)) {
     const k = t as C.AbilityKind;
     const spec = C.ABILITIES[k];
-    const hotkeys: Record<C.AbilityKind, string> = { airstrike: "Q", firebomb: "E", para: "F", supply_drop: "C", barrage: "T", moab: "-", nuke: "-", a10: "-", cluster: "-", tomahawk: "-", gunship: "-" };
     const platforms: Record<C.AbilityKind, string> = {
       airstrike: "F-15E Strike Eagle (Bombs)",
       firebomb: "Strike Jet (Incendiary)",
@@ -1506,7 +1533,7 @@ function toolInfoHtml(t: string): { html: string; accent: string } | null {
     };
     const spUrl = SPRITE_URL[k];
     return out(
-      `<div class="ip-top">${spUrl ? `<img class="ip-portrait" src="${spUrl}" alt="" />` : ""}<div class="ip-meta"><div class="ip-head"><span class="ip-title">${spec.name} [${hotkeys[k]}]</span><span class="ip-cost">${C.money(spec.cost)} (${sim.charges[k]} ready)</span></div>` +
+      `<div class="ip-top">${spUrl ? `<img class="ip-portrait" src="${spUrl}" alt="" />` : ""}<div class="ip-meta"><div class="ip-head"><span class="ip-title">${spec.name}</span><span class="ip-cost">${C.money(spec.cost)} (${sim.charges[k]} ready)</span></div>` +
       `<div class="ip-role" style="color:${spec.color}">Tactical Air Support · ${platforms[k]}</div></div></div>` +
       `<div class="ip-desc">${spec.hint}</div>` +
       `<div class="ip-grid">` +
@@ -1519,14 +1546,15 @@ function toolInfoHtml(t: string): { html: string; accent: string } | null {
   }
   if (t === "zone" || t === "gate" || t === "c4" || t === "depot" || t === "remove" || t === "pan" || t === "order" || t === "heatmap" || t === "closegates" || t === "clear") {
     const meta: Record<string, [string, string, string, string, SpriteKey]> = {
-      zone: ["Safe Zone Perimeter [Z]", `${C.money(C.ZONE_BASE_COST)} base`, "Engineering · Quarantine Perimeter", "Click polygon corners around city blocks, then click the first corner (or press Enter) to close. Road crossings become guarded Gates; interior buildings can host Support Facilities.", "zone"],
+      zone: ["Safe Zone Perimeter", `${C.money(C.ZONE_BASE_COST)} base`, "Engineering · Quarantine Perimeter", "Click polygon corners around city blocks, then click the first corner (or press Enter) to close. Road crossings become guarded Gates; interior buildings can host Support Facilities.", "zone"],
       gate: ["Gate / Wall Toggle [G]", `${sim.gateMaxHp()} / ${sim.wallMaxHp()} HP`, "Fortification · Access Control", "Gates (blue, 3,000 HP) let fleeing civilians enter while blocking infected. Walls (white, 8,000 HP) block everyone and withstand 2.6x more punishment. Close gates once civilians are inside.", "gate"],
-      c4: ["Bridge Demolition Charge [B]", `${C.money(C.C4_COST)}`, "Combat Engineering · River Denial", "Plant C4 charges on river bridges during planning or battle, then detonate during battle to drop the span into the river. Blocks standard infected (Swimmer mutants can still swim across).", "c4"],
-      depot: ["Fuel Depot Detonation [X]", `${sim.depots.filter(d => !d.used).length} remaining`, "Environmental Hazard · Massive Blast", "Pre-existing industrial fuel tanks (orange triangles). Click during battle for a 22 m explosion (5,000 dmg) that levels adjacent buildings into rubble and ignites fires.", "depot"],
+      c4: ["Bridge Demolition Charge", `${C.money(C.C4_COST)}`, "Combat Engineering · River Denial", "Plant C4 charges on river bridges during planning or battle, then detonate during battle to drop the span into the river. Blocks standard infected (Swimmer mutants can still swim across).", "c4"],
+      depot: ["Fuel Depot Detonation", `${sim.depots.filter(d => !d.used).length} remaining`, "Environmental Hazard · Massive Blast", "Pre-existing industrial fuel tanks (orange triangles). Click during battle for a 22 m explosion (5,000 dmg) that levels adjacent buildings into rubble and ignites fires.", "depot"],
       remove: ["Remove / Helicopter Extraction", "100% Refund", "Logistics · Redeployment", "In Planning, removes a unit or support building immediately for a full refund. In Battle, dispatches an extraction helicopter (1.5x deploy time) to pull the unit out and refund its cost.", "remove"],
-      order: ["Strike Order [O]", "Free", "Command & Control", "Click an APC, police or militia squad, paratroopers or a boat, then click a destination. The unit moves out, clears infected around that spot and holds it: guard an evac route or a road a horde comes in on.", "order"],
+      order: ["Strike Order", "Free", "Command & Control", "Click an APC, police or militia squad, paratroopers or a boat, then click a destination. The unit moves out, clears infected around that spot and holds it: guard an evac route or a road a horde comes in on.", "order"],
       pan: ["Move Map & Target Priority", "Left-Click Unit", "Command & Control", "Drag to pan the map, scroll wheel to zoom. Click any placed combat unit to cycle its target priority between Nearest, Wall Biters, and Infected Chasing Civilians.", "pan"],
       heatmap: ["Spatial Kill Heatmap [H]", `${sim.kills.toLocaleString()} kills`, "Battlefield Intelligence", "Overlays a smoothed thermal density map of every infected kill. Hover a unit in the picker during battle to isolate kills made by that unit class.", "heatmap"],
+      recall: ["Recall Units [Q]", sim.recalled ? "Recalled" : "Instant", "Command & Control", "Every APC, tank, squad, paratrooper and aircraft falls back to the nearest safe zone and holds there. Boats and street emplacements stay put. Press again to send them all back to their posts; a strike order sends one unit out on its own.", "order"],
       closegates: ["Lock Down All Gates", "Instant", "Emergency Perimeter Seal", "Immediately converts every intact blue Gate across all Safe Zones into a reinforced white Wall (scaling current HP proportionally).", "gate"],
       clear: ["Clear Safe Zone", "Full Refund", "Planning Reset", "Removes your drawn Safe Zone polygon and refunds its cost so you can redraw your perimeter from scratch (available during Planning phase).", "remove"],
     };
@@ -1565,7 +1593,7 @@ function updateInfoPanel() {
     const ammoCap = sim.mutators.has("supply_shortage") && spec.reloadsInZone && sim.unitInZone(u) ? spec.ammo * 2 : spec.ammo;
     const ammoPct = u.ammo === Infinity ? 100 : Math.min(100, Math.round((u.ammo / ammoCap) * 100));
     const ammoText = u.ammo === Infinity ? "Unlimited (In Safe Zone)" : `${Math.floor(u.ammo).toLocaleString()} / ${ammoCap.toLocaleString()} (${ammoPct}%)`;
-    const hpPct = u.hp !== undefined && spec.mobile && spec.mobile.hp !== Infinity ? Math.max(0, Math.round((u.hp / spec.mobile.hp) * 100)) : null;
+    const hpMax = C.maxHp(spec), hpPct = u.hp !== undefined && hpMax !== undefined ? Math.max(0, Math.round((u.hp / hpMax) * 100)) : null;
     const buffs: string[] = [];
     if (u.rangeBoosted) buffs.push("+40% Range (Radio Tower)");
     if (u.rateMul && u.rateMul > 1) buffs.push("+30% Fire Rate (Command Post)");
@@ -1639,11 +1667,21 @@ function updateInfoPanel() {
   const cx = hx | 0, cy = hy | 0;
   if (cx >= 0 && cy >= 0 && cx < sim.w && cy < sim.h) {
     const ci = sim.idx(cx, cy);
+    if (sim.rough[ci] && !sim.rubble[ci]) { // 0.23: craters are rough ground
+      const pct = Math.round((1 - sim.roughMul(ci)) * 100);
+      setInfoPanel(
+        `<div class="ip-head"><span class="ip-title">Shell Crater</span><span class="ip-cost">-${pct}% Speed</span></div>` +
+        `<div class="ip-role" style="color:#bcaaa4">Broken Ground · Rough Terrain</div>` +
+        `<div class="ip-desc">Cratered by heavy fire. Infected, civilians and ground vehicles all slow down crossing it, most at the bottom.</div>`,
+        "#bcaaa4"
+      );
+      return;
+    }
     if (sim.rubble[ci]) {
       setInfoPanel(
         `<div class="ip-head"><span class="ip-title">Collapsed Building Rubble</span><span class="ip-cost">-30% Speed</span></div>` +
         `<div class="ip-role" style="color:#ff8a65">Demolished Structure · Passable Debris</div>` +
-        `<div class="ip-desc">Leveled by heavy ordnance. Blocks no line of sight, and ground infected stumbling through the rubble are slowed by 30%.</div>`,
+        `<div class="ip-desc">Leveled by heavy ordnance. Blocks no line of sight. Infected, civilians and ground vehicles crossing the rubble are slowed by 30%.</div>`,
         "#ff8a65"
       );
       return;
@@ -1760,9 +1798,11 @@ function soundEvents() {
     for (let k = sim.civN; k < sim.n && nearInf < 0; k += 7) if (sim.state[k] === INF && Math.abs(sim.ax[k] - cx) < (x1 - x0) / 4 && Math.abs(sim.ay[k] - cy) < (y1 - y0) / 4) nearInf = k;
     const zoom = Math.max(0, Math.min(1, (s - 1) / 7));
     const panic = (panicN * 16) / 300;
-    if (!quiet && zoom > 0.45 && nearInf >= 0 && Math.random() < 0.25) { const [pan] = where(sim.ax[nearInf], sim.ay[nearInf]); snd.event("zombie", pan, zoom); }
-    if (!quiet && zoom > 0.45 && nearCiv >= 0 && Math.random() < 0.15) { const [pan] = where(sim.ax[nearCiv], sim.ay[nearCiv]); snd.event("scream", pan, zoom * 0.8); }
-    snd.ambience(horde, fire, quiet ? 0.2 : zoom, quiet ? 0 : panic, !quiet && sim.phase === "battle" && !sim.outbreak && sim.time < SIREN_S, !quiet && sim.phase === "battle");
+    // 0.22: zombie and people sounds only when zoomed in close; silent past SOUND_NEAR_ZOOM
+    const near = Math.max(0, Math.min(1, (zoom - C.SOUND_NEAR_ZOOM) / Math.max(0.01, 1 - C.SOUND_NEAR_ZOOM)));
+    if (!quiet && near > 0 && nearInf >= 0 && Math.random() < 0.25) { const [pan] = where(sim.ax[nearInf], sim.ay[nearInf]); snd.event("zombie", pan, near); }
+    if (!quiet && near > 0 && nearCiv >= 0 && Math.random() < 0.15) { const [pan] = where(sim.ax[nearCiv], sim.ay[nearCiv]); snd.event("scream", pan, near * 0.8); }
+    snd.ambience(horde, fire, quiet ? 0.2 : zoom, quiet ? 0 : panic, !quiet && sim.phase === "battle" && !sim.outbreak && sim.time < SIREN_S, !quiet && sim.phase === "battle", quiet ? 0 : near);
   }
 }
 function applyVolumes() {
@@ -1813,7 +1853,11 @@ function frame(now: number) {
     if (perf.due(now)) {
       const fps = perf.frames / ((now - perf.since) / 1000);
       if (fps < 24 && sim.civN > C.CIVILIANS && !slowTipShown) { slowTipShown = true; notify("The game is running slowly on this PC. A smaller crowd size in Settings will help."); }
-      const c = sim.counts(); perf.report(now, { crowd: sim.civN, phase: sim.phase, speed, t: +sim.time.toFixed(0), agents: c.civ + c.safe + c.inf, inf: c.inf, zoom: +cam.scale.toFixed(2) }); }
+      const c = sim.counts(); perf.report(now, { crowd: sim.civN, phase: sim.phase, speed, t: +sim.time.toFixed(0), agents: c.civ + c.safe + c.inf, inf: c.inf, zoom: +cam.scale.toFixed(2) });
+      // 0.22.1: infected that ended up inside a wall or gate since the last report (put back on the street)
+      if (sim.wallEjects > loggedEjects) { log("warn", "inf-in-wall", { n: sim.wallEjects - loggedEjects, total: sim.wallEjects, t: +sim.time.toFixed(0) }); loggedEjects = sim.wallEjects; }
+      if (sim.wallEjects < loggedEjects) loggedEjects = sim.wallEjects; // new sim
+    }
   }
   requestAnimationFrame(frame);
 }
@@ -1837,6 +1881,7 @@ function abilityButton(k: C.AbilityKind) {
     refreshUi(); return;
   }
   if (sim.phase !== "battle") return;
+  if (tool === k) { setTool("pan"); return; } // 0.22.1: second pick puts it down
   if (sim.charges[k] <= 0) { // buy one on the spot
     const e = sim.buyAbility(k);
     if (e) { say(e, 2500); return; }
@@ -1898,12 +1943,13 @@ function pickTool(t: string) {
   if (isAbility(t as Tool)) {
     const k = t as C.AbilityKind;
     abilityButton(k);
-    if (sim.phase === "battle" && tool === k) openPicker(null); // buying in planning keeps it open
+    if (sim.phase === "battle") openPicker(null); // buying in planning keeps it open
     else renderPicker();
     return;
   }
-  setTool(t as Tool);
-  if (tool === t) openPicker(null);
+  const before = tool;
+  toggleTool(t as Tool);
+  if (tool !== before) openPicker(null);
 }
 document.querySelectorAll<HTMLButtonElement>("#classes button").forEach(b => b.addEventListener("click", () => openPicker(pickerCat === b.dataset.cat ? null : b.dataset.cat!)));
 {
@@ -1933,7 +1979,7 @@ document.querySelectorAll<HTMLButtonElement>("#classes button").forEach(b => b.a
 let dragEndT = 0;
 const dragJustEnded = () => performance.now() - dragEndT < 50;
 
-// ---- Quick bar (0.19): 9 slots the player fills by dragging from the picker. Saved in save.json. ----
+// ---- Quick bar (0.19; 7 slots on Z X C V B N M since 0.22): slots the player fills by dragging from the picker. Saved in save.json. ----
 let quick: Slots = cleanQuickbar(save.settings.quickbar, t => PICKER_TOOLS.has(t));
 var quickReady = true; // var: refreshUi() can run before this line during startup; it skips the bar until then
 function storeQuickbar() { save.settings.quickbar = quick; Save.store(save); }
@@ -1952,7 +1998,7 @@ function renderQuickbar() {
 function useSlot(i: number) {
   const t = quick[i];
   if (!t) return;
-  if (isAbility(t as Tool)) abilityButton(t as C.AbilityKind); else setTool(t as Tool);
+  if (isAbility(t as Tool)) abilityButton(t as C.AbilityKind); else toggleTool(t as Tool);
   renderQuickbar();
 }
 document.querySelectorAll<HTMLButtonElement>("#quickbar .qslot").forEach(b => {
@@ -2011,7 +2057,7 @@ document.querySelectorAll<HTMLButtonElement>("[data-tool]").forEach(b => {
   if (isAbility(t)) {
     b.addEventListener("click", () => abilityButton(t));
     b.addEventListener("contextmenu", e => { e.preventDefault(); sellAbility(t); });
-  } else b.addEventListener("click", () => setTool(t));
+  } else b.addEventListener("click", () => toggleTool(t));
   b.addEventListener("pointerenter", () => {
     hoverNavTool = t;
     if ((C.BUILDABLE as string[]).includes(t) && sim.phase !== "plan") hoverUnitHeatmap = t as C.UnitKind;
@@ -2021,7 +2067,16 @@ document.querySelectorAll<HTMLButtonElement>("[data-tool]").forEach(b => {
     if (hoverUnitHeatmap === t) hoverUnitHeatmap = null;
   });
 });
-for (const [id, key] of [["heatmapbtn", "heatmap"], ["closegates", "closegates"], ["clear", "clear"]] as const) {
+// 0.22.1: anything picked from the command section closes the units window
+document.querySelectorAll<HTMLButtonElement>("#controls button:not([data-speed])").forEach(b => b.addEventListener("click", () => { if (pickerCat) openPicker(null); }));
+$("recall").addEventListener("click", () => { // 0.24
+  if (sim.phase !== "battle") { say("Recall works during the battle."); return; }
+  const n = sim.recallAll();
+  log("info", "recall", { recalled: sim.recalled, units: n, t: +sim.time.toFixed(1) });
+  say(!n ? "No units to recall." : sim.recalled ? `${n} unit${n > 1 ? "s" : ""} falling back to the safe zone. Press Recall again to send them back out.` : `${n} unit${n > 1 ? "s" : ""} heading back to their posts.`, 3500);
+  refreshUi();
+});
+for (const [id, key] of [["heatmapbtn", "heatmap"], ["closegates", "closegates"], ["recall", "recall"], ["clear", "clear"]] as const) {
   $(id).addEventListener("pointerenter", () => { hoverNavTool = key; });
   $(id).addEventListener("pointerleave", () => { if (hoverNavTool === key) hoverNavTool = null; });
 }
@@ -2138,6 +2193,8 @@ if (Save.desktop) { $("quit").hidden = false; $("quit").addEventListener("click"
 else $("opt-fs-row").hidden = true; // in a browser, F11 is the browser's own fullscreen
 $("opt-fs").addEventListener("change", e => { save.settings.fullscreen = (e.target as HTMLInputElement).checked; Save.store(save); applyFullscreen(); });
 $("opt-edge").addEventListener("change", e => { save.settings.edgeScroll = (e.target as HTMLInputElement).checked; Save.store(save); log("info", "setting", { edgeScroll: save.settings.edgeScroll }); });
+$("opt-checkupd").addEventListener("change", e => { save.settings.checkUpdates = (e.target as HTMLInputElement).checked; Save.store(save); }); // 0.26
+$("opt-autoupd").addEventListener("change", e => { save.settings.autoUpdate = (e.target as HTMLInputElement).checked; Save.store(save); });
 $("opt-ranges").addEventListener("change", e => { save.settings.showRanges = showRanges = (e.target as HTMLInputElement).checked; Save.store(save); });
 
 // ---------- Developer mode ----------
@@ -2234,6 +2291,7 @@ log("info", "app-start", { version: C.VERSION, renderer: glv.ok ? "webgl" : "2d"
 applyFullscreen();
 setTool("zone");
 startAttract();
+initUpdater({ save: () => save, go, say, log: (ev, d) => log("info", ev, d) }); // 0.26: Windows app only
 requestAnimationFrame(frame);
 
 // Exposed for automated checks.
