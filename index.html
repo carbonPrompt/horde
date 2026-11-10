@@ -1,0 +1,648 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Horde</title>
+<style>
+  :root {
+    --bg: #090b10;
+    --panel: rgba(15, 19, 26, 0.96);
+    --card: #161b24;
+    --card-hover: #1e2532;
+    --line: #262f3f;
+    --line-bright: #3b4963;
+    --text: #eef2f6;
+    --dim: #8b95a7;
+    --accent: #4ade80;
+    --gold: #facc15;
+    --danger: #f87171;
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  html, body {
+    margin: 0; height: 100%; background: var(--bg); color: var(--text);
+    font: 13.5px/1.35 "Inter", "Segoe UI", system-ui, -apple-system, sans-serif;
+    overflow: hidden; user-select: none;
+  }
+  #app { display: grid; grid-template-rows: auto 1fr auto auto; grid-template-columns: 1fr; height: 100%; }
+
+  /* Modern Top Status Bar */
+  header {
+    grid-column: 1; display: flex; gap: 10px; align-items: center;
+    padding: 6px 14px; background: linear-gradient(180deg, #141923 0%, #0d1118 100%);
+    border-bottom: 1px solid var(--line); flex-wrap: wrap; box-shadow: 0 2px 12px rgba(0,0,0,0.45); z-index: 4;
+  }
+  header h1 {
+    font-size: 16px; font-weight: 900; margin: 0 4px 0 2px; letter-spacing: 3.5px;
+    color: #ff5247; text-shadow: 0 0 14px rgba(255, 82, 71, 0.4);
+  }
+  #cityname {
+    font-weight: 600; color: #cbd5e1; background: #181f2c; border: 1px solid var(--line);
+    padding: 3px 10px; border-radius: 6px; font-size: 12.5px;
+  }
+  #phase {
+    font-weight: 800; font-size: 11px; letter-spacing: 1.2px; text-transform: uppercase;
+    color: var(--accent); background: rgba(74, 222, 128, 0.1); border: 1px solid rgba(74, 222, 128, 0.35);
+    padding: 3px 9px; border-radius: 6px; min-width: 80px; text-align: center;
+  }
+  #budget {
+    font-variant-numeric: tabular-nums; color: var(--gold); font-weight: 700; font-size: 13.5px;
+    background: rgba(250, 204, 21, 0.08); border: 1px solid rgba(250, 204, 21, 0.3);
+    padding: 3px 10px; border-radius: 6px;
+  }
+  #stats { display: flex; gap: 6px; font-variant-numeric: tabular-nums; flex-wrap: wrap; }
+  #stats > span {
+    background: #151a24; border: 1px solid #222a38; padding: 3px 9px; border-radius: 6px;
+    font-size: 12px; font-weight: 600;
+  }
+  #stats .civ { color: #f8fafc; }
+  #stats .safe { color: #86efac; border-color: rgba(134, 239, 172, 0.25); }
+  #stats .inf { color: #fca5a5; border-color: rgba(248, 113, 113, 0.25); }
+  .spacer { flex: 1; }
+
+  /* Bottom Tactical Command Toolbar */
+  nav {
+    grid-column: 1; display: flex; flex-direction: row; align-items: stretch; justify-content: safe center;
+    gap: 8px; padding: 6px 12px; overflow-x: auto; overflow-y: hidden;
+    background: linear-gradient(180deg, rgba(18, 23, 33, 0.98) 0%, rgba(10, 13, 19, 0.99) 100%);
+    border-top: 1px solid var(--line-bright);
+    box-shadow: 0 -6px 24px rgba(0, 0, 0, 0.65); z-index: 5;
+  }
+  nav::-webkit-scrollbar { height: 5px; }
+  nav::-webkit-scrollbar-thumb { background: #283142; border-radius: 3px; }
+  .dock-group {
+    display: flex; flex-direction: column; gap: 3px; padding: 0 8px 0 0;
+    border-right: 1px solid #202938; flex-shrink: 0;
+  }
+  .dock-group:last-child { border-right: none; padding-right: 0; }
+  nav h2 {
+    font-size: 9.5px; font-weight: 800; text-transform: uppercase; letter-spacing: 1.3px;
+    color: var(--dim); margin: 0 2px; line-height: 1.1; white-space: nowrap;
+  }
+  .tool-grid { display: flex; flex-direction: row; gap: 4px; align-items: stretch; flex: 1; }
+  /* Category tabs: one tray open at a time (Command always shows) */
+  .cats { display: grid; grid-template-columns: repeat(2, auto); gap: 3px; align-content: center; flex-shrink: 0; padding-right: 8px; border-right: 1px solid #202938; }
+  .cats button { font-size: 10px; font-weight: 700; padding: 3px 8px; justify-content: center; white-space: nowrap; border-radius: 5px; }
+  .dock-group.cat:not(.open) { display: none; }
+  .tcard.locked { opacity: 0.45; filter: grayscale(0.8); }
+  .tcard.locked small { color: #94a3b8; }
+  .reclist { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 6px; max-width: 900px; width: 100%; }
+  .reclist > div { background: #151a24; border: 1px solid #222a38; border-radius: 7px; padding: 6px 9px; display: flex; flex-direction: column; gap: 2px; opacity: 0.55; }
+  .reclist > div.got { opacity: 1; border-color: rgba(74, 222, 128, 0.45); }
+  .reclist b { font-size: 12px; } .reclist span { font-size: 11px; color: #94a3b8; }
+  nav .pair { display: flex; flex-direction: column; gap: 3px; justify-content: stretch; }
+  nav .pair button {
+    flex: 1; justify-content: center; font-size: 10.5px; font-weight: 600;
+    padding: 3px 7px; white-space: nowrap; border-radius: 5px;
+  }
+
+  button {
+    background: var(--card); color: var(--text); border: 1px solid var(--line);
+    border-radius: 7px; padding: 6px 8px; font: inherit; cursor: pointer;
+    text-align: left; display: flex; align-items: center; justify-content: space-between;
+    gap: 6px; transition: background 0.12s, border-color 0.12s, transform 0.08s, box-shadow 0.12s;
+  }
+  button:hover:not(:disabled) {
+    background: var(--card-hover); border-color: var(--line-bright);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+  }
+  button:active:not(:disabled) { transform: translateY(1px); }
+  button.on {
+    background: linear-gradient(180deg, rgba(34, 88, 58, 0.92) 0%, rgba(18, 48, 33, 0.96) 100%);
+    border-color: var(--accent); box-shadow: 0 0 12px rgba(74, 222, 128, 0.3), inset 0 1px 0 rgba(255,255,255,0.12);
+  }
+  button:disabled { opacity: 0.38; cursor: default; }
+  button small { color: var(--gold); font-weight: 700; font-size: 10px; font-variant-numeric: tabular-nums; }
+
+  /* Vertical Pixel-Art Toolbar Tiles in Bottom Dock */
+  .tcard {
+    width: 58px; min-height: 64px; padding: 4px 3px 3px;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 2px; position: relative; text-align: center; border-radius: 7px; flex-shrink: 0;
+  }
+  .tcard .px-ico {
+    width: 34px; height: 34px; image-rendering: auto; flex-shrink: 0; /* 64 px art shrunk smoothly */
+    background: #0a0d13; border: 1px solid #252e3f; border-radius: 5px; padding: 2px;
+  }
+  .tcard.on .px-ico { border-color: rgba(74, 222, 128, 0.65); background: #0d1712; }
+  .tcard .tc-body {
+    display: flex; flex-direction: column; align-items: center; min-width: 0; width: 100%; line-height: 1.1;
+  }
+  .tcard .tc-name {
+    font-size: 9.5px; font-weight: 700; color: #f1f5f9; white-space: nowrap;
+    overflow: hidden; text-overflow: ellipsis; max-width: 50px;
+  }
+  .tcard small { font-size: 9.5px; line-height: 1.05; }
+  .tcard .hk {
+    position: absolute; top: 2px; right: 3px; font-size: 8.5px; font-weight: 800;
+    color: #94a3b8; background: rgba(9, 11, 16, 0.8); padding: 0 3px; border-radius: 3px;
+  }
+
+
+
+  main { grid-column: 1; position: relative; min-height: 0; min-width: 0; overflow: hidden; }
+  canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; cursor: crosshair; }
+  #gl { pointer-events: none; }
+
+  footer {
+    grid-column: 1; padding: 4px 14px; background: #080a0f;
+    border-top: 1px solid #19202c; color: var(--dim); display: flex; gap: 16px; align-items: center; font-size: 11.5px;
+  }
+  #hint { color: #cbd5e1; font-weight: 500; }
+
+  #msg {
+    position: absolute; bottom: 10px; left: 50%; transform: translateX(-50%); max-width: calc(100% - 40px);
+    background: rgba(11, 15, 23, 0.92); border: 1px solid var(--line-bright);
+    padding: 8px 16px; border-radius: 8px; font-weight: 600; box-shadow: 0 6px 20px rgba(0,0,0,0.55);
+    transition: opacity 0.35s; pointer-events: none; z-index: 7;
+  }
+
+  /* End-of-Battle Modal */
+  #end {
+    position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+    background: rgba(6, 8, 12, 0.72); backdrop-filter: blur(6px); z-index: 8;
+  }
+  #end[hidden] { display: none; }
+  #end .card {
+    background: linear-gradient(180deg, #171d28 0%, #10141d 100%);
+    border: 1px solid var(--line-bright); border-radius: 14px; padding: 26px 32px;
+    text-align: center; min-width: 390px; max-width: 580px; box-shadow: 0 18px 48px rgba(0,0,0,0.7);
+  }
+  #end-medal { font-size: 36px; font-weight: 900; margin: 4px 0 8px; letter-spacing: 1px; }
+  #end-pct { font-size: 13.5px; font-weight: 500; color: #cbd5e1; margin: 6px 0; } /* 0.20: kills are the headline now */
+  #end-kills, #end-tiers, #end-reason { color: var(--dim); margin: 6px 0; line-height: 1.45; }
+  #end .row { display: flex; gap: 8px; justify-content: center; margin-top: 16px; flex-wrap: wrap; }
+  #end button { justify-content: center; padding: 8px 14px; font-weight: 600; }
+
+  /* Attract & Modal Screens */
+  body.attract #app { display: block; }
+  body.attract header, body.attract nav, body.attract footer, body.attract #msg { display: none !important; }
+  body.attract main { height: 100%; width: 100%; }
+  body.attract canvas { cursor: default; }
+  #screens {
+    position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+    background: radial-gradient(ellipse at center, rgba(11, 14, 20, 0.35), rgba(8, 10, 15, 0.92));
+    backdrop-filter: blur(4px); z-index: 10;
+  }
+  .screen {
+    background: linear-gradient(180deg, rgba(22, 27, 38, 0.96) 0%, rgba(14, 18, 26, 0.98) 100%);
+    border: 1px solid var(--line-bright); border-radius: 14px; padding: 28px 34px;
+    min-width: 400px; max-width: min(940px, 94vw); max-height: 90vh; overflow: auto;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.75);
+  }
+  .screen h2 { margin: 0 0 14px; font-size: 22px; font-weight: 800; letter-spacing: 2px; color: #fff; }
+  .screen .col { display: flex; flex-direction: column; gap: 10px; }
+  .screen .col button, .screen .row button { justify-content: center; font-size: 15.5px; font-weight: 600; padding: 10px 18px; }
+  .screen .row { display: flex; gap: 10px; justify-content: center; margin-top: 18px; }
+
+  #s-title { background: none; border: none; text-align: center; box-shadow: none; }
+  #s-title h1 {
+    font-size: 92px; font-weight: 900; letter-spacing: 22px; margin: 0 0 4px 22px;
+    color: #ff4a3d; text-shadow: 0 0 36px rgba(255, 45, 30, 0.55), 0 5px 0 #000;
+  }
+  #s-title .tag { color: #d8dee9; margin: 0 0 28px; font-size: 16px; letter-spacing: 2.5px; text-transform: uppercase; font-weight: 600; }
+  #s-title .col { width: 300px; margin: 0 auto; }
+  #s-title .col button {
+    font-size: 16.5px; background: rgba(24, 30, 42, 0.92); border-color: #334155;
+    padding: 11px 18px; border-radius: 9px;
+  }
+  #s-title .col button:hover { border-color: #64748b; background: rgba(34, 42, 58, 0.96); }
+  #s-title .col button.primary {
+    background: linear-gradient(180deg, #b91c1c 0%, #7f1d1d 100%);
+    border-color: #f87171; font-weight: 800; box-shadow: 0 0 20px rgba(220, 38, 38, 0.4);
+  }
+  #s-title .ver { color: var(--dim); margin-top: 20px; font-size: 12px; letter-spacing: 1px; }
+
+  .cities { display: grid; grid-template-columns: repeat(auto-fill, minmax(205px, 1fr)); gap: 12px; }
+  .city {
+    display: flex; flex-direction: column; align-items: stretch; text-align: left;
+    gap: 5px; padding: 13px; min-height: 152px; border-radius: 10px;
+  }
+  .city b { font-size: 16.5px; color: #fff; }
+  .city .blurb { color: var(--dim); font-size: 12.5px; flex: 1; line-height: 1.4; }
+  .city .stars { color: #fb7185; letter-spacing: 2px; font-size: 12px; }
+  .city .best { font-weight: 700; font-size: 12.5px; }
+
+  .subhead {
+    font-size: 11.5px; font-weight: 800; text-transform: uppercase; letter-spacing: 1.5px;
+    color: #94a3b8; margin: 18px 0 8px;
+  }
+  .diff-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 6px; }
+  .diff-row button { justify-content: center; font-weight: 700; font-size: 13.5px; padding: 8px 10px; border-radius: 8px; }
+  #s-title .diff-row button { font-size: 12.5px; padding: 6px 6px; }
+  .mutators { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px; margin-bottom: 6px; }
+  .mutator { flex-direction: column; align-items: flex-start; gap: 3px; padding: 9px 11px; font-size: 13px; border-radius: 8px; }
+  .mutator b { font-size: 13.5px; }
+  .mutator span { color: var(--dim); font-size: 12px; }
+
+  .osm-bar { display: flex; gap: 8px; margin: 8px 0 12px; align-items: center; }
+  .osm-bar input {
+    flex: 1; background: #141923; color: var(--text); border: 1px solid var(--line-bright);
+    border-radius: 8px; padding: 9px 12px; font: inherit;
+  }
+  #mut-badges { display: flex; gap: 6px; font-size: 11.5px; font-weight: 600; }
+  #mut-badges span { padding: 3px 8px; border-radius: 5px; background: #181f2c; border: 1px solid var(--line); }
+  #daily { border-color: #f472b6 !important; flex-direction: column; gap: 2px; }
+
+  .howto p { max-width: 680px; color: #d6d8dc; line-height: 1.55; margin: 9px 0; }
+  .howto b { color: #fff; }
+  .opt { display: flex; align-items: center; gap: 10px; margin: 10px 0; font-size: 14.5px; }
+  .opt input { width: 18px; height: 18px; }
+  .opt input[type=range] { width: 200px; height: auto; }
+  .opt select { background: #181f2c; color: var(--text); border: 1px solid var(--line-bright); border-radius: 6px; padding: 6px 10px; font: inherit; }
+
+  #menubtn { justify-content: center; font-weight: 600; padding: 5px 11px; }
+  #devbtn { background: #4a2a6a; border-color: #9c6ade; }
+  #devpanel {
+    position: absolute; top: 10px; right: 10px; width: 236px;
+    background: rgba(18, 22, 30, 0.96); border: 1px solid #9c6ade; border-radius: 10px;
+    padding: 11px; display: flex; flex-direction: column; gap: 5px; font-size: 12.5px; z-index: 6;
+  }
+  #devpanel label { display: flex; gap: 6px; align-items: center; }
+  #devpanel button { padding: 5px 8px; justify-content: center; }
+  #devpanel .devrow { display: flex; gap: 4px; align-items: center; }
+  #devpanel .devrow span { flex: 1; }
+  #dev-info { color: var(--dim); font-size: 11.5px; white-space: pre-line; font-variant-numeric: tabular-nums; }
+
+  /* Tactical Hover Info Panel with Pixel-Art Portrait (Anchored above Bottom Toolbar) */
+  #infopanel {
+    position: absolute; right: 16px; top: 12px; width: 360px; max-width: calc(100% - 32px);
+    background: rgba(14, 18, 26, 0.96); backdrop-filter: blur(10px);
+    border: 1px solid #38455c; border-left: 4px solid var(--accent); border-radius: 10px;
+    padding: 12px 14px; box-shadow: 0 12px 32px rgba(0,0,0,0.75);
+    pointer-events: none; z-index: 6; font-size: 12.5px; line-height: 1.35;
+  }
+  :is(#infopanel, #pdetail) .ip-top { display: flex; gap: 10px; align-items: center; margin-bottom: 7px; }
+  :is(#infopanel, #pdetail) .ip-portrait {
+    width: 64px; height: 64px; image-rendering: pixelated; flex-shrink: 0;
+    background: #090c12; border: 1px solid #2e3a4e; border-radius: 7px; padding: 3px;
+  }
+  :is(#infopanel, #pdetail) .ip-meta { flex: 1; min-width: 0; }
+  :is(#infopanel, #pdetail) .ip-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+  :is(#infopanel, #pdetail) .ip-title { font-size: 15px; font-weight: 800; color: #fff; }
+  :is(#infopanel, #pdetail) .ip-cost { font-weight: 800; color: var(--gold); font-variant-numeric: tabular-nums; font-size: 13px; }
+  :is(#infopanel, #pdetail) .ip-role { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; color: #90caf9; margin-top: 2px; }
+  :is(#infopanel, #pdetail) .ip-desc { color: #cbd5e1; margin-bottom: 8px; }
+  :is(#infopanel, #pdetail) .ip-grid {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 4px 10px;
+    background: rgba(8, 10, 15, 0.72); border: 1px solid #242d3d; border-radius: 7px;
+    padding: 7px 9px; margin-bottom: 7px; font-variant-numeric: tabular-nums;
+  }
+  :is(#infopanel, #pdetail) .ip-grid div { display: flex; justify-content: space-between; gap: 6px; }
+  :is(#infopanel, #pdetail) .ip-grid span { color: var(--dim); }
+  :is(#infopanel, #pdetail) .ip-grid b { color: #f8fafc; font-weight: 600; text-align: right; }
+  :is(#infopanel, #pdetail) .ip-bar { height: 5px; background: #1e2636; border-radius: 3px; overflow: hidden; margin: 3px 0 6px; }
+  :is(#infopanel, #pdetail) .ip-bar > i { display: block; height: 100%; background: var(--accent); }
+  :is(#infopanel, #pdetail) .ip-tags { display: flex; flex-direction: column; gap: 2px; color: #b8c2d0; font-size: 11.5px; }
+  :is(#infopanel, #pdetail) .ip-tags div::before { content: "▸ "; color: var(--accent); }
+  .legend i { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin: 0 4px 0 10px; }
+
+  /* 0.19 bottom bar: classes | quick bar | fixed controls. Fixed sizes: nothing reflows when a class opens. */
+  nav { justify-content: space-between; gap: 8px; padding: 6px 8px; overflow-x: hidden; }
+  nav #controls .tcard { width: clamp(46px, 3.6vw, 58px); }
+  nav #controls .tcard .tc-name { max-width: 100%; }
+  #classes, #quickbar, #controls { display: flex; gap: 4px; flex-shrink: 0; align-items: stretch; }
+  #classes { display: grid; grid-template-columns: repeat(4, clamp(60px, 4.6vw, 80px)); grid-auto-rows: 1fr; gap: 4px; }
+  #classes button { justify-content: center; font-size: clamp(9.5px, 0.75vw, 11px); font-weight: 700; padding: 3px 4px; white-space: nowrap; }
+  #quickbar { padding: 0 6px; border-left: 1px solid #202938; border-right: 1px solid #202938; }
+  .qslot { width: clamp(40px, 3vw, 56px); min-height: 64px; padding: 2px; justify-content: center; flex-direction: column; gap: 1px; border-style: dashed; background: #0f131a; position: relative; }
+  .qslot.full { border-style: solid; background: var(--card); }
+  .qslot img { width: 80%; height: auto; aspect-ratio: 1; }
+  .qslot small { font-size: 9px; }
+  .qslot.locked { opacity: 0.45; filter: grayscale(0.8); }
+  .qslot.drop { border-color: var(--gold); box-shadow: 0 0 10px rgba(250, 204, 21, 0.45); }
+  .ctl2 { width: clamp(46px, 3.6vw, 58px); min-height: 64px; justify-content: center; text-align: center; font-size: 10.5px; font-weight: 700; line-height: 1.15; position: relative; flex-shrink: 0; }
+  .ctl2 .hk, .tcard .hk { position: absolute; top: 2px; right: 3px; font-size: 8.5px; font-weight: 800; color: #94a3b8; background: rgba(9, 11, 16, 0.8); padding: 0 3px; border-radius: 3px; }
+  .spd3 { display: flex; flex-direction: column; gap: 4px; width: clamp(110px, 8.8vw, 150px); flex-shrink: 0; }
+  .spd3 .row { display: flex; gap: 4px; flex: 1; }
+  .spd3 button { flex: 1; justify-content: center; gap: 5px; font-size: 12px; font-weight: 700; padding: 2px 4px; }
+  .spd3 .k { color: var(--gold); font-size: 9.5px; font-weight: 800; }
+  .spd3 .pausebar { flex: 1; letter-spacing: 1px; background: #1c2230; }
+  .spd3 button.on { background: #2563eb; border-color: #60a5fa; color: #fff; box-shadow: none; }
+  .spd3 .pausebar.on { background: #b45309; border-color: #fbbf24; }
+  #startbtn {
+    width: clamp(70px, 5.6vw, 92px); flex-shrink: 0; background: linear-gradient(180deg, #dc2626 0%, #991b1b 100%);
+    border-color: #f87171; font-weight: 900; font-size: 11.5px; letter-spacing: 0.6px; text-transform: uppercase;
+    justify-content: center; text-align: center; line-height: 1.15; box-shadow: 0 0 16px rgba(239, 68, 68, 0.4);
+  }
+  #startbtn:hover { background: linear-gradient(180deg, #ef4444 0%, #b91c1c 100%); }
+  #startbtn.restart { background: #2a1f1f; border-color: #7f3b3b; box-shadow: none; font-size: 11px; }
+  /* Alert ticker in the top bar */
+  #ticker {
+    flex: 1 1 260px; max-width: 640px; min-width: 200px; height: 26px; position: relative; overflow: hidden; white-space: nowrap;
+    background: #1f0f12; border: 1px solid #6b2229; border-radius: 6px; font-size: 12.5px; font-weight: 700;
+  }
+  #ticker span { position: absolute; top: 0; line-height: 24px; color: #fcd34d; will-change: transform; }
+  #ticker span.urgent { color: #ff8a8a; }
+  #devpanel .warn { color: #fbbf24; font-size: 11px; line-height: 1.25; }
+
+  /* Picker over the map (0.19): fixed spot and size, see-through, the game keeps running */
+  #picker {
+    position: absolute; left: 10px; bottom: 10px; width: min(1000px, calc(100% - 400px)); height: min(540px, calc(100% - 20px));
+    background: rgba(12, 16, 23, 0.8); backdrop-filter: blur(2px); border: 1px solid #4b6a55; border-radius: 10px;
+    display: flex; gap: 12px; padding: 12px; z-index: 6; box-shadow: 0 12px 32px rgba(0,0,0,0.6);
+  }
+  #picker .plist { width: 42%; display: flex; flex-direction: column; gap: 6px; overflow-y: auto; }
+  #picker h3 { margin: 0 0 2px; font-size: 16px; letter-spacing: 1px; text-transform: uppercase; color: #cbd5e1; }
+  .prow { display: flex; gap: 10px; align-items: center; padding: 6px 8px; border: 1px solid #2a3446; border-radius: 7px; background: rgba(28, 34, 46, 0.72); cursor: pointer; touch-action: none; }
+  .prow img { width: 48px; height: 48px; flex-shrink: 0; pointer-events: none; }
+  .prow b { display: block; font-size: 14px; } .prow small { color: var(--gold); font-size: 11px; font-weight: 700; }
+  .prow .hk { font-size: 10px; color: #94a3b8; background: #0b0f16; padding: 0 4px; border-radius: 3px; }
+  .prow.sel { border-color: var(--gold); background: rgba(66, 58, 24, 0.75); }
+  .prow.on { box-shadow: inset 0 0 0 1px var(--accent); }
+  .prow.locked, .prow.off { opacity: 0.45; filter: grayscale(0.8); }
+  #pdetail { flex: 1; overflow-y: auto; border-left: 4px solid var(--accent); padding: 4px 12px; font-size: 13px; line-height: 1.4; }
+  #pdetail .ip-portrait { width: 96px; height: 96px; }
+  #pdetail .ip-title { font-size: 20px; }
+  #pdetail .plock { color: #fca5a5; font-weight: 700; margin: 6px 0; }
+  #pdetail .phow { color: var(--gold); font-size: 12px; margin-top: 8px; }
+  #picker .pclose { position: absolute; top: 8px; right: 8px; padding: 2px 8px; font-size: 14px; justify-content: center; }
+  #classes button.on { background: linear-gradient(180deg, rgba(34, 88, 58, 0.92) 0%, rgba(18, 48, 33, 0.96) 100%); border-color: var(--accent); }
+  .dragghost { position: fixed; width: 48px; height: 48px; pointer-events: none; z-index: 50; opacity: 0.85; filter: drop-shadow(0 4px 8px rgba(0,0,0,0.7)); }
+  .qslot.on { border-color: var(--accent); box-shadow: 0 0 10px rgba(74, 222, 128, 0.35); }
+
+  /* Narrow windows (a 1366 laptop at 125% is about 1093 px): icons only on the controls, smaller slots. Below
+     about 1080 px the bar scrolls sideways rather than hide a control. */
+  @media (max-width: 1300px) {
+    nav { overflow-x: auto; gap: 6px; padding: 5px 6px; }
+    #classes { grid-template-columns: repeat(4, 52px); }
+    #classes button { font-size: 9px; padding: 2px; }
+    .qslot { width: 30px; min-height: 56px; }
+    #quickbar { gap: 3px; }
+    nav #controls .tcard, .ctl2 { width: 40px; min-height: 56px; }
+    nav #controls .tcard .tc-body { display: none; }
+    .ctl2 { font-size: 9px; }
+    .spd3 { width: 96px; }
+    .spd3 button { font-size: 10.5px; gap: 2px; }
+    .spd3 .k { display: none; }
+    #startbtn { width: 60px; font-size: 9.5px; }
+  }
+  #end-headline { font-size: 26px; font-weight: 900; color: #fca5a5; letter-spacing: 0.5px; }
+  #end-score { font-size: 13px; color: #cbd5e1; line-height: 1.5; }
+  #end-score b { color: #fff; }
+</style>
+</head>
+<body class="attract">
+<div id="app">
+  <header>
+    <button id="menubtn" title="Esc">Menu</button>
+    <h1>HORDE</h1>
+    <span id="cityname"></span>
+    <span id="mut-badges"></span>
+    <span id="phase">PLANNING</span>
+    <span id="budget"></span>
+    <div id="stats"></div>
+    <span class="spacer"></span>
+    <div id="ticker"></div>
+    <button id="devbtn" hidden title="F10">DEV</button>
+  </header>
+  <main>
+    <canvas id="gl"></canvas>
+    <canvas id="view"></canvas>
+    <div id="devpanel" hidden>
+      <b>Developer</b>
+      <div id="dev-switches"></div>
+      <div class="devrow"><span>Speed</span><button data-dspeed="8">8x</button><button data-dspeed="16">16x</button></div>
+      <small class="warn">High speeds can stutter or change how the simulation behaves.</small>
+      <button id="dev-money">+ $100M</button>
+      <div class="pair"><button id="dev-xp1">+1,000 XP</button><button id="dev-xp10">+10,000 XP</button></div>
+      <div class="pair"><button id="dev-xpmax">Unlock all (max XP)</button><button id="dev-xp0">Reset XP to 0</button></div>
+      <small>Developer mode already unlocks every weapon; the XP buttons change your real saved XP.</small>
+      <button id="dev-wave">Horde now</button>
+      <button id="dev-clear">Clear all infected</button>
+      <button id="dev-end">End battle now</button>
+      <label><input type="checkbox" id="dev-goals"> Show where AI units are heading</label>
+      <label><input type="checkbox" id="dev-field"> Show the infected's path map</label>
+      <div id="dev-info"></div>
+    </div>
+    <div id="infopanel" hidden></div>
+    <div id="picker" hidden></div>
+    <div id="msg"></div>
+    <div id="end" hidden><div class="card">
+      <div id="end-reason"></div>
+      <div id="end-headline"></div>
+      <div id="end-medal"></div>
+      <div id="end-score"></div>
+      <div id="end-pct"></div>
+      <div id="end-kills"></div>
+      <div id="end-tiers"></div>
+      <div class="row" id="end-round-row" hidden><button id="end-continue">Keep fighting</button><button id="end-stop">End here</button></div>
+      <div id="end-xp"></div>
+      <div class="row" id="end-final-row"><button id="end-retry">Try again</button><button id="end-next">Next city</button><button id="end-new">New city</button><button id="end-heatmap">Kill heatmap (H)</button><button id="end-cities">Cities</button><button id="end-title">Menu</button></div><!-- end-final-row -->
+    </div></div>
+  </main>
+  <nav>
+    <div id="classes"><button data-cat="Engineering">Engineering</button><button data-cat="Infantry">Infantry</button><button data-cat="Artillery">Artillery</button><button data-cat="Armor">Armor</button><button data-cat="Naval">Naval</button><button data-cat="Air">Air</button><button data-cat="Strategic">Strategic</button><button data-cat="Support">Support</button></div>
+    <div id="quickbar"><button class="qslot" data-slot="0"></button><button class="qslot" data-slot="1"></button><button class="qslot" data-slot="2"></button><button class="qslot" data-slot="3"></button><button class="qslot" data-slot="4"></button><button class="qslot" data-slot="5"></button><button class="qslot" data-slot="6"></button><button class="qslot" data-slot="7"></button><button class="qslot" data-slot="8"></button></div>
+    <div id="controls">
+      <button class="tcard" data-tool="zone" title="Z"><img class="px-ico" data-sprite="zone" alt=""><div class="tc-body"><span class="tc-name">Safe Zone</span><small>Draw</small></div><span class="hk">Z</span></button>
+      <button class="tcard" data-tool="gate" title="G"><img class="px-ico" data-sprite="gate" alt=""><div class="tc-body"><span class="tc-name">Gate/Wall</span><small>Toggle</small></div><span class="hk">G</span></button>
+      <button class="tcard" data-tool="remove" title="N"><img class="px-ico" data-sprite="remove" alt=""><div class="tc-body"><span class="tc-name">Sell/Evac</span><small>Refund</small></div><span class="hk">N</span></button>
+      <button class="tcard" data-tool="order" title="O"><img class="px-ico" data-sprite="order" alt=""><div class="tc-body"><span class="tc-name">Order</span><small>Send unit</small></div><span class="hk">O</span></button>
+      <button class="tcard" data-tool="pan" title="M"><img class="px-ico" data-sprite="pan" alt=""><div class="tc-body"><span class="tc-name">Move/Aim</span><small>Priority</small></div><span class="hk">M</span></button>
+      <button class="tcard" id="heatmapbtn" title="H"><img class="px-ico" data-sprite="heatmap" alt=""><div class="tc-body"><span class="tc-name">Heatmap</span><small>Kills</small></div><span class="hk">H</span></button>
+      <button class="ctl2" id="closegates" title="L">Lock<br>Gates<span class="hk">L</span></button>
+      <button class="ctl2" id="clear" title="K">Clear<br>Zone<span class="hk">K</span></button>
+      <div class="spd3"><div class="row"><button data-speed="1" title="1">1x<span class="k">1</span></button><button data-speed="2" title="2">2x<span class="k">2</span></button><button data-speed="3" title="3">3x<span class="k">3</span></button></div><button class="pausebar" data-speed="0" title="Space">PAUSE<span class="k">Space</span></button></div>
+      <button id="startbtn">Start Battle</button>
+    </div>
+    <div id="tool-cards" hidden>
+    <div class="dock-group cat" data-cat="Engineering">
+      <h2>Engineering</h2>
+      <div class="tool-grid">
+        
+        
+        
+        <button class="tcard" data-tool="c4" title="B"><img class="px-ico" data-sprite="c4" alt=""><div class="tc-body"><span class="tc-name">Bridge C4</span><small id="n-c4"></small></div><span class="hk">B</span></button>
+        <button class="tcard" data-tool="depot" title="X"><img class="px-ico" data-sprite="depot" alt=""><div class="tc-body"><span class="tc-name">Fuel Tank</span><small id="n-depot"></small></div><span class="hk">X</span></button>
+      </div>
+    </div>
+    <div class="dock-group cat" data-cat="Infantry">
+      <h2>Infantry</h2>
+      <div class="tool-grid">
+        <button class="tcard" data-tool="garrison"><img class="px-ico" data-sprite="garrison" alt=""><div class="tc-body"><span class="tc-name">Garrison</span><small id="cost-garrison"></small></div></button>
+        <button class="tcard" data-tool="sniper"><img class="px-ico" data-sprite="sniper" alt=""><div class="tc-body"><span class="tc-name">Sniper</span><small id="cost-sniper"></small></div></button>
+        <button class="tcard" data-tool="para" title="F"><img class="px-ico" data-sprite="para" alt=""><div class="tc-body"><span class="tc-name">Paradrop</span><small id="n-para"></small></div><span class="hk">F</span></button>
+      </div>
+    </div>
+    <div class="dock-group cat" data-cat="Artillery">
+      <h2>Artillery</h2>
+      <div class="tool-grid">
+        <button class="tcard" data-tool="turret"><img class="px-ico" data-sprite="turret" alt=""><div class="tc-body"><span class="tc-name">Turret</span><small id="cost-turret"></small></div></button>
+        <button class="tcard" data-tool="mortar"><img class="px-ico" data-sprite="mortar" alt=""><div class="tc-body"><span class="tc-name">Mortar</span><small id="cost-mortar"></small></div></button>
+        <button class="tcard" data-tool="howitzer"><img class="px-ico" data-sprite="howitzer" alt=""><div class="tc-body"><span class="tc-name">Howitzer</span><small id="cost-howitzer"></small></div></button>
+        <button class="tcard" data-tool="himars"><img class="px-ico" data-sprite="himars" alt=""><div class="tc-body"><span class="tc-name">HIMARS</span><small id="cost-himars"></small></div></button>
+        <button class="tcard" data-tool="barrage" title="T"><img class="px-ico" data-sprite="barrage" alt=""><div class="tc-body"><span class="tc-name">Barrage</span><small id="n-barrage"></small></div><span class="hk">T</span></button>
+      </div>
+    </div>
+    <div class="dock-group cat" data-cat="Armor">
+      <h2>Armor</h2>
+      <div class="tool-grid">
+        <button class="tcard" data-tool="apc"><img class="px-ico" data-sprite="apc" alt=""><div class="tc-body"><span class="tc-name">APC</span><small id="cost-apc"></small></div></button>
+        <button class="tcard" data-tool="tank"><img class="px-ico" data-sprite="tank" alt=""><div class="tc-body"><span class="tc-name">Abrams</span><small id="cost-tank"></small></div></button>
+      </div>
+    </div>
+    <div class="dock-group cat" data-cat="Naval">
+      <h2>Naval</h2>
+      <div class="tool-grid">
+        <button class="tcard" data-tool="gunboat"><img class="px-ico" data-sprite="gunboat" alt=""><div class="tc-body"><span class="tc-name">Gunboat</span><small id="cost-gunboat"></small></div></button>
+        <button class="tcard" data-tool="battleship"><img class="px-ico" data-sprite="battleship" alt=""><div class="tc-body"><span class="tc-name">Battleship</span><small id="cost-battleship"></small></div></button>
+      </div>
+    </div>
+    <div class="dock-group cat" data-cat="Air">
+      <h2>Air</h2>
+      <div class="tool-grid">
+        <button class="tcard" data-tool="apache"><img class="px-ico" data-sprite="apache" alt=""><div class="tc-body"><span class="tc-name">Apache</span><small id="cost-apache"></small></div></button>
+        <button class="tcard" data-tool="reaper"><img class="px-ico" data-sprite="reaper" alt=""><div class="tc-body"><span class="tc-name">Reaper</span><small id="cost-reaper"></small></div></button>
+        <button class="tcard" data-tool="gunship"><img class="px-ico" data-sprite="gunship" alt=""><div class="tc-body"><span class="tc-name">AC-130</span><small id="n-gunship"></small></div></button>
+        <button class="tcard" data-tool="airstrike" title="Q"><img class="px-ico" data-sprite="airstrike" alt=""><div class="tc-body"><span class="tc-name">Airstrike</span><small id="n-airstrike"></small></div><span class="hk">Q</span></button>
+        <button class="tcard" data-tool="a10"><img class="px-ico" data-sprite="a10" alt=""><div class="tc-body"><span class="tc-name">A-10 Run</span><small id="n-a10"></small></div></button>
+        <button class="tcard" data-tool="firebomb" title="E"><img class="px-ico" data-sprite="firebomb" alt=""><div class="tc-body"><span class="tc-name">Firebomb</span><small id="n-firebomb"></small></div><span class="hk">E</span></button>
+        <button class="tcard" data-tool="cluster"><img class="px-ico" data-sprite="cluster" alt=""><div class="tc-body"><span class="tc-name">Cluster</span><small id="n-cluster"></small></div></button>
+      </div>
+    </div>
+    <div class="dock-group cat" data-cat="Strategic">
+      <h2>Strategic</h2>
+      <div class="tool-grid">
+        <button class="tcard" data-tool="tomahawk"><img class="px-ico" data-sprite="tomahawk" alt=""><div class="tc-body"><span class="tc-name">Tomahawk</span><small id="n-tomahawk"></small></div></button>
+        <button class="tcard" data-tool="moab"><img class="px-ico" data-sprite="moab" alt=""><div class="tc-body"><span class="tc-name">MOAB</span><small id="n-moab"></small></div></button>
+        <button class="tcard" data-tool="nuke"><img class="px-ico" data-sprite="nuke" alt=""><div class="tc-body"><span class="tc-name">Nuke</span><small id="n-nuke"></small></div></button>
+      </div>
+    </div>
+    <div class="dock-group cat" data-cat="Support">
+      <h2>Support</h2>
+      <div class="tool-grid">
+        <button class="tcard" data-tool="evac"><img class="px-ico" data-sprite="evac" alt=""><div class="tc-body"><span class="tc-name">Evac Point</span><small id="cost-evac"></small></div></button>
+        <button class="tcard" data-tool="budget"><img class="px-ico" data-sprite="budget" alt=""><div class="tc-body"><span class="tc-name">Budget</span><small id="cost-budget"></small></div></button>
+        <button class="tcard" data-tool="repair"><img class="px-ico" data-sprite="repair" alt=""><div class="tc-body"><span class="tc-name">Repair</span><small id="cost-repair"></small></div></button>
+        <button class="tcard" data-tool="radio"><img class="px-ico" data-sprite="radio" alt=""><div class="tc-body"><span class="tc-name">Radio</span><small id="cost-radio"></small></div></button>
+        <button class="tcard" data-tool="supply"><img class="px-ico" data-sprite="supply" alt=""><div class="tc-body"><span class="tc-name">Supply</span><small id="cost-supply"></small></div></button>
+        <button class="tcard" data-tool="command"><img class="px-ico" data-sprite="command" alt=""><div class="tc-body"><span class="tc-name">Command</span><small id="cost-command"></small></div></button>
+        <button class="tcard" data-tool="police"><img class="px-ico" data-sprite="police_b" alt=""><div class="tc-body"><span class="tc-name">Precinct</span><small id="cost-police"></small></div></button>
+        <button class="tcard" data-tool="militia"><img class="px-ico" data-sprite="militia_b" alt=""><div class="tc-body"><span class="tc-name">Armory</span><small id="cost-militia"></small></div></button>
+        <button class="tcard" data-tool="supply_drop" title="C"><img class="px-ico" data-sprite="supply_drop" alt=""><div class="tc-body"><span class="tc-name">Supply</span><small id="n-supply_drop"></small></div><span class="hk">C</span></button>
+      </div>
+    </div>
+    </div>
+  </nav>
+  <footer>
+    <span id="hint"></span>
+    <span class="spacer"></span>
+    <span id="osm-credit" hidden>Map data &copy; OpenStreetMap contributors (ODbL)</span>
+    <span class="legend"><i style="background:#f5f1e6"></i>civilian<i style="background:#9be7a8"></i>safe<i style="background:#ff3b3b"></i>infected<i style="background:#ff66d1"></i>swimmer</span>
+    <span>V heights · R ranges · H heatmap · right-drag/WASD move · wheel zoom</span>
+  </footer>
+</div>
+
+<div id="screens">
+  <div class="screen" id="s-title">
+    <h1>HORDE</h1>
+    <p class="tag">Hold the line. Save who you can.</p>
+    <div class="col">
+      <button class="primary" data-go="cities">Cities &amp; Campaign</button>
+      <button id="daily">Daily Challenge</button>
+      <button id="quick">Quick Battle</button>
+      <div class="diff-row" id="quick-difficulty">
+        <button data-diff="easy">Easy</button>
+        <button data-diff="medium">Medium</button>
+        <button data-diff="hard">Hard</button>
+        <button data-diff="insane">Insane</button>
+      </div>
+      <button data-go="record">Service Record</button>
+      <button data-go="howto">How to Play</button>
+      <button data-go="settings">Settings</button>
+      <button id="quit" hidden>Quit to Desktop</button>
+    </div>
+    <div class="ver"></div>
+  </div>
+  <div class="screen" id="s-cities" hidden>
+    <h2>CITIES &amp; MUTATORS</h2>
+    <div class="subhead">Difficulty</div>
+    <div class="diff-row" id="difficulty">
+      <button data-diff="easy">Easy</button>
+      <button data-diff="medium">Medium</button>
+      <button data-diff="hard">Hard</button>
+      <button data-diff="insane">Insane</button>
+    </div>
+    <div class="subhead">Battle Mutators (optional modifiers for any city or quick battle)</div>
+    <div class="mutators" id="mutatorlist"></div>
+    <div class="subhead">Campaign Cities</div>
+    <div class="cities" id="citylist"></div>
+    <div class="subhead">Real-World Cities (OpenStreetMap)</div>
+    <div class="osm-bar">
+      <input id="osm-query" type="text" placeholder="Search any real city or neighborhood (e.g. Seattle, WA or London, UK) when online...">
+      <button id="osm-load">Load OSM Map</button>
+    </div>
+    <div class="cities" id="realcitylist"></div>
+    <div class="row"><button data-back>Back</button></div>
+  </div>
+  <div class="screen" id="s-record" hidden>
+    <h2>SERVICE RECORD</h2>
+    <div class="subhead" id="rec-rank"></div>
+    <div class="subhead">Hardware unlocks (campaign cities lend you one locked item each as a field trial)</div>
+    <div class="reclist" id="rec-unlocks"></div>
+    <div class="subhead">Achievements</div>
+    <div class="reclist" id="rec-ach"></div>
+    <div class="row"><button data-back>Back</button></div>
+  </div>
+  <div class="screen howto" id="s-howto" hidden>
+    <h2>HOW TO PLAY</h2>
+    <p>An outbreak is about to hit the city. You get one planning phase before it starts.</p>
+    <p><b>1. Draw a safe zone.</b> Click its corners, then click the first corner (or press Enter) to close it. Bigger zones cost more. Civilians run for it once the outbreak starts.</p>
+    <p><b>2. Gates and walls.</b> Every street that crosses your zone's edge starts as a <b>gate</b> (blue): civilians can get in, infected can't, but gates break sooner. Click one to make it a <b>wall</b> (white): stronger, but nobody gets in. During the battle you can still close gates, and you should once everyone is inside.</p>
+    <p><b>3. Units.</b> Garrisons and Snipers go on buildings, Turrets on streets. Taller buildings give snipers more range (press <b>V</b> to see heights). Units inside the zone never run out of ammo; outside, they do. Hover over any button or placed unit to inspect its full tactical stats in the <b>Info Panel</b>.</p>
+    <p><b>4. Warning.</b> When the battle starts an emergency broadcast goes out: people head for your safe zones and the first cases turn somewhere outside your zones after 20 seconds.</p>
+    <p><b>5. Evacuate.</b> Build <b>Evac Points</b> (rooftop helipads) inside your zone: every 12 s a lift flies people out, and trains carry people out on the rails. Each extra pad costs double the last ($3M, $6M, $12M...), so plan where they go. Each person flown out brings $24,000 in federal evacuation funding. A lift waves off if infected crowd the pad.</p>
+    <p><b>Money is real.</b> Prices are real-world US dollars: ground hardware and helicopters at their unit price, ships and jets at the cost of the mission. Ordnance is cheap next to hardware but limited per battle, like a real stockpile (one MOAB, one nuke, four Tomahawks). The end card shows what you spent and the property damage bill.</p>
+    <p><b>6. Survive the hordes.</b> Hordes walk in from outside the city along highways, rail lines, bridges and the river (an amber arrow shows where the next one comes in). Each is bigger and comes sooner. <b>The round ends</b> when nobody is left in the city (everyone alive is out), or when only a few stuck stragglers remain. Your round score (0 to 100) is mostly people saved, plus how fast, how intact the city is and how many of the infected you killed: Bronze 10, Silver 30, Gold 50, Platinum 75 points, and at least 5% saved for any medal. Then <b>Keep fighting</b>: endless, harder hordes scored as <b>Mayhem</b> (kills plus city damage, the more the better) until you pull out. Bonus XP for keeping the city intact (Light Touch) or for wrecking it (Scorched Earth, 35% wrecked or a $1 billion damage bill). Pause menu: Pull out ends the battle.</p>
+    <p><b>Abilities &amp; Realistic Deployment.</b> Buy abilities while planning or mid-battle: <b>Airstrike</b> (Q) sends an F-15E Strike Eagle to bomb a line, <b>Firebomb</b> (E) drops incendiary canisters, <b>Paratroopers</b> (F) sends a C-130J Hercules to drop an airborne squad on parachutes, and <b>Supply drop</b> (C) parachutes 4 GPS-guided crates that refill 100% ammo, heal mobile squads, repair walls within 70 m, and leave a field supply depot for 45 s. Mid-battle units arrive via <b>UH-60 Black Hawk</b>, <b>CH-47 Chinook</b> sling-load, or <b>C-130J heavy APC parachute drop</b>, and Supply Depots dispatch autonomous <b>Cargo Drones</b>.</p>
+    <p><b>Terrain &amp; Structure Destruction.</b> Heavy weapons (Mortars, Howitzers, Battleships, Airstrikes, and Fuel Depots) crater streets, scorch terrain, shear floors off buildings, and collapse heavily shelled buildings into walkable rubble that slows advancing hordes by 30%.</p>
+    <p><b>Money.</b> Every 10 seconds of battle you earn money for each person safe in your zones, plus a little for every infected killed. Spend it any time: new units (they take a few seconds to set up), abilities, bridge charges, even extra safe zones (those cost a lot more). Gates can be opened and closed whenever you like. Stronger units take longer to set up. Selling a unit mid-battle (Sell / Evac) dispatches an extraction helicopter to pull it out; then you get its cost back.</p>
+    <p><b>More units.</b> The <b>Mortar</b> and <b>Howitzer</b> shell crowds from far away. The <b>APC</b>, the <b>Gunboat</b> (on the river) and <b>Paratroopers</b> think for themselves: they hunt crowds near where you put them, go after infected chasing civilians first, back off before they get swarmed, and go home to reload. APCs also dismount a Mechanized Rifle Team on first contact. The <b>Battleship</b> shells crowds far inland from the river. Click any unit with Move / Aim to change what it shoots first: nearest, closest to the walls, or infected chasing civilians.</p>
+    <p><b>Support buildings.</b> Built on buildings inside your safe zone: <b>Budget office</b> cuts the cost of nearby units and buildings by 20%, <b>Repair yard</b> mends damaged walls, gates and vehicles, <b>Radio tower</b> extends nearby firing range by 40%, <b>Supply depot</b> feeds ammo via cargo drones to turrets, mobile squads and forward units outside the walls (and halves vehicle reload time), <b>Command post</b> boosts firing rate by 30% and patrol range by 25%, <b>Precinct</b> dispatches autonomous Police Squads, and <b>Armory</b> arms Militia squads to guard the walls while reinforcing indoor barricades.</p>
+    <p><b>Real Cities, Mutators, Daily Challenge &amp; Kill Heatmaps.</b> Play on 8 built-in real OpenStreetMap cities (Castle Rock, Denver, Chicago, Pittsburgh, Boston, Manhattan, Portland, Paris) or search any real city live when online. Toggle <b>Mutators</b> on the Cities screen or play the deterministic <b>Daily Challenge</b>. Press <b>H</b> (or hover over any unit button in battle) to view spatial <b>Kill Heatmaps</b> showing where your defenses did the most damage.</p>
+    <p class="credits"><b>Credits.</b> Map data &copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap contributors</a>, available under the Open Database License (ODbL). Music made with ACE-Step 1.5 (MIT license). Sound effects made with Stable Audio Open 1.0, Powered by Stability AI (Stability AI Community License). Built by AI agents (Claude and Gemini) and a human.</p>
+    <p><b>Controls.</b> Right-drag or WASD to move the map, wheel to zoom, Space to pause, 1/2/3 for speed, L locks gates, K clears the zone, M move/aim, N sell, R shows unit ranges, H toggles kill heatmap, Esc opens the menu, F11 fullscreen (Windows app).</p>
+    <div class="row"><button data-back>Back</button></div>
+  </div>
+  <div class="screen" id="s-settings" hidden>
+    <h2>SETTINGS</h2>
+    <label class="opt" id="opt-fs-row"><input type="checkbox" id="opt-fs"> Fullscreen</label>
+    <label class="opt"><input type="checkbox" id="opt-edge"> Move the map when the mouse touches the screen edge</label>
+    <label class="opt"><input type="checkbox" id="opt-ranges"> Always show unit ranges</label>
+    <label class="opt">Volume <input type="range" id="vol-master" min="0" max="100"></label>
+    <label class="opt">Effects <input type="range" id="vol-sfx" min="0" max="100"></label>
+    <label class="opt">Music <input type="range" id="vol-music" min="0" max="100"></label>
+    <label class="opt">Crowd size <select id="opt-crowd">
+      <option value="15000">Normal: 15,000 people</option>
+      <option value="50000">Large: 50,000</option>
+      <option value="100000">Huge: 100,000 (fast PC)</option>
+      <option value="200000">Massive: 200,000 (very fast PC, may run slower than real time)</option>
+    </select></label>
+    <label class="opt"><input type="checkbox" id="opt-dev"> Developer mode (a DEV button and F10 open the developer panel in battle)</label>
+    <div class="subhead">Mods and save file</div>
+    <div id="mod-status" class="opt"></div>
+    <div class="row"><button id="mod-open">Open mods folder</button><button id="mod-load">Load mod file</button><button id="mod-clear">Remove browser mods</button><button id="mod-template">Export default stats</button></div>
+    <div class="row"><button id="save-export">Export save file</button><button id="save-import">Import save file</button></div>
+    <input type="file" id="mod-file" accept=".json,application/json" hidden><input type="file" id="save-file" accept=".json,application/json" hidden>
+    <div class="row"><button id="logs">Open log folder</button><button id="reset">Reset progress</button><button data-back>Back</button></div>
+  </div>
+  <div class="screen" id="s-pause" hidden>
+    <h2>PAUSED</h2>
+    <div class="col">
+      <button id="resume">Resume</button>
+      <button id="p-reset">Restart city (clear plan)</button>
+      <button id="p-restart">Restart city (keep plan)</button>
+      <button data-go="howto">How to play</button>
+      <button data-go="settings">Settings</button>
+      <button id="p-withdraw">Pull out (end battle, keep who got out)</button>
+      <button id="p-title">Quit to menu</button>
+      <button id="p-quit">Quit to desktop</button>
+    </div>
+  </div>
+</div>
+<script>/*MUSIC*/</script>
+<script>/*BUNDLE*/</script>
+</body>
+</html>
