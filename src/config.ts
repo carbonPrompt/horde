@@ -49,12 +49,13 @@ export interface DifficultyDef {
   sitesMul: number;
   xpMul: number;
   spreadMin: number; spreadMax: number; spreadS: number; // 0.24: extra outbreaks rolled after the first cases, inside spreadS seconds
+  runnerPct: number; // 0.30: share of infected that sprint (the rest shamble)
 }
 export const DIFFICULTY: Record<Difficulty, DifficultyDef> = {
-  easy:   { name: "Easy",   gapMin: 30, gapMax: 45, gapFloor: 14, sizeMul: 0.6, rampPerMin: 0.15, emptyHeat: 1,   gapHeat: 0.3, toughMul: 0.6, sitesMul: 0.5, xpMul: 0.75, spreadMin: 1, spreadMax: 2, spreadS: 15 },
-  medium: { name: "Medium", gapMin: 20, gapMax: 35, gapFloor: 10, sizeMul: 1,   rampPerMin: 0.25, emptyHeat: 1.5, gapHeat: 0.4, toughMul: 1,   sitesMul: 1,   xpMul: 1, spreadMin: 2, spreadMax: 4, spreadS: 20 },
-  hard:   { name: "Hard",   gapMin: 15, gapMax: 26, gapFloor: 7,  sizeMul: 1.4, rampPerMin: 0.4,  emptyHeat: 2,   gapHeat: 0.5, toughMul: 1.3, sitesMul: 1.5, xpMul: 1.25, spreadMin: 3, spreadMax: 6, spreadS: 25 },
-  insane: { name: "Insane", gapMin: 10, gapMax: 18, gapFloor: 5,  sizeMul: 2,   rampPerMin: 0.6,  emptyHeat: 3,   gapHeat: 0.6, toughMul: 1.7, sitesMul: 2,   xpMul: 1.5, spreadMin: 5, spreadMax: 8, spreadS: 30 },
+  easy:   { name: "Easy",   gapMin: 30, gapMax: 45, gapFloor: 14, sizeMul: 0.6, rampPerMin: 0.15, emptyHeat: 1,   gapHeat: 0.3, toughMul: 0.6, sitesMul: 0.5, xpMul: 0.75, spreadMin: 1, spreadMax: 2, spreadS: 15, runnerPct: 5 },
+  medium: { name: "Medium", gapMin: 20, gapMax: 35, gapFloor: 10, sizeMul: 1,   rampPerMin: 0.25, emptyHeat: 1.5, gapHeat: 0.4, toughMul: 1,   sitesMul: 1,   xpMul: 1, spreadMin: 2, spreadMax: 4, spreadS: 20, runnerPct: 15 },
+  hard:   { name: "Hard",   gapMin: 15, gapMax: 26, gapFloor: 7,  sizeMul: 1.4, rampPerMin: 0.4,  emptyHeat: 2,   gapHeat: 0.5, toughMul: 1.3, sitesMul: 1.5, xpMul: 1.25, spreadMin: 3, spreadMax: 6, spreadS: 25, runnerPct: 30 },
+  insane: { name: "Insane", gapMin: 10, gapMax: 18, gapFloor: 5,  sizeMul: 2,   rampPerMin: 0.6,  emptyHeat: 3,   gapHeat: 0.6, toughMul: 1.7, sitesMul: 2,   xpMul: 1.5, spreadMin: 5, spreadMax: 8, spreadS: 30, runnerPct: 50 },
 };
 
 // 0.20 round score and Keep fighting. Tuned often: keep them here.
@@ -79,11 +80,56 @@ export let EVAC_PAY = 24_000; // federal evacuation funding per person flown out
 export let EVAC_ABORT_INF = 8; // this many infected near the pad and the lift waves off
 export let SOUND_NEAR_ZOOM = 0.5; // 0.22: zombie and crowd sounds are silent until zoomed in past this (0 = all the way out, 1 = all the way in)
 export let EVAC_WALK_MUL = 0.8; // 0.22: people in a zone walk to the nearest Evac Point (any distance, along the zone's streets) at this x CIV_SPEED
+export let MILL_MAX_DENS = 24; // 0.30: people inside a zone don't step into a cell holding more than this (6 per m2)
+export let WAIT_RHO = 3; // 0.30: people/m2 in the crowd waiting at an Evac Point (its area grows with the crowd)
 export let EVAC_GATHER_D = 6; // cells from the pad where they stop and wait for the lift
 export let AGENT_RESERVE = 25000; // slots for infected beyond the civilians
 
-export let CIV_SPEED = 2.8; // cells per second
+export let CIV_SPEED = 0.67; // cells per second: 0.30: a real walk, 1.34 m/s (was 2.8, a sprint)
+export let CIV_SPRINT = 2.5; // 0.30: cells per second for a panicked person running flat out (5 m/s)
+export let WALK_SPREAD = 0.13; // 0.30: people's own walking pace varies by about this fraction
+// 0.30 crowd model (meters and seconds unless noted). Social force (Helbing) + time-to-collision power law
+// (Karamouzas 2014) + Weidmann speed-density curve.
+export let CROWD_TAU = 0.5; // s: how fast a calm person reaches the speed and heading they want
+export let PANIC_TAU = 0.3; // s: the same, panicked
+export let BODY_R = 0.25; // m: a calm person's comfort radius (shoulders plus a little space)
+export let PANIC_BODY_R = 0.17; // m: panicked people press closer
+export let TTC_K = 1.5; // time-to-collision strength (Karamouzas: 1.5)
+export let TTC_FOLLOW = 0.7; // how much less people brake for someone ahead walking the same way (queues keep short gaps)
+export let SPEED_RHO_CELL = 1; // 1: speed from the density where they're stepping; 0: from the 3x3 cells around them
+export let TTC_T0 = 3; // s: how far ahead people look for collisions (Karamouzas: 3)
+export let SPACE_A = 3; // m/s2: personal-space push at contact
+export let SPACE_B = 0.3; // m: how fast that push fades with distance
+export let CROWD_PRESS = 3; // m/s2: a packed cell pushes people toward emptier neighbors
+export let PRESS_DENS = 0.5; // people/m2 before that push starts (queues at a door pack to 3 or 4)
+export let WALL_A = 6; // m/s2: push off a building at contact
+export let WALL_RANGE = 0.6; // m: buildings push people within this distance
+export let WALL_MIN = 0.18; // m: a person's center never gets closer than this to a wall
+export let RHO_MAX = 5.4; // people/m2 where a calm crowd stops (Weidmann)
+export let RHO_GAMMA = 1.913; // Weidmann curve shape
+export let PANIC_RHO_MAX = 9; // people/m2 a panicked crowd will press to
+export let AIM_SWAY = 0.3; // rad: people weave a little around the route direction, each at their own slow pace
+export let FEAR_RISE = 4; // 1/s: how fast fear rises to what a person senses
+export let FEAR_FADE_S = 15; // s: how long fear takes to fade once it's quiet
+export let FEAR_SPREAD = 0.55; // share of the fear around them that people catch (panic is contagious)
+export let FEAR_GRID_HALF = 2; // s: half-life of a scare in the air (gunfire, blasts) on the fear grid
+export let HERD_MAX = 0.6; // panicked people follow those around them this much instead of their own route (Helbing)
+export let PANIC_ODD_RATE = 0.08; // per second, for a panicked person: run the wrong way or freeze
+export let PANIC_CLOG = 1.5; // how badly a panicked push jams a packed opening (faster is slower)
+export let CLOG_RHO = 2; // people/m2 where that starts
+export let CRUSH_RHO = 5; // people/m2 above which a pushing crowd starts crushing people
+export let CRUSH_S = 2.5; // s of crush before someone is knocked down
+export let DOWN_S = 6; // s a knocked-down person stays down (trampled to death if the crush goes on)
+export let SHOVE = 3; // cells/s: how hard a close blast throws people away from it
+export let NOISE_HALF = 6; // s: half-life of noise that draws infected (gunfire, explosions)
+export let NOISE_MIN = 0.12; // infected follow noise above this level
+export let NOISE_STRAGGLER = 7; // one infected in this many ignores noise and keeps after the people
+export let FAMILY_PCT = 70; // share of people walking with family or friends (Moussaid 2010: about 70%)
 export let INF_SPEED = 1.9;
+export let SHAMBLER_MUL = 0.45; // 0.30: shamblers move at this x INF_SPEED (about 1.7 m/s)
+export let RUNNER_MUL = 1.35; // 0.30: runners at this x INF_SPEED (about 5 m/s, a sprint)
+export let INF_WALL_PUSH = 1.5; // 0.30: how hard infected keep off building walls
+export let INF_SWAY = 0.3; // 0.30: rad: how far infected weave around their way
 export let INF_SPEED_GROWTH = 0.004; // per second of battle, multiplicative-ish
 export let INF_HP = 100;
 export let INF_HP_GROWTH = 0.004; // +0.4% per second of battle
@@ -304,7 +350,7 @@ export let SWIMMER_BASE_FRAC = 0.08;
 export let SWIMMER_WAVE_GROWTH = 0.015;
 export let SWIMMER_MAX_FRAC = 0.25;
 
-export const VERSION = "0.29.0";
+export const VERSION = "0.30.0";
 
 /** The campaign: fixed cities that unlock in order (a medal on one opens the next). */
 export interface CityDef { id: string; name: string; seed: number; budget: number; waveMul: number; sites: number; speedMul: number; blurb: string; real?: boolean; trial?: string } // trial: hardware this city lends you before you unlock it
@@ -714,10 +760,53 @@ export const TUNABLE: Record<string, [() => number, (v: number) => void]> = {
   EVAC_ABORT_INF: [() => EVAC_ABORT_INF, v => { EVAC_ABORT_INF = v; }],
   SOUND_NEAR_ZOOM: [() => SOUND_NEAR_ZOOM, v => { SOUND_NEAR_ZOOM = v; }],
   EVAC_WALK_MUL: [() => EVAC_WALK_MUL, v => { EVAC_WALK_MUL = v; }],
+  MILL_MAX_DENS: [() => MILL_MAX_DENS, v => { MILL_MAX_DENS = v; }],
+  WAIT_RHO: [() => WAIT_RHO, v => { WAIT_RHO = v; }],
   EVAC_GATHER_D: [() => EVAC_GATHER_D, v => { EVAC_GATHER_D = v; }],
   AGENT_RESERVE: [() => AGENT_RESERVE, v => { AGENT_RESERVE = v; }],
   CIV_SPEED: [() => CIV_SPEED, v => { CIV_SPEED = v; }],
+  CIV_SPRINT: [() => CIV_SPRINT, v => { CIV_SPRINT = v; }],
+  WALK_SPREAD: [() => WALK_SPREAD, v => { WALK_SPREAD = v; }],
+  CROWD_TAU: [() => CROWD_TAU, v => { CROWD_TAU = v; }],
+  PANIC_TAU: [() => PANIC_TAU, v => { PANIC_TAU = v; }],
+  BODY_R: [() => BODY_R, v => { BODY_R = v; }],
+  PANIC_BODY_R: [() => PANIC_BODY_R, v => { PANIC_BODY_R = v; }],
+  TTC_K: [() => TTC_K, v => { TTC_K = v; }],
+  TTC_FOLLOW: [() => TTC_FOLLOW, v => { TTC_FOLLOW = v; }],
+  SPEED_RHO_CELL: [() => SPEED_RHO_CELL, v => { SPEED_RHO_CELL = v; }],
+  TTC_T0: [() => TTC_T0, v => { TTC_T0 = v; }],
+  SPACE_A: [() => SPACE_A, v => { SPACE_A = v; }],
+  SPACE_B: [() => SPACE_B, v => { SPACE_B = v; }],
+  CROWD_PRESS: [() => CROWD_PRESS, v => { CROWD_PRESS = v; }],
+  PRESS_DENS: [() => PRESS_DENS, v => { PRESS_DENS = v; }],
+  WALL_A: [() => WALL_A, v => { WALL_A = v; }],
+  WALL_RANGE: [() => WALL_RANGE, v => { WALL_RANGE = v; }],
+  WALL_MIN: [() => WALL_MIN, v => { WALL_MIN = v; }],
+  RHO_MAX: [() => RHO_MAX, v => { RHO_MAX = v; }],
+  RHO_GAMMA: [() => RHO_GAMMA, v => { RHO_GAMMA = v; }],
+  PANIC_RHO_MAX: [() => PANIC_RHO_MAX, v => { PANIC_RHO_MAX = v; }],
+  AIM_SWAY: [() => AIM_SWAY, v => { AIM_SWAY = v; }],
+  FEAR_RISE: [() => FEAR_RISE, v => { FEAR_RISE = v; }],
+  FEAR_FADE_S: [() => FEAR_FADE_S, v => { FEAR_FADE_S = v; }],
+  FEAR_SPREAD: [() => FEAR_SPREAD, v => { FEAR_SPREAD = v; }],
+  FEAR_GRID_HALF: [() => FEAR_GRID_HALF, v => { FEAR_GRID_HALF = v; }],
+  HERD_MAX: [() => HERD_MAX, v => { HERD_MAX = v; }],
+  PANIC_ODD_RATE: [() => PANIC_ODD_RATE, v => { PANIC_ODD_RATE = v; }],
+  PANIC_CLOG: [() => PANIC_CLOG, v => { PANIC_CLOG = v; }],
+  CLOG_RHO: [() => CLOG_RHO, v => { CLOG_RHO = v; }],
+  CRUSH_RHO: [() => CRUSH_RHO, v => { CRUSH_RHO = v; }],
+  CRUSH_S: [() => CRUSH_S, v => { CRUSH_S = v; }],
+  DOWN_S: [() => DOWN_S, v => { DOWN_S = v; }],
+  SHOVE: [() => SHOVE, v => { SHOVE = v; }],
+  NOISE_HALF: [() => NOISE_HALF, v => { NOISE_HALF = v; }],
+  NOISE_MIN: [() => NOISE_MIN, v => { NOISE_MIN = v; }],
+  NOISE_STRAGGLER: [() => NOISE_STRAGGLER, v => { NOISE_STRAGGLER = v; }],
+  FAMILY_PCT: [() => FAMILY_PCT, v => { FAMILY_PCT = v; }],
   INF_SPEED: [() => INF_SPEED, v => { INF_SPEED = v; }],
+  SHAMBLER_MUL: [() => SHAMBLER_MUL, v => { SHAMBLER_MUL = v; }],
+  RUNNER_MUL: [() => RUNNER_MUL, v => { RUNNER_MUL = v; }],
+  INF_WALL_PUSH: [() => INF_WALL_PUSH, v => { INF_WALL_PUSH = v; }],
+  INF_SWAY: [() => INF_SWAY, v => { INF_SWAY = v; }],
   INF_SPEED_GROWTH: [() => INF_SPEED_GROWTH, v => { INF_SPEED_GROWTH = v; }],
   INF_HP: [() => INF_HP, v => { INF_HP = v; }],
   INF_HP_GROWTH: [() => INF_HP_GROWTH, v => { INF_HP_GROWTH = v; }],

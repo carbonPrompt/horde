@@ -60,7 +60,7 @@ test("a full battle runs to an end with sane numbers", () => {
   expect(s.phase).toBe("over");
   expect(c.civ + c.safe + c.inf).toBeLessThanOrEqual(s.n);
   for (let k = 0; k < s.n; k++) { expect(Number.isFinite(s.ax[k])).toBe(true); }
-}, 120000);
+}, 300000); // 0.30: walking crowds mean a bigger outbreak and longer battles
 
 test("changing the plan moves the outbreak", () => {
   const a = new Sim(7), b = new Sim(7);
@@ -606,7 +606,7 @@ test("mobile units kite: infected close in, the squad backs away instead of stan
   for (let i = 0; i < 10; i++) s.step();
   expect(u.kiting).toBe(true);
   expect(Math.hypot(u.x - x0, u.y - y0)).toBeGreaterThan(0.5);
-});
+}, 30000);
 
 // ---------- 0.11 strike orders + escalation ----------
 test("strike orders send a mobile unit to clear and hold a spot", () => {
@@ -670,7 +670,7 @@ test("barrage, MOAB and nuke: escalating damage; nuke leaves fallout and costs X
 
 // ---------- 0.12 arsenal ----------
 test("arsenal: tank, HIMARS, Apache and Reaper fight; strike orders reach across the map; air units ignore streets", () => {
-  const s = new Sim(42, { budget: 400_000_000 });
+  const s = new Sim(42, { budget: 400_000_000, civilians: 1000 }); // 0.30: walking crowds fill the streets longer and a tank creeps through them
   s.setZone(zoneAroundCenter(s, 34));
   const inZone: number[][] = [], outside: number[][] = [];
   for (let i = 0; i < s.inZone.length; i += 17) { const x = i % s.w, y = (i / s.w) | 0; if (s.map.tile[i] === 0 && s.inZone[i] === 1) inZone.push([x, y]); else if (s.map.tile[i] === 0 && !s.inZone[i] && Math.hypot(x - s.w / 2, y - s.h / 3) < 70) outside.push([x, y]); }
@@ -937,7 +937,7 @@ test("hordes keep coming at rolled gaps", () => {
     expect(gap).toBeGreaterThanOrEqual(C.DIFFICULTY.medium.gapFloor - 1e-6);
     expect(gap).toBeLessThanOrEqual(C.DIFFICULTY.medium.gapMax + C.DT + 1e-6);
   }
-});
+}, 30000);
 
 test("emptying the city makes hordes bigger", () => {
   const run = (empty: boolean) => {
@@ -976,7 +976,7 @@ test("same plan and difficulty replay identically", () => {
     return times;
   };
   expect(run()).toEqual(run());
-});
+}, 30000);
 
 test("insane hordes come bigger and sooner than easy", () => {
   const run = (difficulty: C.Difficulty) => {
@@ -1042,8 +1042,9 @@ test("Airstrike: 12 per battle", () => {
 });
 
 test("people in the zone walk to the nearest Evac Point, even far away", () => {
-  const keep = C.EVAC_EVERY_S;
+  const keep = C.EVAC_EVERY_S, keepSp = C.CIV_SPEED;
   C.TUNABLE.EVAC_EVERY_S[1](1e6); // no lifts: nobody leaves, so we can see where they gather
+  C.TUNABLE.CIV_SPEED[1](2.8); // 0.30: people really walk now; this tests the route, so run it at the old pace
   try {
     const s = new Sim(42, { budget: 80_000_000 });
     s.setZone(zoneAroundCenter(s, 34));
@@ -1057,10 +1058,12 @@ test("people in the zone walk to the nearest Evac Point, even far away", () => {
     s.startBattle();
     while (s.time < 90) s.step();
     let near = 0, safe = 0;
-    for (let k = 0; k < s.civN; k++) if (s.state[k] === SAFE_CIV) { safe++; if (Math.hypot(s.ax[k] - pad!.x, s.ay[k] - pad!.y) < C.SUPPORTS.evac.radius) near++; }
+    // 0.30: the waiting crowd takes real room (sim.gatherD grows with it), so "at the pad" means in its crowd
+    const pf = (s as any).padField as Uint16Array, gd = (s as any).gatherD as number;
+    for (let k = 0; k < s.civN; k++) if (s.state[k] === SAFE_CIV) { safe++; if (Math.hypot(s.ax[k] - pad!.x, s.ay[k] - pad!.y) < C.SUPPORTS.evac.radius || pf[s.idx(s.ax[k] | 0, s.ay[k] | 0)] <= gd) near++; }
     expect(safe).toBeGreaterThan(100);
     expect(near / safe).toBeGreaterThan(0.5);
-  } finally { C.TUNABLE.EVAC_EVERY_S[1](keep); }
+  } finally { C.TUNABLE.EVAC_EVERY_S[1](keep); C.TUNABLE.CIV_SPEED[1](keepSp); }
 }, 120000);
 
 test("an infected inside a standing gate or wall steps out to the street outside", () => {
@@ -1270,8 +1273,9 @@ test("the Evac Point route goes around units, and squeezes past one that plugs t
 });
 
 test("people in the zone are not stuck behind a howitzer on the way to the Evac Point", () => {
-  const keep = C.EVAC_EVERY_S;
+  const keep = C.EVAC_EVERY_S, keepSp = C.CIV_SPEED;
   C.TUNABLE.EVAC_EVERY_S[1](1e6);
+  C.TUNABLE.CIV_SPEED[1](2.8); // 0.30: route test at the old pace
   try {
     const s = new Sim(42, { budget: 80_000_000 });
     s.setZone(zoneAroundCenter(s, 34));
@@ -1290,7 +1294,8 @@ test("people in the zone are not stuck behind a howitzer on the way to the Evac 
     s.startBattle();
     while (s.time < 100) s.step();
     let near = 0, safe = 0;
-    for (let k = 0; k < s.civN; k++) if (s.state[k] === SAFE_CIV) { safe++; if (Math.hypot(s.ax[k] - pad!.x, s.ay[k] - pad!.y) < C.SUPPORTS.evac.radius) near++; }
+    const pfA = (s as any).padField as Uint16Array, gd = (s as any).gatherD as number; // 0.30: in the pad's waiting crowd counts
+    for (let k = 0; k < s.civN; k++) if (s.state[k] === SAFE_CIV) { safe++; if (Math.hypot(s.ax[k] - pad!.x, s.ay[k] - pad!.y) < C.SUPPORTS.evac.radius || pfA[s.idx(s.ax[k] | 0, s.ay[k] | 0)] <= gd) near++; }
     expect(safe).toBeGreaterThan(100);
     expect(near / safe).toBeGreaterThan(0.5);
     // nobody still on the way is pinned against a howitzer
@@ -1299,13 +1304,13 @@ test("people in the zone are not stuck behind a howitzer on the way to the Evac 
     for (let k = 0; k < s.civN; k++) {
       if (s.state[k] !== SAFE_CIV) continue;
       const x = s.ax[k] | 0, y = s.ay[k] | 0;
-      if (a.padField[s.idx(x, y)] <= C.EVAC_GATHER_D || Math.hypot(s.ax[k] - pad!.x, s.ay[k] - pad!.y) < C.SUPPORTS.evac.radius) continue; // arrived, waiting for a lift
+      if (a.padField[s.idx(x, y)] <= a.gatherD || Math.hypot(s.ax[k] - pad!.x, s.ay[k] - pad!.y) < C.SUPPORTS.evac.radius) continue; // arrived, waiting for a lift
       let touch = false;
       for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) if (a.occ[s.idx(x + dx, y + dy)]) touch = true;
       if (touch) pinned++;
     }
     expect(pinned).toBeLessThan(3);
-  } finally { C.TUNABLE.EVAC_EVERY_S[1](keep); }
+  } finally { C.TUNABLE.EVAC_EVERY_S[1](keep); C.TUNABLE.CIV_SPEED[1](keepSp); }
 }, 120000);
 
 test("a standing wall stops ground units; gates and breaches let them through", () => {

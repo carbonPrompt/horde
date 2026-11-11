@@ -111,6 +111,8 @@ const BUCKET = 4; // cells per spatial bucket
  *  under a standing ground unit adds FIELD_OCC (walk around it unless it plugs the only way). */
 export const FIELD_STEP = 10, FIELD_DIAG = 14, FIELD_OCC = 300;
 const BITE_P3 = 1 - Math.pow(1 - C.BITE_CHANCE, 3); // bite checked every 3rd tick
+/** exp(x) for the crowd's pushes, cheap: (1 + x/32)^32, good to a fraction of a percent for x in [-6, 2]. */
+function fexp(x: number) { let y = 1 + x / 32; if (y <= 0) return 0; y *= y; y *= y; y *= y; y *= y; y *= y; return y; }
 
 export interface SimOpts {
   budget?: number;
@@ -175,8 +177,24 @@ export class Sim {
   civDir: Float32Array; infDir: Float32Array; swimDir: Float32Array;
   dens: Uint16Array; // people per cell this tick (crowd separation)
   sumX: Float32Array; sumY: Float32Array; // 0.28: summed positions per cell, for the sand-grain push inside a cell
-  biasC: Float32Array; biasS: Float32Array; // each agent's fixed lean left/right of the field direction
+  biasC: Float32Array; biasS: Float32Array; // each agent's fixed lean left/right of the field direction (infected only since 0.30)
   fieldDirty = true;
+  // 0.30 crowd model (see stepCiv): velocity, fear, odd panic acts, knocked down, families.
+  velX: Float32Array; velY: Float32Array; // cells/s
+  fear: Float32Array; zStim: Float32Array; // fear 0..1; how scary the nearest infected is (sensed every 4th tick)
+  act: Uint8Array; actT: Float32Array; // panic acts: 1 run the wrong way, 2 freeze; seconds left
+  downT: Float32Array; crushT: Float32Array; // knocked down (s left); time spent in a crush
+  pspd: Float32Array; famLead: Int32Array; famSize: Uint8Array;
+  // 0.30: the crowd waiting at the Evac Points takes room: the waiting area grows with how many are waiting
+  // (at about WAIT_RHO people/m2) instead of everyone piling into the cells around the pad
+  gatherD = C.EVAC_GATHER_D; private waitN = 0; private waitCount = 0; private padRing = new Uint16Array(0);
+  private lod = 1; // big crowds think every lod-th tick (staggered) and coast on their velocity in between
+  cellHead: Int32Array; cellNext: Int32Array; // everyone alive, listed per cell (near neighbors)
+  cellGen: Uint32Array; private gen = 0; // a cell's list is current only when its stamp matches gen (no full clear per tick)
+  fearB: Float32Array; noiseB: Float32Array; // per bucket: scares in the air (gunfire, blasts, bites); noise that draws infected
+  panSum: Float32Array; panCnt: Uint16Array; panPrev: Float32Array; // per bucket: summed fear this tick; average fear last tick
+  crushed = 0; // people killed in crushes
+  private scanT = -1; // shots and blasts up to this time already turned into fear and noise
 
   // Spatial hash.
   bw: number; bh: number;
@@ -376,6 +394,15 @@ export class Sim {
     this.biasC = new Float32Array(this.n); this.biasS = new Float32Array(this.n);
     for (let k = 0; k < this.n; k++) { const a = (((k * 0.6180339887) % 1) - 0.5) * 1.0; this.biasC[k] = Math.cos(a); this.biasS[k] = Math.sin(a); }
     this.chase = new Uint8Array(this.n);
+    this.velX = new Float32Array(this.n); this.velY = new Float32Array(this.n);
+    this.fear = new Float32Array(this.n); this.zStim = new Float32Array(this.n);
+    this.act = new Uint8Array(this.n); this.actT = new Float32Array(this.n);
+    this.downT = new Float32Array(this.n); this.crushT = new Float32Array(this.n);
+    this.pspd = new Float32Array(this.n); this.famLead = new Int32Array(this.n).fill(-1); this.famSize = new Uint8Array(this.n);
+    this.cellHead = new Int32Array(cells).fill(-1); this.cellNext = new Int32Array(this.n).fill(-1); this.cellGen = new Uint32Array(cells);
+    const nb = this.bw * this.bh;
+    this.fearB = new Float32Array(nb); this.noiseB = new Float32Array(nb);
+    this.panSum = new Float32Array(nb); this.panCnt = new Uint16Array(nb); this.panPrev = new Float32Array(nb);
     this.placeCivilians(seed);
     this.findBridges();
     this.railLines = extractRailLines(this.map);
@@ -508,6 +535,27 @@ export class Sim {
       this.state[k] = CIV;
       const a = r() * Math.PI * 2;
       this.hx[k] = Math.cos(a); this.hy[k] = Math.sin(a);
+    }
+    // 0.30: walking pace (about normal around 1, Weidmann's spread) and families: most people walk in groups of 2 to 4
+    // (Moussaid 2010), placed together and sharing one pace. Own rng so the city's layout stays the same.
+    const fr = rng((seed ^ 0x9e3779b9) >>> 0);
+    for (let k = 0; k < this.civN;) {
+      const pace = Math.max(0.7, Math.min(1.35, 1 + C.WALK_SPREAD * ((fr() + fr() + fr()) - 1.5) * 2));
+      let size = 1;
+      if (fr() * 100 < C.FAMILY_PCT) { const q = fr(); size = q < 0.55 ? 2 : q < 0.85 ? 3 : 4; }
+      size = Math.min(size, this.civN - k);
+      for (let j = 0; j < size; j++) {
+        const m = k + j;
+        this.pspd[m] = pace;
+        if (size > 1) {
+          this.famLead[m] = k; this.famSize[m] = size;
+          if (j > 0) { // stand next to the first of the group, if there's room
+            const x = this.ax[k] + (fr() - 0.5) * 1.2, y = this.ay[k] + (fr() - 0.5) * 1.2;
+            if (x > 0 && y > 0 && x < this.w && y < this.h && walkable(this.map.tile[this.idx(x | 0, y | 0)])) { this.ax[m] = Math.fround(x); this.ay[m] = Math.fround(y); }
+          }
+        }
+      }
+      k += size;
     }
     for (let k = this.civN; k < this.n; k++) this.state[k] = DEAD; // outbreak slots, filled at battle start
   }
@@ -1792,11 +1840,16 @@ export class Sim {
   }
 
   private rebuildBuckets() {
-    this.head.fill(-1); this.headC.fill(-1); this.dens.fill(0); this.sumX.fill(0); this.sumY.fill(0);
+    this.head.fill(-1); this.headC.fill(-1); this.dens.fill(0); this.sumX.fill(0); this.sumY.fill(0); this.gen++;
+    // 0.30: last tick's fear per bucket becomes this tick's contagion source
+    for (let b = 0; b < this.panPrev.length; b++) { this.panPrev[b] = this.panCnt[b] ? this.panSum[b] / this.panCnt[b] : 0; }
+    this.panSum.fill(0); this.panCnt.fill(0);
     for (let k = 0; k < this.n; k++) {
       const s = this.state[k];
       if (s === DEAD) continue;
       const ci = (this.ay[k] | 0) * this.w + (this.ax[k] | 0);
+      if (this.cellGen[ci] !== this.gen) { this.cellGen[ci] = this.gen; this.cellHead[ci] = -1; }
+      this.cellNext[k] = this.cellHead[ci]; this.cellHead[ci] = k;
       if (this.dens[ci] < 65535) this.dens[ci]++;
       this.sumX[ci] += this.ax[k]; this.sumY[ci] += this.ay[k];
       const b = ((this.ay[k] / BUCKET) | 0) * this.bw + ((this.ax[k] / BUCKET) | 0);
@@ -1870,13 +1923,26 @@ export class Sim {
     }
     if (this.marching.length) this.stepMarch(r, dt);
     this.rebuildOcc(dt);
+    { this.waitN = this.waitCount; this.waitCount = 0;
+      const need = Math.ceil(this.waitN / (C.WAIT_RHO * C.CELL_M * C.CELL_M)), ring = this.padRing; // street cells the crowd needs
+      this.gatherD = Math.max(C.EVAC_GATHER_D, ring.length ? ring[Math.min(ring.length - 1, need)] : 0); }
+    { let alive = 0; for (let k = 0; k < this.civN; k++) if (this.state[k] === CIV) alive++;
+      this.lod = alive > 120000 ? 8 : alive > 6000 ? 4 : alive > 2000 ? 2 : 1; } // people rethink every 0.2 s (8 ticks = 0.4 s for huge crowds): human reaction time
+    { const fd = Math.pow(0.5, dt / C.FEAR_GRID_HALF), nd = Math.pow(0.5, dt / C.NOISE_HALF), fb = this.fearB, nzb = this.noiseB;
+      for (let b = 0; b < fb.length; b++) { fb[b] *= fd; nzb[b] *= nd; } }
 
     for (let k = 0; k < this.n; k++) {
       const s = this.state[k];
       if (s === DEAD) continue;
       if (s === SAFE_CIV) {
         // 0.28: just through the gate: walk on in every tick at full pace, so the doorway never plugs
-        if (this.depth[this.idx(this.ax[k] | 0, this.ay[k] | 0)] < C.GATE_CLEAR_DEPTH) this.mill(k, r, dt);
+        // 0.30: through the gate they stay on the crowd model until clear of the gateway (no grid-stepping jam)
+        const gi = this.idx(this.ax[k] | 0, this.ay[k] | 0);
+        const gateway = this.depth[gi] < C.GATE_CLEAR_DEPTH;
+        const routed = this.hasPads && this.inZone[gi] === 1 && this.padField[gi] !== 65535, waiting = routed && this.padField[gi] <= this.gatherD;
+        if (routed) this.waitCount++; // everyone headed for a pad ends up in its crowd
+        if (gateway && !this.occ[gi] && !waiting) this.stepCiv(k, r, dt, gi, 0, true);
+        else if (gateway) this.mill(k, r, dt);
         else if ((k + this.tick) % 4 === 0) this.mill(k, r, dt * 4);
         continue;
       }
@@ -1891,29 +1957,8 @@ export class Sim {
         if (out >= 0) { this.ax[k] = (out % this.w) + 0.5; this.ay[k] = ((out / this.w) | 0) + 0.5; }
         continue;
       }
-      if (s === CIV) {
-        speed = C.CIV_SPEED * (cellInfra === INFRA_HIGHWAY ? C.HIGHWAY_SPEED_MUL : cellInfra === INFRA_RAIL || cellInfra === INFRA_STATION ? C.RAIL_SPEED_MUL : 1)
-        if (this.rough[cellIdx]) speed *= this.roughMul(cellIdx); // 0.23: craters slow everyone
-        // Flee: steer away from the nearest infected (checked every 4th tick, staggered).
-        if ((k + this.tick) % 4 === 0) {
-          const e = this.nearest(x, y, C.CIV_SENSE, INF);
-          if (e >= 0) {
-            const dx = x - this.ax[e], dy = y - this.ay[e], l = hyp(dx, dy) || 1;
-            this.hx[k] = dx / l; this.hy[k] = dy / l;
-            this.hp[k] = 1.5; // panic timer (seconds) reuses hp for civilians
-          }
-        }
-        if (this.hp[k] > 0) { this.hp[k] -= dt; vx = this.hx[k]; vy = this.hy[k]; speed *= 1.15; }
-        // Crowds jam: a packed cell slows everyone in it (panicked people shove instead of spreading out).
-        const dn = this.dens[cellIdx];
-        if (dn > C.CIV_JAM_DENS) speed *= Math.max(0.2, C.CIV_JAM_DENS / dn);
-        const di = 2 * cellIdx, ddx = this.zoneClosed ? this.civDir[di] : 0, ddy = this.zoneClosed ? this.civDir[di + 1] : 0;
-        if (ddx !== 0 || ddy !== 0) { const c = this.biasC[k], sn = this.biasS[k]; vx = vx * 0.6 + ddx * c - ddy * sn; vy = vy * 0.6 + ddx * sn + ddy * c; }
-        else if (this.hp[k] <= 0) {
-          if (r() < 0.02) { const a = r() * 6.283; this.hx[k] = Math.cos(a); this.hy[k] = Math.sin(a); }
-          vx = this.hx[k]; vy = this.hy[k]; speed *= 0.5; // aimless when there's nowhere safe to go
-        }
-      } else {
+      if (s === CIV) { this.stepCiv(k, r, dt, cellIdx, cellInfra); continue; } // 0.30: the crowd model
+      {
         const swimmer = this.mutant[k] === 1;
         // 0.22.1: an infected caught inside a standing wall or gate (a person bitten in a gateway,
         // a gate locked or a zone drawn on top of it) could not step out and jittered there. Put it on the
@@ -1926,15 +1971,18 @@ export class Sim {
           continue;
         }
         const onWater = swimmer && cellTile === WATER;
-        speed = infSpeed * (swimmer ? (onWater ? C.SWIMMER_SPEED_WATER : C.SWIMMER_SPEED_LAND) : 1);
+        speed = infSpeed * (swimmer ? (onWater ? C.SWIMMER_SPEED_WATER : C.SWIMMER_SPEED_LAND) : this.isRunner(k) ? C.RUNNER_MUL : C.SHAMBLER_MUL);
         if (!onWater) {
           if (cellInfra === INFRA_HIGHWAY) speed *= C.HIGHWAY_SPEED_MUL;
           else if (cellInfra === INFRA_RAIL || cellInfra === INFRA_STATION) speed *= C.RAIL_SPEED_MUL;
           speed *= this.roughMul(cellIdx);
         }
         // Chase the nearest civilian in sight (retarget every 5th tick), else follow the field to the zone.
+        const nb = ((y / BUCKET) | 0) * this.bw + ((x / BUCKET) | 0), deaf = k % C.NOISE_STRAGGLER === 0;
+        const loud = !deaf && this.noiseB[nb] > C.NOISE_MIN;
         if ((k + this.tick) % 6 === 0) {
-          const t = this.nearest(x, y, C.INF_SENSE, CIV, SAFE_CIV);
+          // 0.30: loud gunfire and blasts pull them off the people unless someone is right in front of them
+          const t = this.nearest(x, y, loud && this.noiseB[nb] > 1 ? 4 : C.INF_SENSE, CIV, SAFE_CIV);
           if (t >= 0) {
             const dx = this.ax[t] - x, dy = this.ay[t] - y, l = hyp(dx, dy) || 1;
             this.hx[k] = dx / l; this.hy[k] = dy / l;
@@ -1945,7 +1993,16 @@ export class Sim {
         else {
           const dir = swimmer ? this.swimDir : this.infDir;
           const di = 2 * (cy * this.w + cx), ddx = this.zoneClosed ? dir[di] : 0, ddy = this.zoneClosed ? dir[di + 1] : 0;
-          if (ddx !== 0 || ddy !== 0) { const c = this.biasC[k], sn = this.biasS[k]; vx = ddx * c - ddy * sn; vy = ddx * sn + ddy * c; }
+          let gx = 0, gy = 0;
+          if (loud) { // climb the noise toward the shooting
+            const bx = (x / BUCKET) | 0, by = (y / BUCKET) | 0, nz = this.noiseB, bw = this.bw;
+            gx = (bx < bw - 1 ? nz[nb + 1] : 0) - (bx > 0 ? nz[nb - 1] : 0); gy = (by < this.bh - 1 ? nz[nb + bw] : 0) - (by > 0 ? nz[nb - bw] : 0);
+          }
+          const gl = hyp(gx, gy);
+          // 0.30: a slow sway around the way they're going, not a fixed lean (a fixed lean walks them into the walls)
+          const sw = C.INF_SWAY * Math.sin(this.time * (0.2 + 0.3 * ((k * 0.618034) % 1)) + k * 2.399963), c = Math.cos(sw), sn = Math.sin(sw);
+          if (gl > 0.02) { gx /= gl; gy /= gl; vx = gx * c - gy * sn; vy = gx * sn + gy * c; }
+          else if (ddx !== 0 || ddy !== 0) { vx = ddx * c - ddy * sn; vy = ddx * sn + ddy * c; }
           else {
             if (r() < 0.03) { const a = r() * 6.283; this.hx[k] = Math.cos(a); this.hy[k] = Math.sin(a); }
             vx = this.hx[k]; vy = this.hy[k];
@@ -1962,6 +2019,7 @@ export class Sim {
           }
           if (r() < p) {
             this.state[v] = INF; this.mutant[v] = 0; this.hp[v] = C.INF_HP * infHpScale * this.infHpMul; this.chase[v] = 0; this.infectedEver++;
+            this.scare(this.ax[v], this.ay[v], 8, 0.95); // 0.30: watching someone get bitten
           }
         }
         // Gnaw on an adjacent standing wall or closed gate.
@@ -1978,6 +2036,8 @@ export class Sim {
         if (vl > 1e-6) { const ux = vx / vl, uy = vy / vl, dot = this.spx * ux + this.spy * uy; if (dot < 0) { this.spx -= dot * ux; this.spy -= dot * uy; } }
         vx += this.spx * g; vy += this.spy * g;
       }
+      // 0.30: shortest routes hug the inside of every turn; bodies keep off the walls instead of riding them
+      { const l0 = hyp(vx, vy); if (l0 > 1e-6) { this.wallAway(x, y, true, s === INF && this.mutant[k] === 1); vx = vx / l0 + this.spx * C.INF_WALL_PUSH; vy = vy / l0 + this.spy * C.INF_WALL_PUSH; } }
       // Move with collision against blocked cells (slide along axes).
       const l = hyp(vx, vy);
       if (l < 1e-6) continue;
@@ -1996,12 +2056,19 @@ export class Sim {
         if (this.free(sx, sy, infected, swimmer)) { this.ax[k] = sx; this.ay[k] = sy; }
         else { const tx = Math.fround(x + my * side), ty = Math.fround(y - mx * side); if (this.free(tx, ty, infected, swimmer)) { this.ax[k] = tx; this.ay[k] = ty; } }
       }
-      if (s === CIV) { const z = this.inZone[this.idx(this.ax[k] | 0, this.ay[k] | 0)]; if (z === 1 || z === 3) this.state[k] = SAFE_CIV; } // a gate is a guarded checkpoint
+      { // 0.30: never ride a wall's exact edge (bodies have width)
+        let px = this.ax[k], py = this.ay[k];
+        const qx = px | 0, qy = py | 0, mn = C.WALL_MIN / C.CELL_M;
+        if (px - qx < mn && !this.free(qx - 0.5, py, infected, swimmer)) px = qx + mn; else if (qx + 1 - px < mn && !this.free(qx + 1.5, py, infected, swimmer)) px = qx + 1 - mn;
+        if (py - qy < mn && !this.free(px, qy - 0.5, infected, swimmer)) py = qy + mn; else if (qy + 1 - py < mn && !this.free(px, qy + 1.5, infected, swimmer)) py = qy + 1 - mn;
+        this.ax[k] = Math.fround(px); this.ay[k] = Math.fround(py);
+      }
     }
 
     if (this.tick % 20 === 0) { this.refreshAuras(); this.hasPads = this.supports.some(b => b.kind === "evac"); if (this.hasPads) this.buildPadField(); }
     this.stepSupports(dt);
     this.fireUnits(dt);
+    this.scanEvents();
     this.units = this.units.filter(u => {
       if (u.hp === undefined || u.hp > 0) return true;
       if (u.parentUnit) return false;
@@ -2109,6 +2176,300 @@ export class Sim {
     return l < 1e-6 ? null : [gx / l, gy / l];
   }
 
+  // ---------- 0.30 crowd model ----------
+
+  private rdx = 0; private rdy = 0;
+  /** The route direction at (x, y), blended between the four nearest cell centers so it turns smoothly. */
+  private routeAt(dir: Float32Array, x: number, y: number): boolean {
+    const fx = x - 0.5, fy = y - 0.5, x0 = Math.floor(fx), y0 = Math.floor(fy), tx = fx - x0, ty = fy - y0;
+    let gx = 0, gy = 0;
+    for (let j = 0; j < 2; j++) for (let i = 0; i < 2; i++) {
+      const cx = x0 + i, cy = y0 + j;
+      if (cx < 0 || cy < 0 || cx >= this.w || cy >= this.h) continue;
+      const di = 2 * (cy * this.w + cx), dx = dir[di], dy = dir[di + 1];
+      if (dx === 0 && dy === 0) continue;
+      const wt = (i ? tx : 1 - tx) * (j ? ty : 1 - ty);
+      gx += dx * wt; gy += dy * wt;
+    }
+    const l = hyp(gx, gy);
+    if (l < 1e-6) return false;
+    this.rdx = gx / l; this.rdy = gy / l; return true;
+  }
+
+  /** People per square meter around a cell (3x3 cells, counting only the ones a person can stand on). */
+  private rhoAt(cx: number, cy: number) {
+    let n = 0, a = 0;
+    for (let j = -1; j <= 1; j++) for (let i = -1; i <= 1; i++) {
+      const x = cx + i, y = cy + j;
+      if (x < 0 || y < 0 || x >= this.w || y >= this.h) continue;
+      const c = y * this.w + x;
+      if (!walkable(this.map.tile[c])) continue;
+      n += this.dens[c]; a++;
+    }
+    return a ? n / (a * C.CELL_M * C.CELL_M) : 0;
+  }
+
+  /** A scare in the air around (x, y), r cells across: fear on the bucket grid, fading with distance (the strongest wins). */
+  scare(x: number, y: number, r: number, amt: number) {
+    const b0x = Math.max(0, ((x - r) / BUCKET) | 0), b1x = Math.min(this.bw - 1, ((x + r) / BUCKET) | 0);
+    const b0y = Math.max(0, ((y - r) / BUCKET) | 0), b1y = Math.min(this.bh - 1, ((y + r) / BUCKET) | 0);
+    for (let by = b0y; by <= b1y; by++) for (let bx = b0x; bx <= b1x; bx++) {
+      const d = hyp((bx + 0.5) * BUCKET - x, (by + 0.5) * BUCKET - y);
+      if (d > r) continue;
+      const v = amt * (1 - d / r), b = by * this.bw + bx;
+      if (v > this.fearB[b]) this.fearB[b] = v;
+    }
+  }
+  /** Noise that draws infected toward (x, y): adds up (a long firefight is louder), capped. */
+  noise(x: number, y: number, r: number, amt: number) {
+    const b0x = Math.max(0, ((x - r) / BUCKET) | 0), b1x = Math.min(this.bw - 1, ((x + r) / BUCKET) | 0);
+    const b0y = Math.max(0, ((y - r) / BUCKET) | 0), b1y = Math.min(this.bh - 1, ((y + r) / BUCKET) | 0);
+    for (let by = b0y; by <= b1y; by++) for (let bx = b0x; bx <= b1x; bx++) {
+      const d = hyp((bx + 0.5) * BUCKET - x, (by + 0.5) * BUCKET - y);
+      if (d > r) continue;
+      const b = by * this.bw + bx;
+      this.noiseB[b] = Math.min(3, this.noiseB[b] + amt * (1 - d / r));
+    }
+  }
+  /** A close blast throws people away from it and terrifies them. */
+  private shove(x: number, y: number, r: number) {
+    const b0x = Math.max(0, ((x - r) / BUCKET) | 0), b1x = Math.min(this.bw - 1, ((x + r) / BUCKET) | 0);
+    const b0y = Math.max(0, ((y - r) / BUCKET) | 0), b1y = Math.min(this.bh - 1, ((y + r) / BUCKET) | 0);
+    for (let by = b0y; by <= b1y; by++) for (let bx = b0x; bx <= b1x; bx++)
+      for (let k = this.headC[by * this.bw + bx]; k !== -1; k = this.next[k]) {
+        if (this.state[k] !== CIV) continue;
+        const dx = this.ax[k] - x, dy = this.ay[k] - y, d = hyp(dx, dy);
+        if (d > r) continue;
+        const q = 1 - d / r, s = C.SHOVE * q / (d || 1);
+        this.velX[k] += dx * s; this.velY[k] += dy * s;
+        this.fear[k] = Math.max(this.fear[k], 0.6 + 0.4 * q);
+      }
+  }
+  /** Gunfire and explosions since the last tick become fear (people) and noise (infected). */
+  private scanEvents() {
+    const t0 = this.scanT, t1 = this.time;
+    for (const sh of this.shots) {
+      if (sh.t <= t0 || sh.t > t1) continue;
+      const loud = sh.cls === SHOT_SMALL ? 15 : sh.cls === SHOT_SNIPER ? 20 : sh.cls === SHOT_CANNON ? 30 : 40;
+      this.scare(sh.x0, sh.y0, loud, 0.6);
+      if (sh.cls <= SHOT_CANNON) this.scare(sh.x1, sh.y1, loud * 0.5, 0.7);
+      this.noise(sh.x0, sh.y0, loud * 1.8, 0.35);
+    }
+    for (const bl of this.blasts) {
+      if (bl.t <= t0 || bl.t > t1) continue;
+      this.scare(bl.x, bl.y, 12 + bl.r * 6, 1);
+      this.noise(bl.x, bl.y, 30 + bl.r * 8, 1.5);
+      this.shove(bl.x, bl.y, bl.r * 2.5 + 2);
+    }
+    this.scanT = t1;
+  }
+
+  /**
+   * One person outside a zone, one tick. Social force (Helbing): they keep a velocity and steer it toward where they
+   * want to go, pushed by personal space and walls; time-to-collision avoidance (Karamouzas 2014) makes them give way
+   * to oncoming people early; speed falls with density (Weidmann). Fear speeds them up, packs them tighter, makes
+   * them follow the crowd, and sometimes run the wrong way or freeze. A pressing panicked crowd crushes people.
+   */
+  private civOk(x: number, y: number, safe: boolean) { return safe ? this.freeSafe(x, y) : this.free(x, y, false); }
+  /** 0.30: a push away from blocked cells within WALL_RANGE (0 to about 1), into spx/spy. */
+  private wallAway(x: number, y: number, infected: boolean, swimmer: boolean) {
+    const cx = x | 0, cy = y | 0, w = this.w, R = C.WALL_RANGE / C.CELL_M;
+    let fx = 0, fy = 0;
+    const ox = x - cx, oy = y - cy;
+    if (ox > R && ox < 1 - R && oy > R && oy < 1 - R) { this.spx = 0; this.spy = 0; return; } // nothing within reach
+    for (let j = -1; j <= 1; j++) for (let i = -1; i <= 1; i++) {
+      if (!i && !j) continue;
+      const nx = cx + i, ny = cy + j;
+      if (nx >= 0 && ny >= 0 && nx < w && ny < this.h && this.passable(ny * w + nx, infected, swimmer)) continue;
+      const qx = Math.max(nx, Math.min(nx + 1, x)) - x, qy = Math.max(ny, Math.min(ny + 1, y)) - y, d = hyp(qx, qy);
+      if (d >= R || d < 1e-5) continue;
+      const p = 1 - d / R; fx -= (qx / d) * p; fy -= (qy / d) * p;
+    }
+    this.spx = fx; this.spy = fy;
+  }
+  /** 0.30: runners sprint, shamblers shuffle; the share of runners comes with the difficulty. Fixed per slot. */
+  isRunner(k: number) { return this.mutant[k] !== 1 && ((Math.imul(k + 1, 0x9e3779b1) >>> 24) * 100) / 256 < this.diff.runnerPct; }
+  /** Where a person already inside may step: the zone's own cells, or a gate they are still standing in. */
+  private sqFrom = -1; // the cell a person inside is stepping from (to squeeze past units like mill does)
+  private freeSafe(x: number, y: number) {
+    if (x < 0 || y < 0 || x >= this.w || y >= this.h) return false;
+    const i = this.idx(x | 0, y | 0), z = this.inZone[i], sq = this.padSqueeze;
+    return walkable(this.map.tile[i]) && (!this.occ[i] || (sq.length > 0 && sq[i] === 1 && this.sqFrom >= 0 && sq[this.sqFrom] === 1)) && (z === 1 || z === 3);
+  }
+
+  private stepCiv(k: number, r: () => number, dt0: number, ci: number, infra: number, safe = false) {
+    const w = this.w, M = C.CELL_M, x = this.ax[k], y = this.ay[k], cx = x | 0, cy = y | 0;
+    if (safe) this.sqFrom = ci;
+    if (this.lod > 1 && (k + this.tick) % this.lod !== 0) { // big crowds: coast on the velocity between thinks
+      if (this.downT[k] <= 0) this.moveCiv(k, x, y, this.velX[k], this.velY[k], 0, 0, dt0, safe);
+      return;
+    }
+    const dt = dt0 * this.lod; // time since this person last thought
+    if (safe) this.sqFrom = ci;
+    const b = ((y / BUCKET) | 0) * this.bw + ((x / BUCKET) | 0);
+    // --- senses and fear
+    if ((k + this.tick) % 4 === 0) {
+      const e = this.nearest(x, y, C.CIV_SENSE, INF);
+      if (e >= 0) {
+        const dx = x - this.ax[e], dy = y - this.ay[e], l = hyp(dx, dy) || 1;
+        if (this.act[k] !== 1) { this.hx[k] = dx / l; this.hy[k] = dy / l; }
+        this.zStim[k] = Math.min(1, 1.15 - 0.85 * l / C.CIV_SENSE);
+      } else this.zStim[k] = 0;
+    }
+    let f = this.fear[k];
+    const stim = Math.min(1, Math.max(this.zStim[k], this.fearB[b], C.FEAR_SPREAD * this.panPrev[b]));
+    f += (stim - f) * Math.min(1, stim > f ? C.FEAR_RISE * dt : 3 * dt / C.FEAR_FADE_S);
+    this.fear[k] = f;
+    this.panSum[b] += f; if (this.panCnt[b] < 65535) this.panCnt[b]++;
+    // --- crush: a panicked crowd pressed past what bodies can take knocks people down, then tramples them
+    const rho = this.rhoAt(cx, cy);
+    // (inside the zone soldiers keep order: no crush past the gate)
+    if (rho > C.CRUSH_RHO && f > 0.4 && (!safe || this.inZone[ci] === 3)) this.crushT[k] += dt * (rho - C.CRUSH_RHO) * f; // the push from behind does it
+    else this.crushT[k] = Math.max(0, this.crushT[k] - dt);
+    if (this.downT[k] > 0) {
+      this.downT[k] -= dt; this.velX[k] = 0; this.velY[k] = 0;
+      if (this.crushT[k] > C.CRUSH_S * 1.5) { this.state[k] = DEAD; this.crushed++; this.scare(x, y, 4, 0.7); }
+      else if (this.downT[k] <= 0) this.crushT[k] = 0;
+      return;
+    }
+    if (this.crushT[k] > C.CRUSH_S) { this.downT[k] = C.DOWN_S; this.crushT[k] = 0; this.scare(x, y, 4, 0.6); return; }
+    // --- odd panic: run the wrong way or freeze for a few seconds
+    if (this.actT[k] > 0) { this.actT[k] -= dt; if (this.actT[k] <= 0) this.act[k] = 0; }
+    else if (f > 0.7 && r() < C.PANIC_ODD_RATE * dt) {
+      if (r() < 0.6) { this.act[k] = 1; this.actT[k] = 2 + r() * 3; const a = r() * 6.2832; this.hx[k] = Math.cos(a); this.hy[k] = Math.sin(a); }
+      else { this.act[k] = 2; this.actT[k] = 1 + r() * 3; }
+    }
+    // --- neighbors: personal space, overlap, time to collision, and who is around (for herding)
+    const ri = C.BODY_R + (C.PANIC_BODY_R - C.BODY_R) * f;
+    const vxm = this.velX[k] * M, vym = this.velY[k] * M;
+    let fx = 0, fy = 0, hvx = 0, hvy = 0, hn = 0, ox = 0, oy = 0;
+    const spA = C.SPACE_A * (1 - 0.7 * f);
+    // a few from every side (a cap that ran out on one side would push the whole crowd the other way)
+    // in a packed cell only the nearest 2x2 cells matter (touching distance); in the open, 3x3 lets them look ahead
+    const dense = this.dens[ci] > 6, i0 = dense ? (x - cx < 0.5 ? -1 : 0) : -1, j0 = dense ? (y - cy < 0.5 ? -1 : 0) : -1, span = dense ? 1 : 2;
+    for (let j = j0; j <= j0 + span; j++) for (let i = i0; i <= i0 + span; i++) {
+      const nx = cx + i, ny = cy + j;
+      if (nx < 0 || ny < 0 || nx >= w || ny >= this.h) continue;
+      let checks = i === 0 && j === 0 ? (dense ? 6 : 8) : 3;
+      const nc = ny * w + nx;
+      for (let m = this.cellGen[nc] === this.gen ? this.cellHead[nc] : -1; m !== -1; m = this.cellNext[m]) {
+        if (m === k) continue;
+        if (--checks < 0) break;
+        const sm = this.state[m];
+        if (sm === DEAD) continue;
+        const wx = (this.ax[m] - x) * M, wy = (this.ay[m] - y) * M, d2 = wx * wx + wy * wy;
+        if (d2 > 16) continue;
+        const d = Math.sqrt(d2) || 1e-3;
+        const inf = sm === INF, rj = inf ? 0.25 : C.BODY_R + (C.PANIC_BODY_R - C.BODY_R) * this.fear[m], R = ri + rj;
+        const e = (R - d) / C.SPACE_B, p = e < -6 ? 0 : spA * fexp(e);
+        fx -= (wx / d) * p; fy -= (wy / d) * p;
+        if (d < R) { const o = (R - d) * 0.5; ox -= (wx / d) * o; oy -= (wy / d) * o; }
+        const rvx = vxm - (inf ? 0 : this.velX[m] * M), rvy = vym - (inf ? 0 : this.velY[m] * M);
+        const a = rvx * rvx + rvy * rvy, bb = wx * rvx + wy * rvy, c = d2 - R * R;
+        if (c > 0 && a > 1e-4) {
+          let disc = bb * bb - a * c;
+          if (disc > 0) {
+            disc = Math.sqrt(disc);
+            const t = (bb - disc) / a;
+            if (t > 0 && t < 8) {
+              let kk = -C.TTC_K * fexp(-t / C.TTC_T0) / (a * t * t) * (2 / t + 1 / C.TTC_T0);
+              if (!inf) { const vjx = this.velX[m], vjy = this.velY[m], al = (vjx * this.velX[k] + vjy * this.velY[k]) / ((hyp(vjx, vjy) * hyp(this.velX[k], this.velY[k])) || 1); if (al > 0) kk *= 1 - C.TTC_FOLLOW * al; }
+              fx += kk * (rvx - (bb * rvx - a * wx) / disc); fy += kk * (rvy - (bb * rvy - a * wy) / disc);
+            }
+          }
+        }
+        if (!inf && d2 < 4) { hvx += this.velX[m]; hvy += this.velY[m]; hn++; }
+      }
+    }
+    // --- crowd pressure: from a packed cell toward emptier ones (covers the people the capped scan skipped)
+    if (this.dens[ci] > C.PRESS_DENS * C.CELL_M * C.CELL_M) { this.spread(cx, cy); const pr = C.CROWD_PRESS * (1 - 0.7 * f); fx += this.spx * pr; fy += this.spy * pr; } // the terrified don't give way
+    // --- walls: buildings (and zone walls) push people off within WALL_RANGE
+    for (let j = -1; j <= 1; j++) for (let i = -1; i <= 1; i++) {
+      if (!i && !j) continue;
+      const nx = cx + i, ny = cy + j;
+      if (safe ? this.freeSafe(nx + 0.5, ny + 0.5) : nx >= 0 && ny >= 0 && nx < w && ny < this.h && this.passable(ny * w + nx, false)) continue;
+      const qx = (Math.max(nx, Math.min(nx + 1, x)) - x) * M, qy = (Math.max(ny, Math.min(ny + 1, y)) - y) * M, d = hyp(qx, qy);
+      if (d >= C.WALL_RANGE || d < 1e-4) continue;
+      const p = C.WALL_A * (1 - d / C.WALL_RANGE);
+      fx -= (qx / d) * p; fy -= (qy / d) * p;
+    }
+    // --- family: drift back toward the group (until terror takes over)
+    const lead = this.famLead[k];
+    if (lead >= 0 && f < 0.85) {
+      let sx = 0, sy = 0, n = 0;
+      for (let m = lead, e = lead + this.famSize[k]; m < e; m++) if (m !== k && this.state[m] === CIV) { sx += this.ax[m]; sy += this.ay[m]; n++; }
+      if (n) {
+        const ddx = (sx / n - x) * M, ddy = (sy / n - y) * M, d = hyp(ddx, ddy);
+        if (d > 1 && d < 40) { const p = Math.min(2, 0.8 * (d - 1)); fx += (ddx / d) * p; fy += (ddy / d) * p; }
+      }
+    }
+    // --- where they want to go
+    let dx = 0, dy = 0, wander = false;
+    if (this.act[k] === 1) { dx = this.hx[k]; dy = this.hy[k]; }
+    else {
+      if (safe) { // just inside: walk on in, away from the gate
+        const pf = this.hasPads && this.inZone[ci] === 1 ? this.padField[ci] : 65535;
+        const d = this.inZone[ci] !== 1 ? (this.routeAt(this.civDir, x, y) ? [this.rdx, this.rdy] : null)
+          : (pf !== 65535 && pf > this.gatherD ? this.downhill(this.padField, cx, cy) : null) ?? this.inward(cx, cy); // on to the Evac Point
+        if (d) { const a = C.AIM_SWAY * Math.sin(this.time * 0.3 + k * 2.399963), ca = Math.cos(a), sa = Math.sin(a); dx = d[0] * ca - d[1] * sa; dy = d[0] * sa + d[1] * ca; }
+      } else if (this.zoneClosed && this.routeAt(this.civDir, x, y)) {
+        const a = C.AIM_SWAY * Math.sin(this.time * (0.15 + 0.25 * ((k * 0.754877666) % 1)) + k * 2.399963), ca = Math.cos(a), sa = Math.sin(a);
+        dx = this.rdx * ca - this.rdy * sa; dy = this.rdx * sa + this.rdy * ca;
+      }
+      const zs = this.zStim[k];
+      if (zs > 0) { dx += this.hx[k] * zs * 1.5; dy += this.hy[k] * zs * 1.5; }
+      if (dx === 0 && dy === 0) {
+        if (r() < 0.02) { const a = r() * 6.283; this.hx[k] = Math.cos(a); this.hy[k] = Math.sin(a); }
+        dx = this.hx[k]; dy = this.hy[k]; wander = true;
+      }
+      if (hn && f > 0.5) { // herding: a panicked person goes where the people around them go
+        const hl = hyp(hvx, hvy);
+        if (hl > 1e-3) { const q = C.HERD_MAX * (f - 0.5) / 0.5, dl = hyp(dx, dy) || 1; dx = dx / dl * (1 - q) + hvx / hl * q; dy = dy / dl * (1 - q) + hvy / hl * q; }
+      }
+    }
+    let v0 = this.pspd[k] * (C.CIV_SPEED + f * (C.CIV_SPRINT - C.CIV_SPEED));
+    v0 *= infra === INFRA_HIGHWAY ? C.HIGHWAY_SPEED_MUL : infra === INFRA_RAIL || infra === INFRA_STATION ? C.RAIL_SPEED_MUL : 1;
+    if (this.rough[ci]) v0 *= this.roughMul(ci);
+    // speed is set by the space in front of them (Weidmann), not by the crowd behind
+    const dl0 = hyp(dx, dy) || 1, fcx = (x + (dx / dl0) * 0.9) | 0, fcy = (y + (dy / dl0) * 0.9) | 0;
+    const rhoF = fcx >= 0 && fcy >= 0 && fcx < w && fcy < this.h && walkable(this.map.tile[fcy * w + fcx]) && fcy * w + fcx !== ci ? this.dens[fcy * w + fcx] / (M * M) : this.dens[ci] / (M * M); // the front of a jam sees open space and goes
+    const rmax = C.RHO_MAX + (C.PANIC_RHO_MAX - C.RHO_MAX) * f;
+    const rv = C.SPEED_RHO_CELL ? rhoF : rho;
+    if (rv > 0.05) v0 *= rv >= rmax ? 0 : Math.max(0, 1 - Math.exp(-C.RHO_GAMMA * (1 / rv - 1 / rmax)));
+    // faster is slower (Helbing 2000): a panicked crowd pushing into a packed opening jams; bodies wedge and arch
+    if (f > 0.3 && rv > C.CLOG_RHO) v0 /= 1 + C.PANIC_CLOG * (f - 0.3) * (rv - C.CLOG_RHO);
+    if (this.act[k] === 2) v0 = 0;
+    if (wander) v0 *= 0.5;
+    const dl = hyp(dx, dy) || 1;
+    // --- steer: relax toward the wanted velocity, add the pushes (m/s2 -> cells/s2)
+    const fl = hyp(fx, fy); if (fl > 12) { fx *= 12 / fl; fy *= 12 / fl; }
+    const tau = C.CROWD_TAU + (C.PANIC_TAU - C.CROWD_TAU) * f, kr = Math.min(1, dt / tau);
+    let vx = this.velX[k] + ((dx / dl) * v0 - this.velX[k]) * kr + (fx / M) * dt;
+    let vy = this.velY[k] + ((dy / dl) * v0 - this.velY[k]) * kr + (fy / M) * dt;
+    const vl = hyp(vx, vy), vmax = C.CIV_SPRINT * 1.3;
+    if (vl > vmax) { vx *= vmax / vl; vy *= vmax / vl; }
+    // --- move, overlap push-out, walls are solid; never ride a wall's edge
+    const ol = hyp(ox, oy), oc = Math.min(0.1, ol / M), oxs = ol > 1e-6 ? (ox / ol) * oc : 0, oys = ol > 1e-6 ? (oy / ol) * oc : 0;
+    this.moveCiv(k, x, y, vx, vy, oxs, oys, dt0, safe);
+  }
+
+  private moveCiv(k: number, x: number, y: number, vx: number, vy: number, oxs: number, oys: number, dt: number, safe: boolean) {
+    let nx = Math.fround(x + vx * dt + oxs), ny = Math.fround(y);
+    if (!this.civOk(nx, ny, safe)) { nx = x; vx = 0; }
+    ny = Math.fround(y + vy * dt + oys);
+    if (!this.civOk(nx, ny, safe)) { ny = y; vy = 0; }
+    const ncx = nx | 0, ncy = ny | 0, mn = C.WALL_MIN / C.CELL_M;
+    if (nx - ncx < mn && !this.civOk(ncx - 0.5, ny, safe)) { nx = ncx + mn; if (vx < 0) vx = 0; }
+    else if (ncx + 1 - nx < mn && !this.civOk(ncx + 1.5, ny, safe)) { nx = ncx + 1 - mn; if (vx > 0) vx = 0; }
+    if (ny - ncy < mn && !this.civOk(nx, ncy - 0.5, safe)) { ny = ncy + mn; if (vy < 0) vy = 0; }
+    else if (ncy + 1 - ny < mn && !this.civOk(nx, ncy + 1.5, safe)) { ny = ncy + 1 - mn; if (vy > 0) vy = 0; }
+    this.ax[k] = Math.fround(nx); this.ay[k] = Math.fround(ny);
+    this.velX[k] = vx; this.velY[k] = vy;
+    if (safe) return;
+    const z = this.inZone[this.idx(this.ax[k] | 0, this.ay[k] | 0)];
+    if (z === 1 || z === 3) this.state[k] = SAFE_CIV; // a gate is a guarded checkpoint
+  }
+
   private mill(k: number, r: () => number, dt: number) {
     const sqz = this.padSqueeze.length ? this.padSqueeze : null;
     const here = this.idx(this.ax[k] | 0, this.ay[k] | 0);
@@ -2127,7 +2488,7 @@ export class Sim {
       const dx = this.ax[k] - this.ax[e], dy = this.ay[k] - this.ay[e], l = hyp(dx, dy) || 1;
       this.hx[k] = dx / l; this.hy[k] = dy / l; this.hp[k] = 2;
     }
-    if (this.hp[k] > 0) { this.hp[k] -= dt; sp = C.CIV_SPEED * dt; }
+    if (this.hp[k] > 0) { this.hp[k] -= dt; sp = C.CIV_SPRINT * dt; }
     else if (r() < 0.05) { const a = r() * 6.283; this.hx[k] = Math.cos(a); this.hy[k] = Math.sin(a); }
     const ci = this.idx(this.ax[k] | 0, this.ay[k] | 0);
     let clearing = false;
@@ -2146,7 +2507,7 @@ export class Sim {
     }
     // 0.22: people know where the Evac Points are and walk the zone's streets to the nearest one
     const pf = this.hasPads && this.inZone[ci] === 1 && this.hp[k] <= 0 ? this.padField[ci] : 65535;
-    if (pf !== 65535 && pf > C.EVAC_GATHER_D) {
+    if (pf !== 65535 && pf > this.gatherD) {
       const d = this.downhill(this.padField, this.ax[k] | 0, this.ay[k] | 0);
       if (d) { this.hx[k] = d[0]; this.hy[k] = d[1]; sp = C.CIV_SPEED * C.EVAC_WALK_MUL * dt; }
     }
@@ -2155,11 +2516,12 @@ export class Sim {
       if (this.dens[ci] > 1) { this.grain(k, ci); hx += this.spx * C.GRAIN_PUSH; hy += this.spy * C.GRAIN_PUSH; }
       const l = hyp(hx, hy); if (l > 1) { hx /= l; hy /= l; }
     }
-    if (this.inZone[ci] === 1 && this.hp[k] <= 0 && pf === 65535) { this.spread(this.ax[k] | 0, this.ay[k] | 0); hx += this.spx * 1.5; hy += this.spy * 1.5; } // fill the zone evenly
+    if (this.inZone[ci] === 1 && this.hp[k] <= 0 && (pf === 65535 || (pf <= this.gatherD && this.dens[ci] > C.WAIT_RHO * C.CELL_M * C.CELL_M))) { this.spread(this.ax[k] | 0, this.ay[k] | 0); hx += this.spx * 1.5; hy += this.spy * 1.5; } // fill the zone evenly
     const nx = Math.fround(this.ax[k] + hx * sp), ny = Math.fround(this.ay[k] + hy * sp);
     const ok = (x: number, y: number) => {
       if (x < 0 || y < 0 || x >= this.w || y >= this.h) return false;
       const i = this.idx(x | 0, y | 0);
+      if (i !== ci && this.dens[i] > C.MILL_MAX_DENS) return false; // 0.30: no piling into a packed cell
       return walkable(this.map.tile[i]) && (!this.occ[i] || (sqz !== null && sqz[i] === 1 && sqz[ci] === 1)) && (this.inZone[i] === 1 || i === ci || this.inZone[ci] !== 1 && this.inZone[i] === 3);
     };
     if (ok(nx, this.ay[k])) this.ax[k] = nx; else this.hx[k] = -this.hx[k];
@@ -2344,6 +2706,8 @@ export class Sim {
         f[n] = d; q[qt++] = n;
       }
     }
+    // 0.30: the street cells around the pads in order of distance, so the waiting area can be sized to its crowd
+    this.padRing = new Uint16Array(qt); for (let i = 0; i < qt; i++) this.padRing[i] = f[q[i]];
     // ...then, for anyone a unit has cut off, squeezing past it (dearer, so only the cut-off side uses it)
     const seeds: number[] = [];
     for (let i = 0; i < qt; i++) {
