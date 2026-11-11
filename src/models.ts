@@ -4,6 +4,7 @@
 // Grids face east (+x). One character is one block (a quarter cell). Rows are padded right, so widths can differ.
 import type { Unit } from "./sim";
 import type { UnitKind } from "./config";
+import { AIRFRAMES, drawAirframe } from "./aircraft";
 
 type Family = "army" | "navy" | "air" | "drone";
 const FAMILY: Record<Family, Record<string, string>> = {
@@ -170,6 +171,7 @@ function pose(u: Unit, dt: number): Pose {
 /** Draw a vehicle model at a given pose (live units and wrecks share this). */
 function drawVehicle(ctx: CanvasRenderingContext2D, kind: UnitKind, px: number, py: number, s: number, hull: number, aim: number, lift: number, spin: number, shadowOnly = false) {
   const m = MODELS[kind]; if (!m) return;
+  if (AIRFRAMES[kind]) { drawAirframe(ctx, kind, px, py, s, hull, lift / (s * 0.9), spin, spin === 0); return; } // 0.29: real-size aircraft
   const b = s / 4; // pixels per block
   const smooth = ctx.imageSmoothingEnabled; ctx.imageSmoothingEnabled = false;
   for (const pass of m.air && lift > 0 ? ["shadow", "body"] as const : ["body"] as const) {
@@ -201,7 +203,8 @@ function drawVehicle(ctx: CanvasRenderingContext2D, kind: UnitKind, px: number, 
 export function drawModel(ctx: CanvasRenderingContext2D, u: Unit, px: number, py: number, s: number, dt: number, now: number) {
   const m = MODELS[u.kind]; if (!m) return;
   const p = pose(u, dt);
-  const hull = m.hullTurns === "aim" ? p.aim : m.hullTurns === "none" ? 0 : p.heading;
+  // a hovering gunship points its nose (and gun) at what it is shooting; on the move it faces where it goes
+  const hull = m.hullTurns === "aim" ? p.aim : m.hullTurns === "none" ? 0 : m.air && u.kind === "apache" && p.moveT > 0.5 ? p.aim : p.heading;
   const lift = m.air ? s * (0.9 + 0.08 * Math.sin(now / 400 + p.spin)) : 0;
   drawVehicle(ctx, u.kind, px, py, s, hull, p.aim, lift, p.spin);
 }

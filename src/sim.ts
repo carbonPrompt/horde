@@ -87,6 +87,7 @@ export interface Transport {
   hoverS: number;
   color: string;
   label?: string;
+  air?: string; // which airframe to draw when the kind alone doesn't say (A-10, AC-130, MC-130, Tomahawk)
 }
 export interface Parachute {
   kind: "trooper" | "supply" | "apc";
@@ -761,15 +762,22 @@ export class Sim {
   }
 
   /** Spawn a fixed-wing aircraft (C-130J or Strike Jet) flying across the map over `(tx, ty)`. */
-  spawnFlyover(kind: TransportKind, tx: number, ty: number, dur: number, color: string, angle?: number, label?: string) {
+  spawnFlyover(kind: TransportKind, tx: number, ty: number, dur: number, color: string, angle?: number, label?: string, air?: string) {
     const ang = angle ?? ((this.tick * 0.7 + tx * 0.03) % 1 > 0.5 ? 0.18 : Math.PI - 0.18);
     const dist = Math.max(this.w, this.h) * 0.75;
     const sx = tx - Math.cos(ang) * dist, sy = ty - Math.sin(ang) * dist;
     const ex = tx + Math.cos(ang) * dist, ey = ty + Math.sin(ang) * dist;
     this.transports.push({
       kind, x: sx, y: sy, sx, sy, tx, ty, ex, ey,
-      angle: ang, t: 0, dur: Math.max(1.6, dur), hoverS: 0, color, label,
+      angle: ang, t: 0, dur: Math.max(1.6, dur), hoverS: 0, color, label, air,
     });
+  }
+
+  /** A cruise missile: flies in from off the map and ends at `(tx, ty)` when it hits, `dur` seconds from now. */
+  spawnMissile(tx: number, ty: number, dur: number, color: string, label?: string) {
+    const ang = (this.tick * 0.37 + tx * 0.05) % 6.2832, dist = Math.max(this.w, this.h) * 0.9;
+    const sx = tx - Math.cos(ang) * dist, sy = ty - Math.sin(ang) * dist;
+    this.transports.push({ kind: "jet_strike", x: sx, y: sy, sx, sy, tx, ty, ex: tx, ey: ty, angle: ang, t: 0, dur, hoverS: 0, color, label, air: "tomahawk" });
   }
 
   /** Spawn descending parachutes (`trooper`, `supply`, or `apc`) around `(x, y)`. */
@@ -1051,15 +1059,15 @@ export class Sim {
     } else if (k === "supply_drop") {
       this.spawnFlyover("c130_supply", x, y, delay * 1.25, "#4fc3f7", undefined, "C-130J Supply Drop");
     } else if (k === "a10") {
-      this.spawnFlyover("jet_strike", (x + x2) / 2, (y + y2) / 2, delay * 1.35, "#90a4ae", Math.atan2(y2 - y, x2 - x), "A-10 Gun Run");
+      this.spawnFlyover("jet_strike", (x + x2) / 2, (y + y2) / 2, delay * 1.35, "#90a4ae", Math.atan2(y2 - y, x2 - x), "A-10 Gun Run", "a10");
     } else if (k === "cluster") {
       this.spawnFlyover("jet_strike", x, y, delay * 1.3, "#ffab91", undefined, "CBU-97 Cluster Drop");
     } else if (k === "tomahawk") {
-      this.spawnFlyover("jet_strike", x, y, delay * 1.05, "#e0e0e0", undefined, "TOMAHAWK INBOUND");
+      this.spawnMissile(x, y, delay, "#e0e0e0", "TOMAHAWK INBOUND");
     } else if (k === "gunship") {
-      this.spawnFlyover("c130_para", x, y, delay * 1.2, "#ce93d8", undefined, "AC-130J Ghostrider");
+      this.spawnFlyover("c130_para", x, y, delay * 1.2, "#ce93d8", undefined, "AC-130J Ghostrider", "ac130");
     } else if (k === "moab") {
-      this.spawnFlyover("c130_supply", x, y, delay * 1.2, "#ffcc80", undefined, "MC-130J: GBU-43 MOAB");
+      this.spawnFlyover("c130_supply", x, y, delay * 1.2, "#ffcc80", undefined, "MC-130J: GBU-43 MOAB", "mc130");
     } else if (k === "nuke") {
       this.spawnFlyover("jet_strike", x, y, delay * 1.1, "#76ff03", undefined, "INBOUND: TACTICAL NUCLEAR STRIKE");
     }
@@ -1217,7 +1225,7 @@ export class Sim {
   private stepOrbits(dt: number) {
     this.orbits = this.orbits.filter(o => o.until > this.time);
     for (const o of this.orbits) {
-      o.angle += dt * 0.5;
+      o.angle -= dt * 0.5; // a left-hand orbit: the guns point out the left side, at the middle
       o.gunT -= dt;
       while (o.gunT <= 0) {
         o.gunT += 1 / C.GUNSHIP_GUN_RATE;

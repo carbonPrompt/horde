@@ -21,6 +21,7 @@ import { AlertQueue } from "./ticker";
 import { partPoints, mergeBest, bestKey, anyMedal, difficultyFor } from "./scoring";
 import { soundDue, zoomGain } from "./audiotiming";
 import { cleanQuickbar, setSlot, swapSlots, clearSlot, type Slots } from "./quickbar";
+import { airHalfPx, drawAirframe, smoothHeading } from "./aircraft";
 import { drawDepot, drawModel, drawSquad, drawSupport, drawWrecks, hasModel, hasSquad, MODEL_ZOOM, noteUnits, SQUAD_ZOOM } from "./models";
 
 installErrorHooks();
@@ -1013,9 +1014,8 @@ function draw(now: number) {
     ctx.strokeStyle = "rgba(206,147,216,0.5)"; ctx.lineWidth = 1.5; ctx.setLineDash([8, 6]);
     ctx.beginPath(); ctx.arc(ox, oy, R, 0, 7); ctx.stroke(); ctx.setLineDash([]);
     const px = ox + Math.cos(o.angle) * R * 1.15, py = oy + Math.sin(o.angle) * R * 1.15;
-    const gSp = SPRITE_CANVAS.gunship;
-    if (gSp) { ctx.save(); ctx.translate(px, py); ctx.rotate(o.angle + Math.PI); spr(gSp, -12, -12, 24, 24); ctx.restore(); }
-    label(`AC-130 ${Math.ceil(o.until - sim.time)}s`, px + 14, py - 10);
+    drawAirframe(ctx, "ac130", px, py, s, o.angle - Math.PI / 2, 1, now / 1000 * 12); // left-hand pylon turn, guns to the middle
+    label(`AC-130 ${Math.ceil(o.until - sim.time)}s`, px + airHalfPx("ac130", s) + 4, py - 10);
   }
   // Fallout: a sickly green haze that fades as it decays.
   for (const f of sim.fallout) {
@@ -1320,7 +1320,9 @@ function drawPlacementGrid(hx: number, hy: number, foot: number, ok: boolean, s:
   ctx.fillStyle = ok ? "rgba(74,222,128,0.30)" : "rgba(239,68,68,0.32)"; ctx.fillRect(...r);
   ctx.strokeStyle = ok ? "#4ade80" : "#ef4444"; ctx.lineWidth = Math.max(1.5, s * 0.12); ctx.strokeRect(...r);
 }
+let lastAirT = 0;
 function drawTransports(now: number, s: number) {
+  const airDt = Math.min(0.1, Math.max(0, (now - lastAirT) / 1000)); lastAirT = now;
   // 1. Descending parachutes
   for (const ch of sim.chutes) {
     const gx = cam.x + ch.x * s, gy = cam.y + ch.y * s;
@@ -1378,95 +1380,16 @@ function drawTransports(now: number, s: number) {
         ctx.beginPath(); ctx.moveTo(px, py); ctx.lineTo(tx, ty); ctx.stroke();
       }
     }
-    ctx.save();
-    ctx.translate(px, py);
-    ctx.rotate(tr.angle);
-    // Ground shadow offset
-    ctx.fillStyle = "rgba(0,0,0,0.35)";
-    ctx.fillRect(-r * 0.8 + 6, -r * 0.25 + 8, r * 1.6, r * 0.5);
-
-    if (isDrone) {
-      ctx.strokeStyle = "#ffb74d"; ctx.lineWidth = 1.5;
-      ctx.beginPath(); ctx.moveTo(-r, -r); ctx.lineTo(r, r); ctx.moveTo(-r, r); ctx.lineTo(r, -r); ctx.stroke();
-      ctx.fillStyle = "#ffb74d"; ctx.fillRect(-r * 0.35, -r * 0.35, r * 0.7, r * 0.7);
-      ctx.strokeStyle = "rgba(255,255,255,0.65)"; ctx.lineWidth = 1;
-      for (const [dx, dy] of [[-r, -r], [r, -r], [-r, r], [r, r]]) {
-        ctx.beginPath(); ctx.arc(dx, dy, r * 0.45, 0, 7); ctx.stroke();
-      }
-    } else if (tr.kind === "helo_ch47") {
-      // CH-47 Chinook tandem twin-rotor heavy-lift helo
-      ctx.fillStyle = "#37474f"; ctx.strokeStyle = tr.color; ctx.lineWidth = 1.5;
-      ctx.beginPath(); ctx.roundRect(-r * 1.15, -r * 0.34, r * 2.3, r * 0.68, r * 0.25); ctx.fill(); ctx.stroke();
-      const rot = now / 28;
-      for (const ox of [-r * 0.85, r * 0.85]) {
-        ctx.strokeStyle = "rgba(220,235,245,0.45)"; ctx.lineWidth = 1.2;
-        ctx.beginPath(); ctx.arc(ox, 0, r * 1.05, 0, 7); ctx.stroke();
-        ctx.strokeStyle = "#eceff1"; ctx.lineWidth = 1.8;
-        for (let b = 0; b < 3; b++) {
-          const a = (ox < 0 ? -rot : rot) + (b * Math.PI * 2) / 3;
-          ctx.beginPath(); ctx.moveTo(ox, 0); ctx.lineTo(ox + Math.cos(a) * r * 1.02, Math.sin(a) * r * 1.02); ctx.stroke();
-        }
-      }
-    } else if (isHelo) {
-      // UH-60 Black Hawk tactical helicopter
-      ctx.fillStyle = tr.kind === "helo_extract" ? "#455a64" : "#263238";
-      ctx.strokeStyle = tr.color; ctx.lineWidth = 1.5;
-      ctx.beginPath();
-      ctx.moveTo(r * 0.95, 0);
-      ctx.lineTo(r * 0.35, -r * 0.32);
-      ctx.lineTo(-r * 0.45, -r * 0.26);
-      ctx.lineTo(-r * 1.25, -r * 0.08);
-      ctx.lineTo(-r * 1.25, r * 0.08);
-      ctx.lineTo(-r * 0.45, r * 0.26);
-      ctx.lineTo(r * 0.35, r * 0.32);
-      ctx.closePath(); ctx.fill(); ctx.stroke();
-      // Spinning 4-blade main rotor
-      ctx.strokeStyle = "rgba(220,235,245,0.4)"; ctx.lineWidth = 1.2;
-      ctx.beginPath(); ctx.arc(r * 0.1, 0, r * 1.15, 0, 7); ctx.stroke();
-      const rot = now / 25;
-      ctx.strokeStyle = "#cfd8dc"; ctx.lineWidth = 1.6;
-      for (let b = 0; b < 2; b++) {
-        const a = rot + (b * Math.PI) / 2;
-        ctx.beginPath();
-        ctx.moveTo(r * 0.1 - Math.cos(a) * r * 1.1, -Math.sin(a) * r * 1.1);
-        ctx.lineTo(r * 0.1 + Math.cos(a) * r * 1.1, Math.sin(a) * r * 1.1);
-        ctx.stroke();
-      }
-    } else if (isJet) {
-      // F-15E Strike Eagle swept-wing fighter with twin afterburners
-      ctx.fillStyle = "#ff9100";
-      ctx.beginPath(); ctx.moveTo(-r * 0.95, -r * 0.14); ctx.lineTo(-r * 1.65, 0); ctx.lineTo(-r * 0.95, r * 0.14); ctx.fill();
-      ctx.fillStyle = "#37474f"; ctx.strokeStyle = tr.color; ctx.lineWidth = 1.5;
-      ctx.beginPath();
-      ctx.moveTo(r * 1.35, 0);
-      ctx.lineTo(r * 0.25, -r * 0.22);
-      ctx.lineTo(-r * 0.55, -r * 1.05);
-      ctx.lineTo(-r * 0.85, -r * 1.05);
-      ctx.lineTo(-r * 0.65, -r * 0.25);
-      ctx.lineTo(-r * 1.0, -r * 0.42);
-      ctx.lineTo(-r * 1.0, r * 0.42);
-      ctx.lineTo(-r * 0.65, r * 0.25);
-      ctx.lineTo(-r * 0.85, r * 1.05);
-      ctx.lineTo(-r * 0.55, r * 1.05);
-      ctx.lineTo(r * 0.25, r * 0.22);
-      ctx.closePath(); ctx.fill(); ctx.stroke();
-    } else {
-      // C-130J Super Hercules 4-turboprop heavy airlifter
-      ctx.fillStyle = "#37474f"; ctx.strokeStyle = tr.color; ctx.lineWidth = 1.6;
-      // Straight high wing
-      ctx.beginPath(); ctx.roundRect(-r * 0.2, -r * 1.35, r * 0.52, r * 2.7, 2); ctx.fill(); ctx.stroke();
-      // Tailplane
-      ctx.beginPath(); ctx.roundRect(-r * 1.18, -r * 0.58, r * 0.28, r * 1.16, 2); ctx.fill(); ctx.stroke();
-      // Fuselage
-      ctx.beginPath(); ctx.roundRect(-r * 1.2, -r * 0.26, r * 2.35, r * 0.52, r * 0.24); ctx.fill(); ctx.stroke();
-      // 4 spinning prop discs on the leading edge
-      ctx.strokeStyle = "rgba(255,255,255,0.65)"; ctx.lineWidth = 1.4;
-      for (const wy of [-r * 0.95, -r * 0.52, r * 0.52, r * 0.95]) {
-        ctx.beginPath(); ctx.moveTo(r * 0.36, wy - r * 0.14); ctx.lineTo(r * 0.36, wy + r * 0.14); ctx.stroke();
-      }
+    // 0.29: real-size airframes; helicopters settle low over the drop point and climb out again
+    const air = tr.air ?? (isDrone ? "quad" : tr.kind === "helo_ch47" ? "ch47" : isHelo ? "uh60" : isJet ? "f15e" : "c130");
+    let alt = 1;
+    if (tr.hoverS > 0) {
+      const leg = (tr.dur - tr.hoverS) / 2, ease = (v: number) => { v = Math.max(0, Math.min(1, v)); return v * v * (3 - 2 * v); };
+      alt = tr.t < leg ? 1 - 0.7 * ease((tr.t / leg - 0.7) / 0.3) : tr.t < leg + tr.hoverS ? 0.3 : 0.3 + 0.7 * ease((tr.t - leg - tr.hoverS) / (leg * 0.5));
     }
-    ctx.restore();
-    if (tr.label && s > 1.1) label(tr.label, px + r + 5, py - 4);
+    const head = smoothHeading(tr, tr.angle, airDt, isHelo || isDrone ? 2.5 : 1.2);
+    drawAirframe(ctx, air, px, py, s, head, alt, now / 1000 * (isDrone ? 30 : 12));
+    if (tr.label && s > 1.1) label(tr.label, px + airHalfPx(air, s) + 5, py - 4);
   }
 
   // 3. Mass Transit Evacuation Trains (4-car articulated commuter/metro consists on rail lines)
