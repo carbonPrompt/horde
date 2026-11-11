@@ -1225,3 +1225,148 @@ test("claws barely scratch tanks and APCs", () => {
   expect(C.UNITS.apc.clawMul!).toBeLessThan(0.5);
   expect(C.UNITS.tank.clawMul!).toBeLessThan(C.UNITS.apc.clawMul!);
 });
+
+// 0.27: people route around units to the Evac Point; walls stop ground units and their fire
+function wallUp(s: Sim) { for (let i = 0; i < s.inZone.length; i++) if (s.inZone[i] === 3) s.toggleGate(i % s.w, (i / s.w) | 0); }
+
+test("the Evac Point route goes around units, and squeezes past one that plugs the street", () => {
+  const s = new Sim(42, { budget: 80_000_000 });
+  s.setZone(zoneAroundCenter(s, 34));
+  const spots = zoneBuildings(s).sort((a, b) => a[0] + a[1] - (b[0] + b[1]));
+  for (const [x, y] of spots) if (!s.placeSupport("evac", x, y)) break;
+  const a = s as any;
+  a.buildPadField();
+  const free = a.padField.slice();
+  const midY = Math.round(s.h / 4), cx = Math.round(s.w / 2);
+  const intoUnit = () => {
+    let n = 0;
+    for (let i = 0; i < a.padField.length; i++) {
+      if (a.occ[i] || a.padField[i] === 65535 || a.padField[i] === 0 || a.padSqueeze[i]) continue;
+      const d = a.downhill(a.padField, i % s.w, (i / s.w) | 0);
+      if (d && a.occ[s.idx(Math.round((i % s.w) + d[0]), Math.round(((i / s.w) | 0) + d[1]))]) n++;
+    }
+    return n;
+  };
+  // a unit block across part of the zone: there is a way around it, so nobody routes into it
+  a.occ.fill(0);
+  for (let x = cx - 34; x < cx + 10; x++) for (let y = midY; y < midY + 3; y++) a.occ[s.idx(x, y)] = 1;
+  a.buildPadField();
+  expect(intoUnit()).toBe(0);
+  // a band across the whole zone: the far side is reachable only by squeezing past
+  a.occ.fill(0);
+  for (let x = 0; x < s.w; x++) for (let y = midY; y < midY + 3; y++) a.occ[s.idx(x, y)] = 1;
+  a.buildPadField();
+  let far = 0, farReached = 0;
+  for (let i = 0; i < free.length; i++) {
+    if (free[i] === 65535 || a.occ[i] || ((i / s.w) | 0) < midY + 3) continue;
+    far++; if (a.padField[i] !== 65535) farReached++;
+  }
+  expect(far).toBeGreaterThan(50);
+  expect(farReached).toBe(far);
+});
+
+test("people in the zone are not stuck behind a howitzer on the way to the Evac Point", () => {
+  const keep = C.EVAC_EVERY_S;
+  C.TUNABLE.EVAC_EVERY_S[1](1e6);
+  try {
+    const s = new Sim(42, { budget: 80_000_000 });
+    s.setZone(zoneAroundCenter(s, 34));
+    const spots = zoneBuildings(s).sort((a, b) => a[0] + a[1] - (b[0] + b[1]));
+    let pad: Support | undefined;
+    for (const [x, y] of spots) if (!s.placeSupport("evac", x, y)) { pad = s.supports[s.supports.length - 1]; break; }
+    // howitzers on zone streets between the pad and the people
+    let placed = 0;
+    for (const [x, y] of streetSpots(s)) {
+      const d = Math.hypot(x - pad!.x, y - pad!.y);
+      if (s.inZone[s.idx(x, y)] === 1 && d > 10 && d < 30 && !s.place("howitzer", x, y)) placed++;
+      if (placed >= 4) break;
+    }
+    expect(placed).toBeGreaterThan(0);
+    s.dev.bites = false;
+    s.startBattle();
+    while (s.time < 100) s.step();
+    let near = 0, safe = 0;
+    for (let k = 0; k < s.civN; k++) if (s.state[k] === SAFE_CIV) { safe++; if (Math.hypot(s.ax[k] - pad!.x, s.ay[k] - pad!.y) < C.SUPPORTS.evac.radius) near++; }
+    expect(safe).toBeGreaterThan(100);
+    expect(near / safe).toBeGreaterThan(0.5);
+    // nobody still on the way is pinned against a howitzer
+    const a = s as any;
+    let pinned = 0;
+    for (let k = 0; k < s.civN; k++) {
+      if (s.state[k] !== SAFE_CIV) continue;
+      const x = s.ax[k] | 0, y = s.ay[k] | 0;
+      if (a.padField[s.idx(x, y)] <= C.EVAC_GATHER_D || Math.hypot(s.ax[k] - pad!.x, s.ay[k] - pad!.y) < C.SUPPORTS.evac.radius) continue; // arrived, waiting for a lift
+      let touch = false;
+      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) if (a.occ[s.idx(x + dx, y + dy)]) touch = true;
+      if (touch) pinned++;
+    }
+    expect(pinned).toBeLessThan(3);
+  } finally { C.TUNABLE.EVAC_EVERY_S[1](keep); }
+}, 120000);
+
+test("a standing wall stops ground units; gates and breaches let them through", () => {
+  const s = new Sim(42, { budget: 80_000_000 });
+  s.setZone(zoneAroundCenter(s, 34));
+  let gate = -1;
+  for (let i = 0; i < s.inZone.length; i++) if (s.inZone[i] === 3) { gate = i; break; }
+  expect(s.unitPass(gate)).toBe(true);
+  wallUp(s);
+  expect(s.inZone[gate]).toBe(2);
+  expect(s.unitPass(gate)).toBe(false);
+  s.wallHp[gate] = 0;
+  expect(s.unitPass(gate)).toBe(true); // breached
+});
+
+test("an APC outside a walled zone can't drive in when recalled", () => {
+  const s = new Sim(42, { budget: 80_000_000 });
+  s.setZone(zoneAroundCenter(s, 34));
+  wallUp(s);
+  let apc: any;
+  for (const [x, y] of streetSpots(s)) if (!s.inZone[s.idx(x, y)] && s.distToZone(x, y) > 6 && s.distToZone(x, y) < 12 && !s.place("apc", x, y)) { apc = s.units[s.units.length - 1]; break; }
+  expect(apc).toBeDefined();
+  s.dev.bites = false; s.dev.unitDamage = false;
+  s.startBattle();
+  s.recallAll();
+  let crossed = false;
+  for (let i = 0; i < 400; i++) { s.step(); const z = s.inZone[s.idx(Math.floor(apc.x + 0.5), Math.floor(apc.y + 0.5))]; if (z === 1 || z === 2) crossed = true; }
+  expect(crossed).toBe(false);
+}, 60000);
+
+test("ground units can't shoot through a standing wall; rooftop units can", () => {
+  const s = new Sim(42, { budget: 80_000_000 });
+  s.setZone(zoneAroundCenter(s, 34));
+  wallUp(s);
+  // a wall cell with zone street on one side and open street on the other
+  let wall = -1, inX = 0, inY = 0, outX = 0, outY = 0;
+  for (let i = 0; i < s.inZone.length && wall < 0; i++) {
+    if (s.inZone[i] !== 2) continue;
+    const x = i % s.w, y = (i / s.w) | 0;
+    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      const a = s.idx(x - dx * 3, y - dy * 3), b = s.idx(x + dx * 3, y + dy * 3);
+      if (s.inZone[a] === 1 && s.map.tile[a] === 0 && !s.inZone[b] && s.map.tile[b] === 0) { wall = i; inX = x - dx * 3; inY = y - dy * 3; outX = x + dx * 3; outY = y + dy * 3; break; }
+    }
+  }
+  expect(wall).toBeGreaterThanOrEqual(0);
+  expect(s.lineClear(inX + 0.5, inY + 0.5, outX + 0.5, outY + 0.5)).toBe(false);
+  s.wallHp[wall] = 0;
+  // one breached cell is not enough if the line still crosses another standing cell; check a fully open line
+  const wx = wall % s.w, wy = (wall / s.w) | 0;
+  expect(s.lineClear(wx + 0.5, wy + 0.5, outX + 0.5, outY + 0.5)).toBe(true);
+  s.wallHp[wall] = s.wallMaxHp();
+  expect(s.blockedByWalls("turret")).toBe(true);
+  expect(s.blockedByWalls("tank")).toBe(true);
+  expect(s.blockedByWalls("apc")).toBe(true);
+  expect(s.blockedByWalls("para")).toBe(true);
+  expect(s.blockedByWalls("gunboat")).toBe(true);
+  for (const k of ["garrison", "sniper", "mortar", "howitzer", "himars", "battleship", "apache", "reaper"]) expect(s.blockedByWalls(k)).toBe(false);
+  // a turret just inside the wall, infected only beyond it: it holds fire
+  expect(s.place("turret", inX, inY)).toBeNull();
+  const tur = s.units[s.units.length - 1];
+  s.dev.bites = false; s.dev.unitDamage = false;
+  s.startBattle();
+  s.devClearInfected();
+  for (let i = 0; i < 5; i++) s.spawnInfected(outX + 0.5, outY + 0.5, 1e9);
+  const ammo0 = tur.ammo;
+  for (let i = 0; i < 20; i++) s.step();
+  expect(tur.ammo).toBe(ammo0);
+}, 60000);

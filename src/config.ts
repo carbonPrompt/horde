@@ -118,6 +118,8 @@ export let KILL_BOUNTY = 1_000;
 export let EXTRACT_MUL = 1.5; // selling mid-battle: the unit sits out 1.5x its deploy time (at least 5 s) before it is pulled out
 export let CRUSH_SLOW_S = 0.8; // 0.25: seconds a tank or APC stays slowed after crushing infected
 export let CRUSH_YIELD_MUL = 0.3; // speed when civilians are in its way (it never runs people over)
+/** 0.27: extra steps the Evac Point route charges for squeezing past a unit that plugs a street (so people walk around one when they can). */
+export let SQUEEZE_COST = 30;
 export let MOBILE_HURT_DPS = 6; // per infected touching an APC or squad
 export let GATE_HP = 3000; // gates let civilians in but break sooner than walls (WALL_HP)
 
@@ -300,7 +302,7 @@ export let SWIMMER_BASE_FRAC = 0.08;
 export let SWIMMER_WAVE_GROWTH = 0.015;
 export let SWIMMER_MAX_FRAC = 0.25;
 
-export const VERSION = "0.26.1";
+export const VERSION = "0.27.0";
 
 /** The campaign: fixed cities that unlock in order (a medal on one opens the next). */
 export interface CityDef { id: string; name: string; seed: number; budget: number; waveMul: number; sites: number; speedMul: number; blurb: string; real?: boolean; trial?: string } // trial: hardware this city lends you before you unlock it
@@ -741,6 +743,7 @@ export const TUNABLE: Record<string, [() => number, (v: number) => void]> = {
   EXTRACT_MUL: [() => EXTRACT_MUL, v => { EXTRACT_MUL = v; }],
   CRUSH_SLOW_S: [() => CRUSH_SLOW_S, v => { CRUSH_SLOW_S = v; }],
   CRUSH_YIELD_MUL: [() => CRUSH_YIELD_MUL, v => { CRUSH_YIELD_MUL = v; }],
+  SQUEEZE_COST: [() => SQUEEZE_COST, v => { SQUEEZE_COST = v; }],
   MOBILE_HURT_DPS: [() => MOBILE_HURT_DPS, v => { MOBILE_HURT_DPS = v; }],
   GATE_HP: [() => GATE_HP, v => { GATE_HP = v; }],
   BUDGET_DISCOUNT: [() => BUDGET_DISCOUNT, v => { BUDGET_DISCOUNT = v; }],

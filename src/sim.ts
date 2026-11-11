@@ -395,6 +395,49 @@ export class Sim {
     return true;
   }
 
+  /** 0.27: a street cell a ground unit can drive on: standing walls stop it (gates open for it, breaches let it through). */
+  unitPass(i: number) {
+    return walkable(this.map.tile[i]) && !(this.inZone[i] === 2 && this.wallHp[i] > 0);
+  }
+  /** 0.27: direct-fire units on the ground (and the gunboat) can't shoot through a standing wall;
+   *  artillery, rooftop units and aircraft fire over it. */
+  blockedByWalls(kind: string) {
+    const spec = (C.UNITS as Record<string, C.UnitSpec | undefined>)[kind];
+    if (!spec || spec.minRange || spec.on === "building" || spec.mobile?.nav === "air") return false;
+    return true;
+  }
+  /** 0.27: the line between two points doesn't cross the zone's perimeter except through a gate or a breach:
+   *  no standing wall cell on it, and no step straight from inside the zone to outside (that's through a perimeter building). */
+  lineClear(x0: number, y0: number, x1: number, y1: number) {
+    const dx = x1 - x0, dy = y1 - y0, n = Math.ceil(Math.max(Math.abs(dx), Math.abs(dy)) * 2);
+    let prev = this.inZone[this.idx(Math.min(this.w - 1, Math.max(0, x0 | 0)), Math.min(this.h - 1, Math.max(0, y0 | 0)))];
+    for (let s = 1; s <= n; s++) {
+      const x = (x0 + dx * s / n) | 0, y = (y0 + dy * s / n) | 0;
+      if (x < 0 || y < 0 || x >= this.w || y >= this.h) continue;
+      const i = y * this.w + x, z = this.inZone[i];
+      if (z === 2 && this.wallHp[i] > 0) return false;
+      if ((prev === 1 && z === 0) || (prev === 0 && z === 1)) return false;
+      prev = z;
+    }
+    return true;
+  }
+  /** 0.27: nearest infected in r that the unit can see past the walls. */
+  private nearestSeen(x: number, y: number, r: number) {
+    const t = this.nearest(x, y, r, INF, 255, 400);
+    if (t < 0 || this.lineClear(x, y, this.ax[t], this.ay[t])) return t;
+    const b0x = Math.max(0, ((x - r) / BUCKET) | 0), b1x = Math.min(this.bw - 1, ((x + r) / BUCKET) | 0);
+    const b0y = Math.max(0, ((y - r) / BUCKET) | 0), b1y = Math.min(this.bh - 1, ((y + r) / BUCKET) | 0);
+    let best = -1, bs = r * r, checks = 600;
+    for (let by = b0y; by <= b1y; by++) for (let bx = b0x; bx <= b1x; bx++)
+      for (let k = this.head[by * this.bw + bx]; k !== -1; k = this.next[k]) {
+        if (--checks <= 0) return best;
+        if (this.state[k] !== INF) continue;
+        const ddx = this.ax[k] - x, ddy = this.ay[k] - y, d2 = ddx * ddx + ddy * ddy;
+        if (d2 <= bs && this.lineClear(x, y, this.ax[k], this.ay[k])) { bs = d2; best = k; }
+      }
+    return best;
+  }
+
   private placeCivilians(seed: number) {
     const r = rng(seed ^ 0x5bd1e995);
     const spots: number[] = [];
@@ -1643,14 +1686,14 @@ export class Sim {
     curInf = true; curSwim = true; run(this.swimField, true);
     for (const [f, dir] of [[this.civField, this.civDir], [this.infField, this.infDir], [this.swimField, this.swimDir]] as const)
       for (let i = 0; i < cells; i++) { const d = this.downhill(f, i % this.w, (i / this.w) | 0); dir[2 * i] = d ? d[0] : 0; dir[2 * i + 1] = d ? d[1] : 0; }
-    // APCs drive through our own gates and walls (they open for them).
+    // Ground units drive through our own gates; standing walls stop them (0.27).
     this.apcField.fill(65535);
     let qh = 0, qt = 0;
     for (let i = 0; i < cells; i++) if (this.inZone[i] === 1 && walkable(this.map.tile[i])) { this.apcField[i] = 0; q[qt++] = i; }
     while (qh < qt) {
       const c = q[qh++], cx = c % this.w, d = this.apcField[c] + 1;
       for (const n of [cx > 0 ? c - 1 : -1, cx < this.w - 1 ? c + 1 : -1, c - this.w, c + this.w]) {
-        if (n < 0 || n >= cells || this.apcField[n] !== 65535 || !walkable(this.map.tile[n])) continue;
+        if (n < 0 || n >= cells || this.apcField[n] !== 65535 || !this.unitPass(n)) continue;
         this.apcField[n] = d; q[qt++] = n;
       }
     }
@@ -1923,7 +1966,9 @@ export class Sim {
   }
 
   private mill(k: number, r: () => number, dt: number) {
-    if (this.occ[this.idx(this.ax[k] | 0, this.ay[k] | 0)]) { // 0.24: step out from under a unit
+    const sqz = this.padSqueeze.length ? this.padSqueeze : null;
+    const here = this.idx(this.ax[k] | 0, this.ay[k] | 0);
+    if (this.occ[here] && !(sqz && sqz[here])) { // 0.24: step out from under a unit (unless squeezing past it, 0.27)
       for (let rr = 1; rr <= 5; rr++) for (let dy = -rr; dy <= rr; dy++) for (let dx = -rr; dx <= rr; dx++) {
         const x = (this.ax[k] | 0) + dx, y = (this.ay[k] | 0) + dy;
         if (x < 0 || y < 0 || x >= this.w || y >= this.h) continue;
@@ -1957,7 +2002,7 @@ export class Sim {
     const ok = (x: number, y: number) => {
       if (x < 0 || y < 0 || x >= this.w || y >= this.h) return false;
       const i = this.idx(x | 0, y | 0);
-      return walkable(this.map.tile[i]) && !this.occ[i] && (this.inZone[i] === 1 || i === ci || this.inZone[ci] !== 1 && this.inZone[i] === 3);
+      return walkable(this.map.tile[i]) && (!this.occ[i] || (sqz !== null && sqz[i] === 1 && sqz[ci] === 1)) && (this.inZone[i] === 1 || i === ci || this.inZone[ci] !== 1 && this.inZone[i] === 3);
     };
     if (ok(nx, this.ay[k])) this.ax[k] = nx; else this.hx[k] = -this.hx[k];
     if (ok(this.ax[k], ny)) this.ay[k] = ny; else this.hy[k] = -this.hy[k];
@@ -2130,14 +2175,40 @@ export class Sim {
         if (f[i] === 65535 && this.inZone[i] === 1 && walkable(this.map.tile[i])) { f[i] = 0; q[qt++] = i; }
       }
     }
+    // 0.27: first around the units (people never walk into a howitzer when there is a way past it)...
+    const sq = this.padSqueeze.length === cells ? this.padSqueeze : (this.padSqueeze = new Uint8Array(cells));
+    sq.fill(0);
+    const open = (n: number) => n >= 0 && n < cells && f[n] === 65535 && this.inZone[n] === 1 && walkable(this.map.tile[n]);
     while (qh < qt) {
       const c = q[qh++], cx = c % this.w, d = f[c] + 1;
       for (const n of [cx > 0 ? c - 1 : -1, cx < this.w - 1 ? c + 1 : -1, c - this.w, c + this.w]) {
-        if (n < 0 || n >= cells || f[n] !== 65535 || this.inZone[n] !== 1 || !walkable(this.map.tile[n])) continue;
+        if (!open(n) || this.occ[n]) continue;
         f[n] = d; q[qt++] = n;
       }
     }
+    // ...then, for anyone a unit has cut off, squeezing past it (dearer, so only the cut-off side uses it)
+    const seeds: number[] = [];
+    for (let i = 0; i < qt; i++) {
+      const c = q[i], cx = c % this.w;
+      for (const n of [cx > 0 ? c - 1 : -1, cx < this.w - 1 ? c + 1 : -1, c - this.w, c + this.w]) {
+        if (!open(n) || !this.occ[n]) continue;
+        f[n] = Math.min(65534, f[c] + C.SQUEEZE_COST); sq[n] = 1; seeds.push(n);
+      }
+    }
+    if (!seeds.length) return;
+    seeds.sort((x, y) => f[x] - f[y]);
+    qh = 0; qt = 0;
+    for (const n of seeds) q[qt++] = n;
+    while (qh < qt) {
+      const c = q[qh++], cx = c % this.w, d = Math.min(65534, f[c] + 1);
+      for (const n of [cx > 0 ? c - 1 : -1, cx < this.w - 1 ? c + 1 : -1, c - this.w, c + this.w]) {
+        if (!open(n)) continue;
+        f[n] = d; sq[n] = 1; q[qt++] = n;
+      }
+    }
   }
+  /** 0.27: cells whose way to an Evac Point squeezes past a unit (a unit plugs the street). */
+  padSqueeze = new Uint8Array(0);
 
   private findSquadSpawn(bx: number, by: number): [number, number] | null {
     for (const insideFirst of [true, false]) {
@@ -2199,7 +2270,8 @@ export class Sim {
       if (cn) {
         u.cooldown2 = (u.cooldown2 ?? 0) - dt;
         if (u.cooldown2 <= 0 && u.ammo >= 1) {
-          const t = this.nearest(u.x + 0.5, u.y + 0.5, cn.range * (u.range / spec.range), INF, 255, 400);
+          const cr = cn.range * (u.range / spec.range);
+          const t = this.blockedByWalls(u.kind) ? this.nearestSeen(u.x + 0.5, u.y + 0.5, cr) : this.nearest(u.x + 0.5, u.y + 0.5, cr, INF, 255, 400);
           if (t < 0) u.cooldown2 = 0;
           else {
             u.cooldown2 += 1 / (cn.rate * (u.rateMul ?? 1));
@@ -2216,7 +2288,8 @@ export class Sim {
   /** Target for a direct-fire unit, by its priority. */
   private pickTarget(u: Unit) {
     const x = u.x + 0.5, y = u.y + 0.5, R = u.range, mode = u.mode ?? "near";
-    if (mode === "near") return this.nearest(x, y, R, INF, 255, 400);
+    const los = this.blockedByWalls(u.kind); // 0.27: can't shoot through a standing wall
+    if (mode === "near") return los ? this.nearestSeen(x, y, R) : this.nearest(x, y, R, INF, 255, 400);
     const b0x = Math.max(0, ((x - R) / BUCKET) | 0), b1x = Math.min(this.bw - 1, ((x + R) / BUCKET) | 0);
     const b0y = Math.max(0, ((y - R) / BUCKET) | 0), b1y = Math.min(this.bh - 1, ((y + R) / BUCKET) | 0);
     let best = -1, bs = Infinity, checks = 600;
@@ -2228,7 +2301,7 @@ export class Sim {
         if (d2 > R * R) continue;
         const score = mode === "wall" ? this.infField[this.idx(this.ax[k] | 0, this.ay[k] | 0)] * 1000 + d2
           : (this.chase[k] ? 0 : 1e6) + d2;
-        if (score < bs) { bs = score; best = k; }
+        if (score < bs && (!los || this.lineClear(x, y, this.ax[k], this.ay[k]))) { bs = score; best = k; }
       }
     }
     return best;
@@ -2242,14 +2315,14 @@ export class Sim {
     const q = this.navQ ?? (this.navQ = new Int32Array(this.w * this.h));
     let qh = 0, qt = 0;
     f[goal] = 0; q[qt++] = goal;
-    const ok = (t: number) => water ? (t === WATER || t === BRIDGE) : walkable(t);
+    const ok = (n: number) => { const t = this.map.tile[n]; return water ? (t === WATER || t === BRIDGE) : this.unitPass(n); };
     // search far enough to reach the unit (a strike order can be across the map), not the whole map every time
     const maxD = Math.min(65000, Math.max(400, (Math.abs((goal % this.w) - u.x) + Math.abs(((goal / this.w) | 0) - u.y)) * 2 + 100));
     while (qh < qt) {
       const c = q[qh++], cx = c % this.w, d = f[c] + 1;
       if (d > maxD) break;
       for (const n of [cx > 0 ? c - 1 : -1, cx < this.w - 1 ? c + 1 : -1, c - this.w, c + this.w]) {
-        if (n < 0 || n >= f.length || f[n] !== 65535 || !ok(this.map.tile[n])) continue;
+        if (n < 0 || n >= f.length || f[n] !== 65535 || !ok(n)) continue;
         f[n] = d; q[qt++] = n;
       }
     }
@@ -2335,7 +2408,14 @@ export class Sim {
           if (sc > bs) { bs = sc; best = this.idx(x, y); }
         }
         const goal = best < 0 ? this.idx(u.post![0], u.post![1]) : best; // nothing worth chasing: drift back to the post
-        if (goal !== u.goal) { if (air) u.goal = goal; else this.navTo(u, goal); }
+        if (goal !== u.goal) {
+          if (air) u.goal = goal;
+          else {
+            this.navTo(u, goal);
+            const home = this.idx(u.post![0], u.post![1]); // 0.27: a wall between it and the crowd: back to its post instead
+            if (u.nav![this.idx(fx | 0, fy | 0)] === 65535 && goal !== home) this.navTo(u, home);
+          }
+        }
         u.ai = "hunt";
       }
     }
@@ -2362,7 +2442,10 @@ export class Sim {
         u.ai = "reload"; u.reloadT = C.APC_RELOAD_S; return;
       }
       d = this.downhill(this.apcField, cx, cy);
-      if (!d && u.ai === "home") { u.ai = "reload"; u.reloadT = C.APC_RELOAD_S; return; }
+      if (!d && u.ai === "home") {
+        if (this.apcField[this.idx(cx, cy)] === 65535) { u.ai = "hunt"; u.thinkT = 1.5; return; } // 0.27: walled out: holds out there, a supply drop can rearm it
+        u.ai = "reload"; u.reloadT = C.APC_RELOAD_S; return;
+      }
     } else {
       // In transit to a far post (a strike order): keep driving, shoot on the move, only dodge what is right on it.
       const transit = hyp(fx - u.post![0], fy - u.post![1]) > mob.leash * 0.6;
@@ -2380,7 +2463,7 @@ export class Sim {
     if (!d) return;
     // Stay on streets (or water): slide along an axis instead of cutting a corner into a building.
     const water = mob.nav === "water";
-    const okc = (x: number, y: number) => { const t = this.map.tile[this.idx(Math.min(this.w - 1, Math.max(0, (x + 0.5) | 0)), Math.min(this.h - 1, Math.max(0, (y + 0.5) | 0)))]; return water ? (t === WATER || t === BRIDGE) : walkable(t); };
+    const okc = (x: number, y: number) => { const i = this.idx(Math.min(this.w - 1, Math.max(0, (x + 0.5) | 0)), Math.min(this.h - 1, Math.max(0, (y + 0.5) | 0))), t = this.map.tile[i]; return water ? (t === WATER || t === BRIDGE) : this.unitPass(i); };
     const nx = u.x + d[0] * sp, ny = u.y + d[1] * sp;
     if (okc(nx, ny)) { u.x = nx; u.y = ny; }
     else if (okc(nx, u.y)) u.x = nx;
