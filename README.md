@@ -3,7 +3,7 @@
 A free zombie-outbreak strategy game that runs in your browser. Hold a city, get people out.
 
 **Play in your browser:** https://carbonprompt.github.io/horde/ (Windows players can grab the installer from the
-Releases page instead. From 0.26 on, the Windows app finds new versions itself: Versions on the title screen lists
+Releases page instead. From 0.26 on, the Windows app finds new versions itself: Versions in Settings lists
 every release, and Settings can install updates automatically. Your save is backed up before any switch.)
 
 ## How it plays

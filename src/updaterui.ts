@@ -7,10 +7,10 @@ import type { SaveData } from "./save";
 type Ver = { version: string; notes: string; date: string; size: number };
 const cmp = (a: string, b: string) => { const x = a.split(".").map(Number), y = b.split(".").map(Number); for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return x[i] - y[i]; return 0; };
 
-export function initUpdater(o: { save: () => SaveData; go: (id: string) => void; say: (msg: string) => void; log: (ev: string, d?: Record<string, unknown>) => void }) {
+export function initUpdater(o: { save: () => SaveData; go: (id: string) => void; say: (msg: string) => void; log: (ev: string, d?: Record<string, unknown>) => void; inGame: () => boolean }) {
   const d = Save.desktop, $ = (id: string) => document.getElementById(id)!;
   const ok = !!(d && d.updatesList && d.updatesInstall);
-  for (const id of ["versions-btn", "p-versions", "opt-upd-row", "opt-autoupd-row"]) { const el = document.getElementById(id); if (el) el.hidden = !ok; }
+  for (const id of ["opt-ver-row", "opt-upd-row", "opt-autoupd-row"]) { const el = document.getElementById(id); if (el) el.hidden = !ok; }
   if (!ok) return;
   let versions: Ver[] = [], busy = false, fetchedAt = 0;
   const status = (t: string) => { $("ver-status").textContent = t; };
@@ -80,8 +80,7 @@ export function initUpdater(o: { save: () => SaveData; go: (id: string) => void;
     status(`Installing ${v}. The game will close and reopen by itself.`);
   }
 
-  document.getElementById("versions-btn")?.addEventListener("click", () => { o.go("versions"); refresh(); });
-  document.getElementById("p-versions")?.addEventListener("click", () => { o.go("versions"); refresh(); });
+  document.getElementById("versions-btn")?.addEventListener("click", () => { if (o.inGame()) return; o.go("versions"); refresh(); }); // Settings only, and not during a battle
   document.getElementById("ver-refresh")?.addEventListener("click", () => refresh(true));
   document.getElementById("ver-releases")?.addEventListener("click", () => d!.openReleases?.());
   $("upd-banner").addEventListener("click", () => { o.go("versions"); refresh(); });

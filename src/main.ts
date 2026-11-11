@@ -240,7 +240,7 @@ function show(id: string | null) {
   document.querySelectorAll<HTMLElement>(".screen").forEach(e => (e.hidden = e.id !== "s-" + id));
   $("screens").hidden = !id;
   if (id === "cities") renderCities();
-  if (id === "settings") { syncSettings(); renderMods(); }
+  if (id === "settings") { syncSettings(); renderMods(); const vb = document.getElementById("versions-btn") as HTMLButtonElement | null; if (vb) { vb.disabled = mode === "game"; $("ver-ingame").hidden = mode !== "game"; } }
   if (id === "record") renderRecord();
 }
 function go(id: string) { stack.push(id); show(id); }
@@ -2291,7 +2291,7 @@ log("info", "app-start", { version: C.VERSION, renderer: glv.ok ? "webgl" : "2d"
 applyFullscreen();
 setTool("zone");
 startAttract();
-initUpdater({ save: () => save, go, say, log: (ev, d) => log("info", ev, d) }); // 0.26: Windows app only
+initUpdater({ save: () => save, go, say, log: (ev, d) => log("info", ev, d), inGame: () => mode === "game" }); // 0.26: Windows app only
 requestAnimationFrame(frame);
 
 // Exposed for automated checks.

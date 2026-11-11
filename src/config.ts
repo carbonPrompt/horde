@@ -300,7 +300,7 @@ export let SWIMMER_BASE_FRAC = 0.08;
 export let SWIMMER_WAVE_GROWTH = 0.015;
 export let SWIMMER_MAX_FRAC = 0.25;
 
-export const VERSION = "0.26.0";
+export const VERSION = "0.26.1";
 
 /** The campaign: fixed cities that unlock in order (a medal on one opens the next). */
 export interface CityDef { id: string; name: string; seed: number; budget: number; waveMul: number; sites: number; speedMul: number; blurb: string; real?: boolean; trial?: string } // trial: hardware this city lends you before you unlock it

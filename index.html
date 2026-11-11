@@ -564,7 +564,6 @@
       <button data-go="record">Service Record</button>
       <button data-go="howto">How to Play</button>
       <button data-go="settings">Settings</button>
-      <button id="versions-btn" hidden>Versions</button>
       <button id="quit" hidden>Quit to Desktop</button>
     </div>
     <div class="ver"></div>
@@ -635,6 +634,7 @@
     </select></label>
     <label class="opt" id="opt-upd-row" hidden><input type="checkbox" id="opt-checkupd"> Check GitHub for new versions when the game starts</label>
     <label class="opt" id="opt-autoupd-row" hidden><input type="checkbox" id="opt-autoupd"> Install new versions automatically (your save is backed up first)</label>
+    <div class="row" id="opt-ver-row" hidden><button id="versions-btn">Versions</button><span id="ver-ingame" class="opt" hidden>Quit to the menu to switch versions.</span></div>
     <label class="opt"><input type="checkbox" id="opt-dev"> Developer mode (a DEV button and F10 open the developer panel in battle)</label>
     <div class="subhead">Mods and save file</div>
     <div id="mod-status" class="opt"></div>
@@ -658,7 +658,6 @@
       <button id="p-restart">Restart city (keep plan)</button>
       <button data-go="howto">How to play</button>
       <button data-go="settings">Settings</button>
-      <button id="p-versions" hidden>Versions</button>
       <button id="p-withdraw">Pull out (end battle, keep who got out)</button>
       <button id="p-title">Quit to menu</button>
       <button id="p-quit">Quit to desktop</button>
