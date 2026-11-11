@@ -1,7 +1,7 @@
 import * as C from "./config";
 import { BRIDGE, BUILDING, CityMap, INFRA_HIGHWAY, INFRA_RAIL, INFRA_STATION, PARK, ROAD, WATER } from "./map";
 import { fetchLiveOsmCity } from "./osm";
-import { CIV, INF, SAFE_CIV, Sim } from "./sim";
+import { CIV, INF, SAFE_CIV, SHOT_CANNON, SHOT_ROCKET, SHOT_SHELL, SHOT_SNIPER, Sim } from "./sim";
 import type { Score } from "./sim";
 import * as Save from "./save";
 import * as P from "./progress";
@@ -891,7 +891,7 @@ function draw(now: number) {
   if (!glv.ok && !showHeights) ctx.drawImage(scars.canvas, cam.x, cam.y, sim.w * s, sim.h * s);
   if (sim.phase === "battle" && sim.tick % 10 === 0) buildZone();
   if (!glv.ok) ctx.drawImage(zoneImg, cam.x, cam.y, sim.w * s, sim.h * s);
-  else glv.draw(cam, W, H, sim.w, sim.h, showHeights, sim.n, sim.ax, sim.ay, sim.state, Math.max(1, s * 0.55), sim.mutant);
+  else glv.draw(cam, W, H, sim.w, sim.h, showHeights, sim.n, sim.ax, sim.ay, sim.state, Math.min(7, Math.max(1, s * 0.2)), sim.mutant);
   drawHeatmap(now, s);
 
   // Parachuted field supply crates on the ground.
@@ -957,7 +957,7 @@ function draw(now: number) {
   }
 
   // Agents.
-  const dot = Math.max(1, s * 0.3); // grains of sand: each person a speck
+  const dot = Math.min(7, Math.max(1, s * 0.2)); // 0.28: grains of sand: a speck, never bigger than a zone corner marker
   const x0 = -cam.x / s - 1, y0 = -cam.y / s - 1, x1 = x0 + W / s + 2, y1 = y0 + H / s + 2;
   if (!glv.ok) {
     for (const [want, mut, color, sz] of [[CIV, 0, "#f5f1e6", dot], [SAFE_CIV, 0, "#9be7a8", dot], [INF, 0, "#ff3b3b", dot], [INF, 1, "#ff66d1", dot * 1.35]] as const) {
@@ -967,7 +967,8 @@ function draw(now: number) {
         if (sim.state[k] !== want || (want === INF && (sim.mutant[k] === 1) !== (mut === 1))) continue;
         const ax = sim.ax[k], ay = sim.ay[k];
         if (ax < x0 || ay < y0 || ax > x1 || ay > y1) continue;
-        ctx.rect(cam.x + ax * s - sz / 2, cam.y + ay * s - sz / 2, sz, sz);
+        if (sz >= 3) { const cx2 = cam.x + ax * s, cy2 = cam.y + ay * s; ctx.moveTo(cx2 + sz / 2, cy2); ctx.arc(cx2, cy2, sz / 2, 0, 6.2832); }
+        else ctx.rect(cam.x + ax * s - sz / 2, cam.y + ay * s - sz / 2, sz, sz);
       }
       ctx.fill();
     }
@@ -1104,10 +1105,6 @@ function draw(now: number) {
       ctx.strokeStyle = spec.color + (hov ? "cc" : "44"); ctx.lineWidth = 1;
       ctx.beginPath(); ctx.arc(px, py, u.range * s, 0, 7); ctx.stroke();
     }
-    if (u.shotT >= 0 && sim.time - u.shotT < 0.08) {
-      ctx.strokeStyle = spec.color; ctx.lineWidth = 1;
-      ctx.beginPath(); ctx.moveTo(px, py); ctx.lineTo(cam.x + u.shotX * s, cam.y + u.shotY * s); ctx.stroke();
-    }
     const r = Math.max(5, s * 1.3);
     const uSp = SPRITE_CANVAS[u.kind];
     if ((u.deployT && u.deployT > 0) || u.extractT !== undefined) ctx.globalAlpha = 0.4;
@@ -1215,6 +1212,8 @@ function draw(now: number) {
     ctx.setLineDash([]);
   }
 
+  drawShots(s);
+
   // Zone draft.
   if (draft.length) {
     ctx.strokeStyle = "#7CFC9A"; ctx.lineWidth = 2; ctx.setLineDash([6, 4]);
@@ -1225,6 +1224,62 @@ function draw(now: number) {
     ctx.fillStyle = "#7CFC9A";
     for (const [x, y] of draft) { ctx.beginPath(); ctx.arc(cam.x + x * s, cam.y + y * s, 4, 0, 7); ctx.fill(); }
   }
+}
+
+/** 0.28: rounds in flight. No beams: a tiny tracer streak for small arms, a longer thin one for the sniper,
+ *  a thicker glowing slug for cannon, a chunky shell with its shadow (it climbs and drops) for artillery, and a
+ *  rocket with a smoke trail. Muzzle flashes at the gun. Nothing is drawn zoomed out. */
+function drawShots(s: number) {
+  if (s < 2.5 || !sim.shots.length) return;
+  // render clock: the sim ticks at 20 Hz, a bullet crosses its range faster than that, so draw between ticks
+  const t = sim.time + (sim.phase === "battle" ? Math.min(Math.max(0, acc), 0.1) : 0), X = (x: number) => cam.x + x * s, Y = (y: number) => cam.y + y * s;
+  const vw = canvas.width, vh = canvas.height;
+  ctx.save(); ctx.lineCap = "round";
+  for (const sh of sim.shots) {
+    if (sh.t > t) continue; // a salvo's later rounds
+    const big = sh.cls >= SHOT_SHELL;
+    if (!big && s < 4) continue;
+    // small rounds stay on screen for at least ~0.1 s so the eye catches the streak (a real tracer burns that long)
+    const fl = big ? Math.max(1e-3, sh.land - sh.t) : Math.max(0.1, sh.land - sh.t), k = Math.min(1, (t - sh.t) / fl);
+    if (t > sh.t + fl + (big ? 0 : 0.02)) continue;
+    const x0 = X(sh.x0), y0 = Y(sh.y0), x1 = X(sh.x1), y1 = Y(sh.y1);
+    if (Math.max(x0, x1) < -20 || Math.min(x0, x1) > vw + 20 || Math.max(y0, y1) < -20 || Math.min(y0, y1) > vh + 20) continue;
+    const dx = x1 - x0, dy = y1 - y0, len = Math.hypot(dx, dy) || 1, ux = dx / len, uy = dy / len;
+    const px = x0 + dx * k, py = y0 + dy * k;
+    // muzzle flash: the first instant after the shot
+    if (t - sh.t < 0.05 && s >= 4) {
+      const fr = Math.min(14, s * (sh.cls === SHOT_SHELL ? 0.7 : sh.cls === SHOT_ROCKET ? 0.6 : sh.cls === SHOT_CANNON ? 0.5 : sh.cls === SHOT_SNIPER ? 0.32 : 0.22));
+      const mx = x0 + ux * s * 0.6, my = y0 + uy * s * 0.6;
+      ctx.globalAlpha = 0.9; ctx.fillStyle = "#fff4c2";
+      ctx.beginPath(); ctx.moveTo(mx - uy * fr * 0.45, my + ux * fr * 0.45); ctx.lineTo(mx + ux * fr * 1.6, my + uy * fr * 1.6); ctx.lineTo(mx + uy * fr * 0.45, my - ux * fr * 0.45); ctx.closePath(); ctx.fill();
+      ctx.fillStyle = "#ffb74d"; ctx.globalAlpha = 0.6; ctx.beginPath(); ctx.arc(mx, my, fr * 0.5, 0, 7); ctx.fill();
+    }
+    if (sh.cls === SHOT_SHELL) {
+      // shells climb and fall: the shell rides above its shadow and looms larger at the top of the arc
+      const hgt = Math.sin(Math.PI * k), f = 1 + hgt * 0.7;
+      const L = Math.max(3, s * 0.42 * f), Wd = Math.max(2, s * 0.2 * f), lift = hgt * Math.min(40, len * 0.18);
+      ctx.globalAlpha = 0.35; ctx.fillStyle = "#000";
+      ctx.beginPath(); ctx.ellipse(px, py, L * 0.5, Wd * 0.5, Math.atan2(dy, dx), 0, 7); ctx.fill();
+      ctx.globalAlpha = 1; ctx.fillStyle = "#4a4636"; ctx.strokeStyle = "#cfc39b"; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.ellipse(px, py - lift, L * 0.5, Wd * 0.5, Math.atan2(dy, dx), 0, 7); ctx.fill(); if (s >= 6) ctx.stroke();
+    } else if (sh.cls === SHOT_ROCKET) {
+      const k0 = Math.max(0, k - 0.3);
+      ctx.globalAlpha = 0.5; ctx.strokeStyle = "#b0b0b0"; ctx.lineWidth = Math.max(1.5, s * 0.16);
+      ctx.beginPath(); ctx.moveTo(x0 + dx * k0, y0 + dy * k0); ctx.lineTo(px, py); ctx.stroke();
+      ctx.globalAlpha = 1; ctx.fillStyle = "#fff3c4"; ctx.beginPath(); ctx.arc(px, py, Math.max(1.5, s * 0.12), 0, 7); ctx.fill();
+    } else {
+      // tracer streak: its length in cells, its width by caliber
+      const Lc = sh.cls === SHOT_SNIPER ? 3 : sh.cls === SHOT_CANNON ? 1.4 : 1.1;
+      const L = Math.min(len, Lc * s);
+      const hx = x0 + ux * (L + (len - L) * k), hy = y0 + uy * (L + (len - L) * k); // the head: out of the muzzle at once, into the target at the end
+      const wpx = sh.cls === SHOT_CANNON ? Math.max(1.6, Math.min(4, s * 0.1)) : sh.cls === SHOT_SNIPER ? 1 : Math.max(1, Math.min(2, s * 0.045));
+      ctx.globalAlpha = sh.cls === SHOT_SNIPER ? 0.75 : 0.95;
+      ctx.strokeStyle = sh.cls === SHOT_CANNON ? "#ffcf70" : sh.cls === SHOT_SNIPER ? "#fffbe8" : "#ffe9a0";
+      ctx.lineWidth = wpx;
+      ctx.beginPath(); ctx.moveTo(hx - ux * L, hy - uy * L); ctx.lineTo(hx, hy); ctx.stroke();
+    }
+  }
+  ctx.restore();
 }
 
 /** Draw a sprite: the 64 px art is shrunk smoothly (nearest-neighbor shrinking makes it shimmer), 16 px grids stay crisp. */

@@ -88,6 +88,8 @@ export let INF_SPEED_GROWTH = 0.004; // per second of battle, multiplicative-ish
 export let INF_HP = 100;
 export let INF_HP_GROWTH = 0.004; // +0.4% per second of battle
 export let CIV_JAM_DENS = 4; // people per cell before a crowd starts to jam (gates, bridges, narrow streets)
+export let GATE_CLEAR_DEPTH = 6; // 0.28: people inside the zone keep walking inward at full pace until this many cells past the gate
+export let GRAIN_PUSH = 0.9; // 0.28: how hard people in one cell push apart from each other (sand-grain spreading)
 export let INF_LUNGE_MUL = 1.2; // infected with a live person in sight surge this much faster
 export let KITE_R = 0.45; // mobile units back off when infected get within this fraction of their range
 export let INF_SENSE = 14; // cells: how far infected notice a civilian (0.10: single-minded, 9 before)
@@ -302,7 +304,7 @@ export let SWIMMER_BASE_FRAC = 0.08;
 export let SWIMMER_WAVE_GROWTH = 0.015;
 export let SWIMMER_MAX_FRAC = 0.25;
 
-export const VERSION = "0.27.0";
+export const VERSION = "0.28.0";
 
 /** The campaign: fixed cities that unlock in order (a medal on one opens the next). */
 export interface CityDef { id: string; name: string; seed: number; budget: number; waveMul: number; sites: number; speedMul: number; blurb: string; real?: boolean; trial?: string } // trial: hardware this city lends you before you unlock it
@@ -710,7 +712,6 @@ export const TUNABLE: Record<string, [() => number, (v: number) => void]> = {
   EVAC_CAP: [() => EVAC_CAP, v => { EVAC_CAP = v; }],
   EVAC_PAY: [() => EVAC_PAY, v => { EVAC_PAY = v; }],
   EVAC_ABORT_INF: [() => EVAC_ABORT_INF, v => { EVAC_ABORT_INF = v; }],
-  MILITIA_MAX: [() => MILITIA_MAX, v => { MILITIA_MAX = v; }],
   SOUND_NEAR_ZOOM: [() => SOUND_NEAR_ZOOM, v => { SOUND_NEAR_ZOOM = v; }],
   EVAC_WALK_MUL: [() => EVAC_WALK_MUL, v => { EVAC_WALK_MUL = v; }],
   EVAC_GATHER_D: [() => EVAC_GATHER_D, v => { EVAC_GATHER_D = v; }],
@@ -721,6 +722,8 @@ export const TUNABLE: Record<string, [() => number, (v: number) => void]> = {
   INF_HP: [() => INF_HP, v => { INF_HP = v; }],
   INF_HP_GROWTH: [() => INF_HP_GROWTH, v => { INF_HP_GROWTH = v; }],
   CIV_JAM_DENS: [() => CIV_JAM_DENS, v => { CIV_JAM_DENS = v; }],
+  GATE_CLEAR_DEPTH: [() => GATE_CLEAR_DEPTH, v => { GATE_CLEAR_DEPTH = v; }],
+  GRAIN_PUSH: [() => GRAIN_PUSH, v => { GRAIN_PUSH = v; }],
   INF_LUNGE_MUL: [() => INF_LUNGE_MUL, v => { INF_LUNGE_MUL = v; }],
   KITE_R: [() => KITE_R, v => { KITE_R = v; }],
   INF_SENSE: [() => INF_SENSE, v => { INF_SENSE = v; }],
@@ -746,6 +749,7 @@ export const TUNABLE: Record<string, [() => number, (v: number) => void]> = {
   SQUEEZE_COST: [() => SQUEEZE_COST, v => { SQUEEZE_COST = v; }],
   MOBILE_HURT_DPS: [() => MOBILE_HURT_DPS, v => { MOBILE_HURT_DPS = v; }],
   GATE_HP: [() => GATE_HP, v => { GATE_HP = v; }],
+  MILITIA_MAX: [() => MILITIA_MAX, v => { MILITIA_MAX = v; }],
   BUDGET_DISCOUNT: [() => BUDGET_DISCOUNT, v => { BUDGET_DISCOUNT = v; }],
   REPAIR_WALL_HPS: [() => REPAIR_WALL_HPS, v => { REPAIR_WALL_HPS = v; }],
   REPAIR_UNIT_HPS: [() => REPAIR_UNIT_HPS, v => { REPAIR_UNIT_HPS = v; }],
@@ -793,11 +797,6 @@ export const TUNABLE: Record<string, [() => number, (v: number) => void]> = {
   GUNSHIP_HOW_DMG: [() => GUNSHIP_HOW_DMG, v => { GUNSHIP_HOW_DMG = v; }],
   GUNSHIP_HOW_EVERY: [() => GUNSHIP_HOW_EVERY, v => { GUNSHIP_HOW_EVERY = v; }],
   GUNSHIP_HOW_SPLASH: [() => GUNSHIP_HOW_SPLASH, v => { GUNSHIP_HOW_SPLASH = v; }],
-  SCAR_PX: [() => SCAR_PX, v => { SCAR_PX = v; }],
-  SMOKE_MAX: [() => SMOKE_MAX, v => { SMOKE_MAX = v; }],
-  SMOKE_S: [() => SMOKE_S, v => { SMOKE_S = v; }],
-  SMOKE_WIND: [() => SMOKE_WIND, v => { SMOKE_WIND = v; }],
-  CRATER_SLOW_MUL: [() => CRATER_SLOW_MUL, v => { CRATER_SLOW_MUL = v; }],
   AIRSTRIKE_LEN: [() => AIRSTRIKE_LEN, v => { AIRSTRIKE_LEN = v; }],
   AIRSTRIKE_RADIUS: [() => AIRSTRIKE_RADIUS, v => { AIRSTRIKE_RADIUS = v; }],
   FIRE_RADIUS: [() => FIRE_RADIUS, v => { FIRE_RADIUS = v; }],
@@ -818,6 +817,11 @@ export const TUNABLE: Record<string, [() => number, (v: number) => void]> = {
   STRUCT_DMG_AIRSTRIKE: [() => STRUCT_DMG_AIRSTRIKE, v => { STRUCT_DMG_AIRSTRIKE = v; }],
   STRUCT_DMG_DEPOT: [() => STRUCT_DMG_DEPOT, v => { STRUCT_DMG_DEPOT = v; }],
   STRUCT_DMG_FIREBOMB: [() => STRUCT_DMG_FIREBOMB, v => { STRUCT_DMG_FIREBOMB = v; }],
+  SCAR_PX: [() => SCAR_PX, v => { SCAR_PX = v; }],
+  SMOKE_MAX: [() => SMOKE_MAX, v => { SMOKE_MAX = v; }],
+  SMOKE_S: [() => SMOKE_S, v => { SMOKE_S = v; }],
+  SMOKE_WIND: [() => SMOKE_WIND, v => { SMOKE_WIND = v; }],
+  CRATER_SLOW_MUL: [() => CRATER_SLOW_MUL, v => { CRATER_SLOW_MUL = v; }],
   RUBBLE_SLOW_MUL: [() => RUBBLE_SLOW_MUL, v => { RUBBLE_SLOW_MUL = v; }],
   BUILDING_CELL_FLOOR_VALUE: [() => BUILDING_CELL_FLOOR_VALUE, v => { BUILDING_CELL_FLOOR_VALUE = v; }],
   BILLION: [() => BILLION, v => { BILLION = v; }],

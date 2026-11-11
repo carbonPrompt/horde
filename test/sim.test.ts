@@ -175,7 +175,8 @@ test("gunboat patrols the river; battleship shells from it", () => withWarning45
     s.spawnInfected(x + 0.5, y + 0.5, C.INF_HP); put++;
   }
   let salvo = 0; // battleship fires 3-shell broadsides
-  for (let i = 0; i < 20 * 150; i++) { s.step(); const sh = s.blasts.filter(b => b.color === C.UNITS.battleship.color && b.t === s.time).length; salvo = Math.max(salvo, sh); }
+  // 0.28: a broadside is fired in one go and its shells land a beat apart: count the rounds fired per volley
+  for (let i = 0; i < 20 * 150; i++) { s.step(); const sh = s.shots.filter(r => r.kind === "battleship" && r.t >= s.time - 1e-6).length; salvo = Math.max(salvo, sh); }
   expect(salvo).toBe(C.UNITS.battleship.salvo!);
   expect(boat.x !== start[0] || boat.y !== start[1]).toBe(true);
   expect(s.map.tile[s.idx((boat.x + 0.5) | 0, (boat.y + 0.5) | 0)] === 3 || s.map.tile[s.idx((boat.x + 0.5) | 0, (boat.y + 0.5) | 0)] === 4).toBe(true);
@@ -564,6 +565,9 @@ test("Evac Points fly people out (score + money); a swarmed pad waves off; round
   expect(s.evacuated).toBeGreaterThan(0);
   expect(s.remaining()).toBeGreaterThan(money0); // evac pay (plus income)
   const before = s.liftsAborted;
+  // swarm the pad while a lift is inbound (0.28: infected no longer park at a gate, they break it and pour in, so
+  // a swarm spawned long before the lift may have moved on)
+  while (s.supports.includes(pad!) && pad!.pickupAt === undefined) s.step();
   for (let j = 0; j < C.EVAC_ABORT_INF + 4; j++) s.spawnInfected(pad!.x + 0.5, pad!.y + 2.5, 1e9);
   const t0 = s.time; while (s.time < t0 + C.EVAC_EVERY_S + 4) s.step();
   expect(s.liftsAborted).toBeGreaterThan(before);

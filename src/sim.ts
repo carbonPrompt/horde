@@ -64,6 +64,14 @@ interface Pending { kind: C.AbilityKind | "bomb" | "shell"; at: number; x: numbe
 export interface Fire { x: number; y: number; r: number; until: number }
 export interface Fallout { x: number; y: number; r: number; until: number }
 export interface Blast { x: number; y: number; r: number; t: number; color: string }
+/** 0.28: what a round looks like in flight: small arms, sniper, cannon, shell, rocket. */
+export const SHOT_SMALL = 0, SHOT_SNIPER = 1, SHOT_CANNON = 2, SHOT_SHELL = 3, SHOT_ROCKET = 4;
+/** 0.28: one round in the air, for the renderer: fired at t from (x0,y0), arrives at `land` at (x1,y1). */
+export interface Shot { x0: number; y0: number; x1: number; y1: number; t: number; land: number; cls: number; kind: C.UnitKind }
+/** 0.28: a shell or rocket on its way; it explodes (damage, craters, blast) when it lands. */
+interface Impact { x: number; y: number; r: number; dmg: number; maxHits?: number; sDmg: number; u: Unit; t: number; color: string }
+/** Muzzle velocity in meters per second, for flight time (gameplay-compressed for the slow ones). */
+const SHOT_MPS = [900, 950, 1500, 0, 0];
 export interface Crater { x: number; y: number; r: number; t: number; seq: number } // seq: 1, 2, 3... (the renderer paints each once)
 export interface SupplyCrate { x: number; y: number; until: number }
 export type TransportKind = "helo_uh60" | "helo_ch47" | "helo_extract" | "c130_para" | "c130_supply" | "c130_apc" | "jet_strike" | "drone_supply";
@@ -98,6 +106,9 @@ export interface TrainRun {
 
 const hyp = (a: number, b: number) => Math.sqrt(a * a + b * b);
 const BUCKET = 4; // cells per spatial bucket
+/** 0.28: distance-field units. A straight step costs FIELD_STEP, a diagonal FIELD_DIAG (~sqrt 2), and a cell
+ *  under a standing ground unit adds FIELD_OCC (walk around it unless it plugs the only way). */
+export const FIELD_STEP = 10, FIELD_DIAG = 14, FIELD_OCC = 300;
 const BITE_P3 = 1 - Math.pow(1 - C.BITE_CHANCE, 3); // bite checked every 3rd tick
 
 export interface SimOpts {
@@ -162,6 +173,7 @@ export class Sim {
   // instead of once per agent per tick.
   civDir: Float32Array; infDir: Float32Array; swimDir: Float32Array;
   dens: Uint16Array; // people per cell this tick (crowd separation)
+  sumX: Float32Array; sumY: Float32Array; // 0.28: summed positions per cell, for the sand-grain push inside a cell
   biasC: Float32Array; biasS: Float32Array; // each agent's fixed lean left/right of the field direction
   fieldDirty = true;
 
@@ -191,14 +203,48 @@ export class Sim {
   /** 0.24: cells covered by a ground unit's footprint (turret, mortar, howitzer, HIMARS, APC, tank).
    *  Nobody walks through them; infected claw at the unit like a wall. Rebuilt every tick in battle. */
   occ: Uint8Array;
+  /** 0.28: the same footprints for units that stay put (emplacements, not vehicles on the move). The distance
+   *  fields route around these; a change in them rebuilds the fields. */
+  occStatic: Uint8Array;
+  private occSig = 0;
   private rebuildOcc(dt = 0) {
     this.occ.fill(0);
+    let sig = 0;
     for (const u of this.units) {
       const spec = C.UNITS[u.kind];
       if (spec.on !== "ground" || u.extractT !== undefined || (u.hp !== undefined && u.hp <= 0)) continue;
       const [x0, y0, x1, y1] = this.footRect(spec.foot, Math.floor(u.x), Math.floor(u.y));
       if (spec.crushSlow !== undefined && !(u.deployT && u.deployT > 0)) this.crushUnder(u, x0, y0, x1, y1, dt);
       for (let y = Math.max(0, y0); y <= Math.min(this.h - 1, y1); y++) for (let x = Math.max(0, x0); x <= Math.min(this.w - 1, x1); x++) this.occ[y * this.w + x] = 1;
+      if (!spec.mobile) sig = (sig + Math.imul((x0 + 1) * 73856093 ^ (y0 + 1) * 19349663, spec.foot + 1)) | 0;
+    }
+    if (sig !== this.occSig) {
+      this.occSig = sig;
+      this.occStatic.fill(0);
+      for (const u of this.units) {
+        const spec = C.UNITS[u.kind];
+        if (spec.on !== "ground" || spec.mobile || u.extractT !== undefined || (u.hp !== undefined && u.hp <= 0)) continue;
+        const [x0, y0, x1, y1] = this.footRect(spec.foot, Math.floor(u.x), Math.floor(u.y));
+        for (let y = Math.max(0, y0); y <= Math.min(this.h - 1, y1); y++) for (let x = Math.max(0, x0); x <= Math.min(this.w - 1, x1); x++) this.occStatic[y * this.w + x] = 1;
+      }
+      this.fieldDirty = true;
+    }
+  }
+  /** 0.28: steps inward from the perimeter for interior cells (0 at walls/gates, 255 = deep or unreachable).
+   *  People who just came through a gate keep walking inward at full pace instead of stopping in the doorway. */
+  depth: Uint8Array;
+  private buildDepth() {
+    const cells = this.w * this.h, w = this.w, q = new Int32Array(cells);
+    this.depth.fill(255);
+    let qh = 0, qt = 0;
+    for (let i = 0; i < cells; i++) if (this.inZone[i] === 2 || this.inZone[i] === 3) { this.depth[i] = 0; q[qt++] = i; }
+    while (qh < qt) {
+      const c = q[qh++], cx = c % w, d = this.depth[c] + 1;
+      if (d >= C.GATE_CLEAR_DEPTH + 1) continue;
+      for (const n of [cx > 0 ? c - 1 : -1, cx < w - 1 ? c + 1 : -1, c - w, c + w]) {
+        if (n < 0 || n >= cells || this.depth[n] !== 255 || this.inZone[n] !== 1 || !walkable(this.map.tile[n])) continue;
+        this.depth[n] = d; q[qt++] = n;
+      }
     }
   }
   /** 0.25: a tank or APC kills every infected under its footprint (its kills) and slows for a moment;
@@ -244,6 +290,16 @@ export class Sim {
   pending: Pending[] = [];
   fires: Fire[] = [];
   blasts: Blast[] = [];
+  shots: Shot[] = [];
+  private impacts: Impact[] = [];
+  /** 0.28: record a round for the renderer; returns its flight time in seconds. */
+  private shoot(u: Unit, x1: number, y1: number, cls: number, mps: number, delay = 0) {
+    const x0 = u.x + 0.5, y0 = u.y + 0.5;
+    const fl = Math.min(3, Math.max(cls >= SHOT_SHELL ? 0.4 : 0, hyp(x1 - x0, y1 - y0) * C.CELL_M / mps));
+    const t = this.time + delay;
+    if (this.shots.length < 4000) this.shots.push({ x0, y0, x1, y1, t, land: t + fl, cls, kind: u.kind });
+    return fl + delay;
+  }
   transports: Transport[] = [];
   chutes: Parachute[] = [];
   supplyCrates: SupplyCrate[] = [];
@@ -291,6 +347,8 @@ export class Sim {
     this.rubble = new Uint8Array(cells);
     this.rough = new Uint8Array(cells);
     this.occ = new Uint8Array(cells);
+    this.occStatic = new Uint8Array(cells);
+    this.depth = new Uint8Array(cells).fill(255);
     this.inZone = new Uint8Array(cells);
     this.wallHp = new Float32Array(cells);
     this.gnawTick = new Uint32Array(cells);
@@ -300,6 +358,7 @@ export class Sim {
     this.swimField = new Uint16Array(cells);
     this.civDir = new Float32Array(cells * 2); this.infDir = new Float32Array(cells * 2); this.swimDir = new Float32Array(cells * 2);
     this.dens = new Uint16Array(cells);
+    this.sumX = new Float32Array(cells); this.sumY = new Float32Array(cells);
     this.bw = Math.ceil(this.w / BUCKET); this.bh = Math.ceil(this.h / BUCKET);
     this.head = new Int32Array(this.bw * this.bh).fill(-1);
     this.headC = new Int32Array(this.bw * this.bh).fill(-1);
@@ -1651,41 +1710,65 @@ export class Sim {
     return d;
   }
 
-  /** BFS distance fields. Civilians head for zone interior through gates; infected head for the zone too. */
+  /** Distance fields (0.28): 8-way with true diagonal costs (FIELD_STEP per straight step), so crowds
+   *  cross open ground on the diagonal instead of in staircase lanes. A standing ground unit is a heavy
+   *  cost, not a wall: people and infected walk around a turret, and only squeeze up to one when there is
+   *  no other way. Civilians head for the zone interior through gates and breaches; infected head for the
+   *  standing perimeter, and through a breach into the interior (a broken wall is a doorway, not the goal). */
   private buildFields() {
-    const cells = this.w * this.h;
-    const q = new Int32Array(cells);
-    const run = (field: Uint16Array, infected: boolean) => {
+    const cells = this.w * this.h, w = this.w, FS = FIELD_STEP, DG = FIELD_DIAG, OCC = FIELD_OCC;
+    const occS = this.occStatic;
+    // Dial's bucket queue: costs are small integers, so a ring of buckets replaces a heap.
+    const RING = DG + OCC + 1;
+    const pass = new Uint8Array(cells);
+    // neighbor offsets: 4 straight then 4 diagonal
+    const ODX = [1, -1, 0, 0, 1, 1, -1, -1], ODY = [0, 0, 1, -1, 1, -1, 1, -1];
+    const run = (field: Uint16Array, infected: boolean, swim: boolean) => {
       field.fill(65535);
-      let qh = 0, qt = 0;
-      for (let i = 0; i < cells; i++) {
-        const z = this.inZone[i];
-        // Infected aim at walls/gates (and the interior once breached); civilians aim at the interior.
-        const seed = infected ? (z !== 0 && walkable(this.map.tile[i])) : (z === 1 && walkable(this.map.tile[i]));
-        if (seed) { field[i] = 0; q[qt++] = i; }
+      const tile = this.map.tile, zone = this.inZone, hp = this.wallHp, h = this.h;
+      for (let n = 0; n < cells; n++) {
+        const t = tile[n];
+        if (!walkable(t) && !(swim && t === WATER)) { pass[n] = 0; continue; }
+        const z = zone[n];
+        pass[n] = infected ? (z === 0 || z === 1 || hp[n] <= 0 ? 1 : 0) : (z !== 2 || hp[n] <= 0 ? 1 : 0); // civilians pass gates and breaches
       }
-      while (qh < qt) {
-        const c = q[qh++];
-        const cx = c % this.w, cy = (c / this.w) | 0, d = field[c] + 1;
-        if (cx > 0) visit(c - 1); if (cx < this.w - 1) visit(c + 1);
-        if (cy > 0) visit(c - this.w); if (cy < this.h - 1) visit(c + this.w);
-        function visit(n: number) { if (field[n] === 65535 && ok(n)) { field[n] = d; q[qt++] = n; } }
+      const buckets: number[][] = Array.from({ length: RING }, () => []);
+      let pending = 0;
+      for (let i = 0; i < cells; i++) {
+        const z = zone[i];
+        if (!walkable(tile[i])) continue;
+        // Infected aim at the standing perimeter and the interior; civilians at the interior.
+        const seed = infected ? (z === 1 || ((z === 2 || z === 3) && hp[i] > 0)) : z === 1;
+        if (seed) { field[i] = 0; buckets[0].push(i); pending++; }
+      }
+      for (let d = 0; pending > 0; d++) {
+        const b = buckets[d % RING];
+        while (b.length) {
+          const c = b.pop()!; pending--;
+          if (field[c] !== d) continue; // stale entry
+          const cx = c % w, cy = (c / w) | 0;
+          for (let j = 0; j < 8; j++) {
+            const nx = cx + ODX[j], ny = cy + ODY[j];
+            if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
+            const n = ny * w + nx;
+            if (!pass[n]) continue;
+            if (j >= 4 && (!pass[cy * w + nx] || !pass[ny * w + cx])) continue; // no corner cutting
+            const nd = d + (j >= 4 ? DG : FS) + (occS[n] ? OCC : 0);
+            if (nd < field[n] && nd < 65535) { field[n] = nd; buckets[nd % RING].push(n); pending++; }
+          }
+        }
       }
     };
-    const self = this;
-    let curInf = false, curSwim = false;
-    function ok(n: number) {
-      const t = self.map.tile[n];
-      if (!walkable(t) && !(curSwim && t === WATER)) return false;
-      const z = self.inZone[n];
-      if (curInf) return z === 0 || self.wallHp[n] <= 0 || z === 1;
-      return z !== 2 || self.wallHp[n] <= 0; // civilians pass gates and breaches, not standing walls
-    }
-    curInf = false; curSwim = false; run(this.civField, false);
-    curInf = true; curSwim = false; run(this.infField, true);
-    curInf = true; curSwim = true; run(this.swimField, true);
+    run(this.civField, false, false);
+    run(this.infField, true, false);
+    run(this.swimField, true, true);
+    this.buildDepth();
     for (const [f, dir] of [[this.civField, this.civDir], [this.infField, this.infDir], [this.swimField, this.swimDir]] as const)
-      for (let i = 0; i < cells; i++) { const d = this.downhill(f, i % this.w, (i / this.w) | 0); dir[2 * i] = d ? d[0] : 0; dir[2 * i + 1] = d ? d[1] : 0; }
+      for (let i = 0; i < cells; i++) {
+        if (f[i] === 65535 || f[i] === 0) { dir[2 * i] = 0; dir[2 * i + 1] = 0; continue; }
+        const d = this.downhill(f, i % this.w, (i / this.w) | 0); dir[2 * i] = d ? d[0] : 0; dir[2 * i + 1] = d ? d[1] : 0;
+      }
+    const q = new Int32Array(cells);
     // Ground units drive through our own gates; standing walls stop them (0.27).
     this.apcField.fill(65535);
     let qh = 0, qt = 0;
@@ -1701,12 +1784,13 @@ export class Sim {
   }
 
   private rebuildBuckets() {
-    this.head.fill(-1); this.headC.fill(-1); this.dens.fill(0);
+    this.head.fill(-1); this.headC.fill(-1); this.dens.fill(0); this.sumX.fill(0); this.sumY.fill(0);
     for (let k = 0; k < this.n; k++) {
       const s = this.state[k];
       if (s === DEAD) continue;
       const ci = (this.ay[k] | 0) * this.w + (this.ax[k] | 0);
       if (this.dens[ci] < 65535) this.dens[ci]++;
+      this.sumX[ci] += this.ax[k]; this.sumY[ci] += this.ay[k];
       const b = ((this.ay[k] / BUCKET) | 0) * this.bw + ((this.ax[k] / BUCKET) | 0);
       if (s === INF) { this.next[k] = this.head[b]; this.head[b] = k; }
       else { this.next[k] = this.headC[b]; this.headC[b] = k; }
@@ -1782,7 +1866,12 @@ export class Sim {
     for (let k = 0; k < this.n; k++) {
       const s = this.state[k];
       if (s === DEAD) continue;
-      if (s === SAFE_CIV) { if ((k + this.tick) % 4 === 0) this.mill(k, r, dt * 4); continue; }
+      if (s === SAFE_CIV) {
+        // 0.28: just through the gate: walk on in every tick at full pace, so the doorway never plugs
+        if (this.depth[this.idx(this.ax[k] | 0, this.ay[k] | 0)] < C.GATE_CLEAR_DEPTH) this.mill(k, r, dt);
+        else if ((k + this.tick) % 4 === 0) this.mill(k, r, dt * 4);
+        continue;
+      }
       const x = this.ax[k], y = this.ay[k];
       const cx = x | 0, cy = y | 0;
       const cellIdx = cy * this.w + cx;
@@ -1872,7 +1961,15 @@ export class Sim {
       }
       // Crowd separation: drift from crowded cells (and off walls) toward emptier ones.
       // Infected barely make room (they press like a tide); panicked people spread out less than calm ones.
-      if (this.dens[cy * this.w + cx] > 1) { this.spread(cx, cy); const kk = s === INF ? 0.15 : this.hp[k] > 0 ? 0.35 : 0.7; vx += this.spx * kk; vy += this.spy * kk; }
+      if (this.dens[cy * this.w + cx] > 1) {
+        this.spread(cx, cy); const kk = s === INF ? 0.15 : this.hp[k] > 0 ? 0.35 : 0.7; vx += this.spx * kk; vy += this.spy * kk;
+        // 0.28: sand grains: people sharing a cell push apart from each other, so a crowd fills the street's full width
+        // (sideways and forward only: a grain never pushes anyone back against the way they are going)
+        this.grain(k, cellIdx); const g = C.GRAIN_PUSH * (s === INF ? 0.5 : 1);
+        const vl = hyp(vx, vy);
+        if (vl > 1e-6) { const ux = vx / vl, uy = vy / vl, dot = this.spx * ux + this.spy * uy; if (dot < 0) { this.spx -= dot * ux; this.spy -= dot * uy; } }
+        vx += this.spx * g; vy += this.spy * g;
+      }
       // Move with collision against blocked cells (slide along axes).
       const l = hyp(vx, vy);
       if (l < 1e-6) continue;
@@ -1881,8 +1978,16 @@ export class Sim {
       const infected = s === INF, swimmer = infected && this.mutant[k] === 1;
       // Round to float32 first: the check must see exactly the position that gets stored.
       const nx = Math.fround(x + mx), ny = Math.fround(y + my);
-      if (this.free(nx, y, infected, swimmer)) this.ax[k] = nx; else this.hx[k] = -this.hx[k];
-      if (this.free(this.ax[k], ny, infected, swimmer)) this.ay[k] = ny; else this.hy[k] = -this.hy[k];
+      const movedX = this.free(nx, y, infected, swimmer);
+      if (movedX) this.ax[k] = nx; else this.hx[k] = -this.hx[k];
+      const movedY = this.free(this.ax[k], ny, infected, swimmer);
+      if (movedY) this.ay[k] = ny; else this.hy[k] = -this.hy[k];
+      if (!movedX && !movedY) {
+        // 0.28: boxed in (a unit's corner, a building's corner): sidestep along it instead of bouncing in place
+        const side = this.biasS[k] >= 0 ? 1 : -1, sx = Math.fround(x - my * side), sy = Math.fround(y + mx * side);
+        if (this.free(sx, sy, infected, swimmer)) { this.ax[k] = sx; this.ay[k] = sy; }
+        else { const tx = Math.fround(x + my * side), ty = Math.fround(y - mx * side); if (this.free(tx, ty, infected, swimmer)) { this.ax[k] = tx; this.ay[k] = ty; } }
+      }
       if (s === CIV) { const z = this.inZone[this.idx(this.ax[k] | 0, this.ay[k] | 0)]; if (z === 1 || z === 3) this.state[k] = SAFE_CIV; } // a gate is a guarded checkpoint
     }
 
@@ -1965,6 +2070,37 @@ export class Sim {
     this.spx = (dl - dr) * k; this.spy = (du - dd) * k;
   }
 
+  /** 0.28: push agent k away from the middle of everyone sharing its cell (scaled by how crowded the cell is). */
+  private grain(k: number, ci: number) {
+    const d = this.dens[ci];
+    if (d <= 1) { this.spx = 0; this.spy = 0; return; }
+    // centroid of the others in the cell
+    const ox = (this.sumX[ci] - this.ax[k]) / (d - 1), oy = (this.sumY[ci] - this.ay[k]) / (d - 1);
+    let dx = this.ax[k] - ox, dy = this.ay[k] - oy;
+    const l = hyp(dx, dy);
+    if (l < 1e-4) { const a = k * 2.399963; dx = Math.cos(a); dy = Math.sin(a); } else { dx /= l; dy /= l; }
+    const f = Math.min(1, (d - 1) / 3);
+    this.spx = dx * f; this.spy = dy * f;
+  }
+  /** 0.28: direction deeper into the zone (away from walls and gates) at an interior cell near the perimeter. */
+  private inward(cx: number, cy: number): [number, number] | null {
+    const d0 = this.depth[this.idx(cx, cy)];
+    let gx = 0, gy = 0;
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+      if (!dx && !dy) continue;
+      const nx = cx + dx, ny = cy + dy;
+      if (nx < 0 || ny < 0 || nx >= this.w || ny >= this.h) continue;
+      const i = this.idx(nx, ny);
+      if (this.inZone[i] !== 1 || !walkable(this.map.tile[i]) || this.occ[i]) continue;
+      const d = this.depth[i];
+      if (d <= d0) continue;
+      const wgt = Math.min(4, d - d0) / (dx && dy ? 1.414 : 1);
+      gx += dx * wgt; gy += dy * wgt;
+    }
+    const l = hyp(gx, gy);
+    return l < 1e-6 ? null : [gx / l, gy / l];
+  }
+
   private mill(k: number, r: () => number, dt: number) {
     const sqz = this.padSqueeze.length ? this.padSqueeze : null;
     const here = this.idx(this.ax[k] | 0, this.ay[k] | 0);
@@ -1986,9 +2122,19 @@ export class Sim {
     if (this.hp[k] > 0) { this.hp[k] -= dt; sp = C.CIV_SPEED * dt; }
     else if (r() < 0.05) { const a = r() * 6.283; this.hx[k] = Math.cos(a); this.hy[k] = Math.sin(a); }
     const ci = this.idx(this.ax[k] | 0, this.ay[k] | 0);
+    let clearing = false;
     if (this.inZone[ci] !== 1) { // still in the gateway (or on a broken wall): step inside
       const d = this.downhill(this.civField, this.ax[k] | 0, this.ay[k] | 0);
       if (d) { this.hx[k] = d[0]; this.hy[k] = d[1]; }
+      clearing = true;
+    } else if (this.depth[ci] < C.GATE_CLEAR_DEPTH && this.hp[k] <= 0) { // 0.28: just inside: keep walking in
+      const d = this.inward(this.ax[k] | 0, this.ay[k] | 0);
+      if (d) { this.hx[k] = d[0]; this.hy[k] = d[1]; clearing = true; }
+    }
+    if (clearing) {
+      sp = Math.max(sp, C.CIV_SPEED * dt);
+      const dn = this.dens[ci];
+      if (dn > C.CIV_JAM_DENS) sp *= Math.max(0.35, C.CIV_JAM_DENS / dn);
     }
     // 0.22: people know where the Evac Points are and walk the zone's streets to the nearest one
     const pf = this.hasPads && this.inZone[ci] === 1 && this.hp[k] <= 0 ? this.padField[ci] : 65535;
@@ -1997,6 +2143,10 @@ export class Sim {
       if (d) { this.hx[k] = d[0]; this.hy[k] = d[1]; sp = C.CIV_SPEED * C.EVAC_WALK_MUL * dt; }
     }
     let hx = this.hx[k], hy = this.hy[k];
+    if (clearing) {
+      if (this.dens[ci] > 1) { this.grain(k, ci); hx += this.spx * C.GRAIN_PUSH; hy += this.spy * C.GRAIN_PUSH; }
+      const l = hyp(hx, hy); if (l > 1) { hx /= l; hy /= l; }
+    }
     if (this.inZone[ci] === 1 && this.hp[k] <= 0 && pf === 65535) { this.spread(this.ax[k] | 0, this.ay[k] | 0); hx += this.spx * 1.5; hy += this.spy * 1.5; } // fill the zone evenly
     const nx = Math.fround(this.ax[k] + hx * sp), ny = Math.fround(this.ay[k] + hy * sp);
     const ok = (x: number, y: number) => {
@@ -2228,6 +2378,18 @@ export class Sim {
   }
 
   private fireUnits(dt: number) {
+    if (this.shots.length) { let i = 0; while (i < this.shots.length && this.time - this.shots[i].land > 0.25) i++; if (i) this.shots.splice(0, i); }
+    if (this.impacts.length) {
+      const due = this.impacts.filter(m => m.t <= this.time);
+      if (due.length) {
+        this.impacts = this.impacts.filter(m => m.t > this.time);
+        for (const m of due) {
+          this.areaDamage(m.x, m.y, m.r, m.dmg, false, m.u, m.maxHits);
+          this.damageTerrain(m.x, m.y, m.r, m.sDmg);
+          this.blasts.push({ x: m.x, y: m.y, r: m.r, t: this.time, color: m.color });
+        }
+      }
+    }
     for (const u of this.units) {
       u.cooldown -= dt;
       const spec = C.UNITS[u.kind];
@@ -2257,12 +2419,17 @@ export class Sim {
             // first shell on the target, the rest of a broadside scattered around it
             const a = rr() * Math.PI * 2, r = k ? spec.splash * (0.8 + rr() * 0.9) : 0;
             const sx = Math.min(this.w - 1, Math.max(0, this.ax[t] + Math.cos(a) * r)), sy = Math.min(this.h - 1, Math.max(0, this.ay[t] + Math.sin(a) * r));
-            this.areaDamage(sx, sy, spec.splash, spec.damage, false, u, spec.maxHits);
-            this.damageTerrain(sx, sy, spec.splash, sDmg);
-            this.blasts.push({ x: sx, y: sy, r: spec.splash, t: this.time, color: spec.color });
+            // 0.28: the shell flies, then explodes where it lands (salvos ripple out a beat apart)
+            const rocket = u.kind === "himars" || u.kind === "reaper";
+            const mps = u.kind === "mortar" ? 120 : u.kind === "reaper" ? 350 : rocket ? 300 : 250;
+            // a ripple, not a wall of fire: battleship turrets a beat apart, HIMARS rockets leave the pod one by one
+            const ripple = u.kind === "battleship" ? 0.45 : u.kind === "himars" ? 0.6 : 0.18;
+            const fl = this.shoot(u, sx, sy, rocket ? SHOT_ROCKET : SHOT_SHELL, mps, k * ripple);
+            this.impacts.push({ x: sx, y: sy, r: spec.splash, dmg: spec.damage, maxHits: spec.maxHits, sDmg, u, t: this.time + fl, color: spec.color });
           }
           continue;
         }
+        this.shoot(u, this.ax[t], this.ay[t], u.kind === "sniper" ? SHOT_SNIPER : SHOT_SMALL, SHOT_MPS[u.kind === "sniper" ? SHOT_SNIPER : SHOT_SMALL]);
         this.hp[t] -= spec.damage;
         if (this.hp[t] <= 0) { this.state[t] = DEAD; this.recordKill(t, u); }
       }
@@ -2277,6 +2444,7 @@ export class Sim {
             u.cooldown2 += 1 / (cn.rate * (u.rateMul ?? 1));
             u.ammo -= 1;
             const sx = this.ax[t], sy = this.ay[t];
+            this.shoot(u, sx, sy, SHOT_CANNON, SHOT_MPS[SHOT_CANNON]);
             this.areaDamage(sx, sy, cn.splash, cn.damage, false, u, cn.maxHits);
             this.blasts.push({ x: sx, y: sy, r: cn.splash, t: this.time, color: spec.color });
           }
@@ -2299,7 +2467,7 @@ export class Sim {
         if (this.state[k] !== INF) continue;
         const dx = this.ax[k] - x, dy = this.ay[k] - y, d2 = dx * dx + dy * dy;
         if (d2 > R * R) continue;
-        const score = mode === "wall" ? this.infField[this.idx(this.ax[k] | 0, this.ay[k] | 0)] * 1000 + d2
+        const score = mode === "wall" ? (this.infField[this.idx(this.ax[k] | 0, this.ay[k] | 0)] / FIELD_STEP) * 1000 + d2
           : (this.chase[k] ? 0 : 1e6) + d2;
         if (score < bs && (!los || this.lineClear(x, y, this.ax[k], this.ay[k]))) { bs = score; best = k; }
       }
@@ -2387,7 +2555,7 @@ export class Sim {
           const a = r() * 6.283, d = 6 + r() * 10;
           const x = (fx + Math.cos(a) * d) | 0, y = (fy + Math.sin(a) * d) | 0;
           if (x < 0 || y < 0 || x >= this.w || y >= this.h || !walkable(this.map.tile[this.idx(x, y)])) continue;
-          const sc = this.countInf(x + 0.5, y + 0.5, 6, 40) * 10 + (this.civField[this.idx(x, y)] === 65535 ? 50 : this.civField[this.idx(x, y)] * 0.05)
+          const sc = this.countInf(x + 0.5, y + 0.5, 6, 40) * 10 + (this.civField[this.idx(x, y)] === 65535 ? 50 : (this.civField[this.idx(x, y)] / FIELD_STEP) * 0.05)
             + (49 - this.openness(x, y)) * 0.8; // dead ends and corners are traps
           if (sc < bs) { bs = sc; best = this.idx(x, y); }
         }
@@ -2525,7 +2693,7 @@ export class Sim {
       }
       if (n <= 2) continue;
       // covering fire: weight the crowd by what this gun is told to protect
-      const sc = mode === "wall" ? n * 30 / (10 + this.infField[this.idx(this.ax[pick] | 0, this.ay[pick] | 0)])
+      const sc = mode === "wall" ? n * 30 / (10 + this.infField[this.idx(this.ax[pick] | 0, this.ay[pick] | 0)] / FIELD_STEP)
         : mode === "civ" ? n + 3 * ch : n;
       // never shell a spot where the blast would reach the inside of the zone
       if (sc > bestN && pick >= 0 && this.clearOfZone(this.ax[pick], this.ay[pick], C.UNITS[u.kind].splash ?? 0)) { bestN = sc; best = pick; }

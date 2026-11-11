@@ -28,6 +28,7 @@ uniform vec4 cam;
 uniform vec2 view;
 uniform float dot;
 varying vec3 col;
+varying float psz;
 void main() {
   // states: 0 civilian, 1 infected, 2 dead, 3 safe civilian
   if (st > 1.5 && st < 2.5) { gl_Position = vec4(2.0, 2.0, 0.0, 1.0); gl_PointSize = 0.0; return; }
@@ -35,11 +36,17 @@ void main() {
   vec2 px = cam.xy + vec2(ax, ay) * cam.z;
   gl_Position = vec4(px / view * 2.0 - 1.0, 0.0, 1.0) * vec4(1.0, -1.0, 1.0, 1.0);
   gl_PointSize = (st > 0.5 && st < 1.5 && mut > 0.5) ? dot * 1.35 : dot;
+  psz = gl_PointSize;
 }`;
 const FS_AGENT = `
 precision mediump float;
 varying vec3 col;
-void main() { gl_FragColor = vec4(col, 1.0); }`;
+varying float psz;
+void main() {
+  // 0.28: round grains once they are a few pixels across (squares below that look the same and cost less)
+  if (psz >= 3.0) { vec2 d = gl_PointCoord - 0.5; if (d.x * d.x + d.y * d.y > 0.25) discard; }
+  gl_FragColor = vec4(col, 1.0);
+}`;
 
 export interface Cam { x: number; y: number; scale: number }
 
