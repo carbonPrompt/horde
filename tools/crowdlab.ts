@@ -104,6 +104,29 @@ function gate(panic: boolean) {
   console.log(`gate ${panic ? "panicked" : "calm    "}: ${flow.toFixed(2)} people/s/m (real calm about 1.3-1.9), ${times.length}/${s.civN} through in ${times[times.length - 1]?.toFixed(0)}s, crushed ${crushed}`);
 }
 
+/** A horde of 800 infected walking the street toward the zone: wall-hugging and rows, as for people. */
+function horde() {
+  const s = mkSim(8, 10);
+  for (let k = 0; k < s.civN; k++) s.state[k] = DEAD;
+  const r = (() => { let a = 11; return () => ((a = (a * 1103515245 + 12345) >>> 0) / 4294967296); })();
+  for (let j = 0; j < 800; j++) s.spawnInfected(4 + r() * 40, 18 + r() * 7.99, 1e9, false);
+  let hug = 0, cnt = 0; const bins = new Float64Array(80);
+  for (let t = 0; t < 50 * C.TICK_HZ; t++) {
+    s.step();
+    if (t < 10 * C.TICK_HZ || t % 5) continue;
+    for (let k = s.civN; k < s.n; k++) {
+      if (s.state[k] !== INF) continue;
+      const x = s.ax[k], y = s.ay[k];
+      if (x < 30 || x > 135 || y < 18 || y >= 26) continue;
+      cnt++; if (wallDist(s, x, y) < 0.15) hug++;
+      bins[Math.min(79, ((y - 18) / 0.1) | 0)]++;
+    }
+  }
+  let sum2 = 0; for (const b of bins) sum2 += (b / cnt) ** 2;
+  const per = cnt / Math.max(1, (40 * C.TICK_HZ) / 5);
+  console.log(`horde: wall-hug ${(100 * hug / cnt).toFixed(1)}%, rows ${((sum2 * bins.length) / (1 + bins.length / per)).toFixed(2)} (1.00 = random)`);
+}
+
 function perf() {
   for (const n of [15000, 50000, 200000]) {
     const s = new Sim(7, { civilians: n, budget: 500_000_000 } as any);
@@ -122,4 +145,5 @@ function perf() {
 const what = process.argv[2] ?? "all";
 if (what === "street" || what === "all") street();
 if (what === "gate" || what === "all") { gate(false); gate(true); }
+if (what === "horde" || what === "all") horde();
 if (what === "perf" || what === "all") perf();

@@ -81,6 +81,7 @@ export let EVAC_ABORT_INF = 8; // this many infected near the pad and the lift w
 export let SOUND_NEAR_ZOOM = 0.5; // 0.22: zombie and crowd sounds are silent until zoomed in past this (0 = all the way out, 1 = all the way in)
 export let EVAC_WALK_MUL = 0.8; // 0.22: people in a zone walk to the nearest Evac Point (any distance, along the zone's streets) at this x CIV_SPEED
 export let MILL_MAX_DENS = 24; // 0.30: people inside a zone don't step into a cell holding more than this (6 per m2)
+export let SETTLE_DENS = 1; // 0.30.1: people/m2 above which people with nowhere to go in a zone move to emptier ground
 export let WAIT_RHO = 3; // 0.30: people/m2 in the crowd waiting at an Evac Point (its area grows with the crowd)
 export let EVAC_GATHER_D = 6; // cells from the pad where they stop and wait for the lift
 export let AGENT_RESERVE = 25000; // slots for infected beyond the civilians
@@ -109,6 +110,7 @@ export let RHO_MAX = 5.4; // people/m2 where a calm crowd stops (Weidmann)
 export let RHO_GAMMA = 1.913; // Weidmann curve shape
 export let PANIC_RHO_MAX = 9; // people/m2 a panicked crowd will press to
 export let AIM_SWAY = 0.3; // rad: people weave a little around the route direction, each at their own slow pace
+export let EVAC_URGENCY = 0.3; // 0.30.1: fear floor for people outside a zone during an evacuation: they hurry (about 2.3 m/s)
 export let FEAR_RISE = 4; // 1/s: how fast fear rises to what a person senses
 export let FEAR_FADE_S = 15; // s: how long fear takes to fade once it's quiet
 export let FEAR_SPREAD = 0.55; // share of the fear around them that people catch (panic is contagious)
@@ -129,7 +131,8 @@ export let INF_SPEED = 1.9;
 export let SHAMBLER_MUL = 0.45; // 0.30: shamblers move at this x INF_SPEED (about 1.7 m/s)
 export let RUNNER_MUL = 1.35; // 0.30: runners at this x INF_SPEED (about 5 m/s, a sprint)
 export let INF_WALL_PUSH = 1.5; // 0.30: how hard infected keep off building walls
-export let INF_SWAY = 0.3; // 0.30: rad: how far infected weave around their way
+export let INF_WANDER = 1.4; // 0.30.1: rad per sqrt(s): how fast an infected's heading wanders
+export let INF_WANDER_BACK = 0.8; // 0.30.1: 1/s: how fast it drifts back toward the way it's going
 export let INF_SPEED_GROWTH = 0.004; // per second of battle, multiplicative-ish
 export let INF_HP = 100;
 export let INF_HP_GROWTH = 0.004; // +0.4% per second of battle
@@ -139,9 +142,9 @@ export let GRAIN_PUSH = 0.9; // 0.28: how hard people in one cell push apart fro
 export let INF_LUNGE_MUL = 1.2; // infected with a live person in sight surge this much faster
 export let KITE_R = 0.45; // mobile units back off when infected get within this fraction of their range
 export let INF_SENSE = 14; // cells: how far infected notice a civilian (0.10: single-minded, 9 before)
-export let CIV_SENSE = 6; // cells: how far civilians notice infected
+export let CIV_SENSE = 15; // cells: how far civilians notice infected (0.30.1: 30 m, screams and running carry; was 6)
 export let BITE_RANGE = 0.9;
-export let BITE_CHANCE = 0.2; // per tick in range
+export let BITE_CHANCE = 0.04; // 0.30.1: a grab has to land (was 0.2) // per tick in range
 export let SAFE_BITE_MUL = 0.1; // inside a zone people barricade indoors: bites land a tenth as often
 export let WALL_DPS = 4; // wall HP removed per second per infected touching it
 export let WALL_MAX_ATTACKERS = 8; // only this many infected can claw at one wall cell at a time
@@ -169,7 +172,9 @@ export let CRUSH_YIELD_MUL = 0.3; // speed when civilians are in its way (it nev
 /** 0.27: extra steps the Evac Point route charges for squeezing past a unit that plugs a street (so people walk around one when they can). */
 export let SQUEEZE_COST = 30;
 export let MOBILE_HURT_DPS = 6; // per infected touching an APC or squad
-export let GATE_HP = 3000; // gates let civilians in but break sooner than walls (WALL_HP)
+export let GATE_HP = 1500; // gates let civilians in but break sooner than walls (WALL_HP); 0.30.1: weaker (was 3000), a checkpoint, not a wall
+export let GATE_CLOSE_S = 4; // 0.30.1: seconds for a gate to close in battle (people step clear first)
+export let GATE_OPEN_S = 3; // 0.30.1: seconds for a wall section to open into a gate in battle
 
 export type UnitKind = "garrison" | "sniper" | "turret" | "mortar" | "howitzer" | "himars" | "apc" | "tank" | "gunboat" | "battleship" | "apache" | "reaper" | "para" | "police" | "militia";
 /** Units the player can build directly (paratroopers arrive by ability; police and militia spawn from support buildings). */
@@ -350,7 +355,7 @@ export let SWIMMER_BASE_FRAC = 0.08;
 export let SWIMMER_WAVE_GROWTH = 0.015;
 export let SWIMMER_MAX_FRAC = 0.25;
 
-export const VERSION = "0.30.0";
+export const VERSION = "0.31.0";
 
 /** The campaign: fixed cities that unlock in order (a medal on one opens the next). */
 export interface CityDef { id: string; name: string; seed: number; budget: number; waveMul: number; sites: number; speedMul: number; blurb: string; real?: boolean; trial?: string } // trial: hardware this city lends you before you unlock it
@@ -761,6 +766,7 @@ export const TUNABLE: Record<string, [() => number, (v: number) => void]> = {
   SOUND_NEAR_ZOOM: [() => SOUND_NEAR_ZOOM, v => { SOUND_NEAR_ZOOM = v; }],
   EVAC_WALK_MUL: [() => EVAC_WALK_MUL, v => { EVAC_WALK_MUL = v; }],
   MILL_MAX_DENS: [() => MILL_MAX_DENS, v => { MILL_MAX_DENS = v; }],
+  SETTLE_DENS: [() => SETTLE_DENS, v => { SETTLE_DENS = v; }],
   WAIT_RHO: [() => WAIT_RHO, v => { WAIT_RHO = v; }],
   EVAC_GATHER_D: [() => EVAC_GATHER_D, v => { EVAC_GATHER_D = v; }],
   AGENT_RESERVE: [() => AGENT_RESERVE, v => { AGENT_RESERVE = v; }],
@@ -786,6 +792,7 @@ export const TUNABLE: Record<string, [() => number, (v: number) => void]> = {
   RHO_GAMMA: [() => RHO_GAMMA, v => { RHO_GAMMA = v; }],
   PANIC_RHO_MAX: [() => PANIC_RHO_MAX, v => { PANIC_RHO_MAX = v; }],
   AIM_SWAY: [() => AIM_SWAY, v => { AIM_SWAY = v; }],
+  EVAC_URGENCY: [() => EVAC_URGENCY, v => { EVAC_URGENCY = v; }],
   FEAR_RISE: [() => FEAR_RISE, v => { FEAR_RISE = v; }],
   FEAR_FADE_S: [() => FEAR_FADE_S, v => { FEAR_FADE_S = v; }],
   FEAR_SPREAD: [() => FEAR_SPREAD, v => { FEAR_SPREAD = v; }],
@@ -806,7 +813,8 @@ export const TUNABLE: Record<string, [() => number, (v: number) => void]> = {
   SHAMBLER_MUL: [() => SHAMBLER_MUL, v => { SHAMBLER_MUL = v; }],
   RUNNER_MUL: [() => RUNNER_MUL, v => { RUNNER_MUL = v; }],
   INF_WALL_PUSH: [() => INF_WALL_PUSH, v => { INF_WALL_PUSH = v; }],
-  INF_SWAY: [() => INF_SWAY, v => { INF_SWAY = v; }],
+  INF_WANDER: [() => INF_WANDER, v => { INF_WANDER = v; }],
+  INF_WANDER_BACK: [() => INF_WANDER_BACK, v => { INF_WANDER_BACK = v; }],
   INF_SPEED_GROWTH: [() => INF_SPEED_GROWTH, v => { INF_SPEED_GROWTH = v; }],
   INF_HP: [() => INF_HP, v => { INF_HP = v; }],
   INF_HP_GROWTH: [() => INF_HP_GROWTH, v => { INF_HP_GROWTH = v; }],
@@ -838,6 +846,8 @@ export const TUNABLE: Record<string, [() => number, (v: number) => void]> = {
   SQUEEZE_COST: [() => SQUEEZE_COST, v => { SQUEEZE_COST = v; }],
   MOBILE_HURT_DPS: [() => MOBILE_HURT_DPS, v => { MOBILE_HURT_DPS = v; }],
   GATE_HP: [() => GATE_HP, v => { GATE_HP = v; }],
+  GATE_CLOSE_S: [() => GATE_CLOSE_S, v => { GATE_CLOSE_S = v; }],
+  GATE_OPEN_S: [() => GATE_OPEN_S, v => { GATE_OPEN_S = v; }],
   MILITIA_MAX: [() => MILITIA_MAX, v => { MILITIA_MAX = v; }],
   BUDGET_DISCOUNT: [() => BUDGET_DISCOUNT, v => { BUDGET_DISCOUNT = v; }],
   REPAIR_WALL_HPS: [() => REPAIR_WALL_HPS, v => { REPAIR_WALL_HPS = v; }],

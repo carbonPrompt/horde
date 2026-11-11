@@ -213,9 +213,14 @@ test("money: income in battle, purchases, extra zones, selling takes time, gates
   // gates: close then reopen in battle
   const gi = s.inZone.indexOf(3);
   const gx = gi % s.w, gy = (gi / s.w) | 0;
+  // 0.30.1: in battle a gate takes GATE_CLOSE_S to close and GATE_OPEN_S to open
   expect(s.toggleGate(gx, gy)).toBeNull();
+  expect(s.inZone[gi]).toBe(3); // still closing
+  expect(s.toggleGate(gx, gy)).not.toBeNull(); // already moving
+  while (s.switching.length) s.step();
   expect(s.inZone[gi]).toBe(2);
   expect(s.toggleGate(gx, gy)).toBeNull();
+  while (s.switching.length) s.step();
   expect(s.inZone[gi]).toBe(3);
 }, 120000);
 
@@ -392,7 +397,7 @@ test("mutators and daily challenge modify rules deterministically and kill heatm
   const s = new Sim(7, { budget: 20_000_000, mutators: ["supply_shortage", "fragile_walls", "titan_strain"], civilians: 2000 });
   expect(s.budget).toBe(Math.round(Math.round(40_000_000 * 1.35) * 1.3)); // budget doubled, small crowds never cut it
   expect(s.wallMaxHp()).toBe(4000);
-  expect(s.gateMaxHp()).toBe(1500);
+  expect(s.gateMaxHp()).toBe(C.GATE_HP * 0.5);
   expect(s.supportCost("supply")).toBe(1_000_000); // 50% off under supply_shortage
   expect(s.supportCost("repair")).toBe(1_350_000); // 25% off under fragile_walls
   expect(s.setZone(zoneAroundCenter(s))).toBeNull();
@@ -1378,4 +1383,40 @@ test("ground units can't shoot through a standing wall; rooftop units can", () =
   const ammo0 = tur.ammo;
   for (let i = 0; i < 20; i++) s.step();
   expect(tur.ammo).toBe(ammo0);
+}, 60000);
+
+// ---------- 0.30.1 ----------
+test("End round: the zone counts as saved, the rest are left behind", () => {
+  const s = new Sim(42, { civilians: 2000 });
+  s.setZone(zoneAroundCenter(s));
+  s.startBattle();
+  expect(s.endRoundNow()).not.toBeNull(); // not before the outbreak
+  while (!s.outbreak) s.step();
+  for (let i = 0; i < 200; i++) s.step();
+  const c = s.counts();
+  expect(s.endRoundNow()).toBeNull();
+  expect(s.roundDone).toBe(true);
+  expect(s.roundResult!.saved).toBe(s.evacuated + c.safe);
+  expect(s.roundResult!.left).toBe(c.civ);
+  expect(s.endRoundNow()).not.toBeNull(); // only once
+}, 60000);
+
+test("closing a gate in battle takes time and steps people in it clear; nobody stays inside a wall", () => {
+  const s = new Sim(42, { civilians: 3000 });
+  s.setZone(zoneAroundCenter(s));
+  s.startBattle();
+  const gi = s.inZone.indexOf(3), gx = gi % s.w, gy = (gi / s.w) | 0;
+  // put people right in the gate
+  for (let k = 0; k < 20; k++) { s.ax[k] = gx + 0.5; s.ay[k] = gy + 0.5; s.state[k] = 3; }
+  expect(s.closeAllGates()).toBeGreaterThan(0);
+  expect(s.inZone[gi]).toBe(3);
+  let steps = 0; while (s.switching.length) { s.step(); steps++; }
+  expect(steps).toBeGreaterThanOrEqual(Math.floor(C.GATE_CLOSE_S * C.TICK_HZ) - 1);
+  expect(s.inZone[gi]).toBe(2);
+  s.step();
+  for (let k = 0; k < s.civN; k++) {
+    if (s.state[k] !== 0 && s.state[k] !== 3) continue;
+    const i = s.idx(s.ax[k] | 0, s.ay[k] | 0);
+    expect(s.inZone[i] === 2 && s.wallHp[i] > 0).toBe(false);
+  }
 }, 60000);

@@ -668,14 +668,14 @@ addEventListener("keydown", e => {
   else if (k === "r" || k === "R") showRanges = !showRanges;
   else if (k === "h" || k === "H") { showHeatmap = !showHeatmap; refreshUi(); }
   else if (k === "Enter" && tool === "zone" && draft.length) closeDraft();
-  else if (k === "1") setSpeed(1); else if (k === "2") setSpeed(2); else if (k === "3") setSpeed(3);
+  else if (k === "1") setSpeed(0.5); else if (k === "2") setSpeed(1); else if (k === "3") setSpeed(2); // 0.30.1: half, real time, 2x
   else if (k === "q" || k === "Q") $("recall").click();
   else if (k === "l" || k === "L") $("closegates").click(); else if (k === "k" || k === "K") $("clear").click();
   else if (!e.ctrlKey && !e.metaKey && !e.altKey && QUICK_KEYS.includes(k.toLowerCase())) useSlot(QUICK_KEYS.indexOf(k.toLowerCase())); // 0.22: 7 quick bar keys
 });
 addEventListener("keyup", e => keys.delete(e.key.toLowerCase()));
 
-function setSpeed(s: number) { speed = s === 4 ? 3 : s; refreshUi(); } // 0.19: 1x 2x 3x; 4 is gone (dev tools keep 8x/16x)
+function setSpeed(s: number) { speed = s === 4 ? 2 : s; refreshUi(); } // 0.30.1: half, real time, 2x (dev tools keep 8x/16x)
 function startBattle() {
   if (sim.phase !== "plan") return;
   if (!sim.zoneClosed) { say("Draw a safe zone first."); return; }
@@ -750,7 +750,9 @@ function hud(now: number) {
     `<span class="evac">Evacuated ${sim.evacuated.toLocaleString()}</span>` +
     `<span class="inf">Infected ${c.inf.toLocaleString()}</span>` +
     `<span>Killed ${sim.kills.toLocaleString()}</span>` +
-    `<span>${m}:${String(s).padStart(2, "0")}</span>`;
+    (sim.crushed ? `<span class="inf">Crushed ${sim.crushed.toLocaleString()}</span>` : "") +
+    `<span>${m}:${String(s).padStart(2, "0")}</span>` +
+    (sim.phase === "battle" && sim.outbreak && !sim.roundDone ? `<button class="endround" data-act="endround" title="Score the round now: people in the zone count as saved, the rest are left behind">End round</button>` : "");
   $("budget").textContent = C.money(sim.remaining());
   if (sim.phase === "battle" && sim.lastIncome) $("budget").textContent += `  +${C.money(sim.lastIncome)}/10s`;
   if (tool === "zone" && draft.length) $("budget").textContent += `  (zone ≈ ${C.money(draftCost())})`;
@@ -803,7 +805,7 @@ function showEnd(r: Score, round: boolean) {
   $("end-score").innerHTML = `Round score <b>${f0(r.score)}</b> = saved ${f0(r.parts.saved)}% (${f0(pp.saved)} pts) + speed (${f0(pp.speed)} pts) + city ${f0(r.parts.city)}% intact (${f0(pp.city)} pts) + ${f0(r.parts.kills)}% of the infected killed (${f0(pp.kills)} pts)` +
     (r.mayhem !== undefined ? `<br>Keep fighting: <b>Mayhem ${r.mayhem.toLocaleString()}</b> = ${(r.killsAfter ?? 0).toLocaleString()} kills + ${Math.floor((r.damageAfter ?? 0) / C.MAYHEM_DAMAGE_PER_POINT).toLocaleString()} for ${C.money(r.damageAfter ?? 0)} of damage${bestMayhem !== undefined && bestMayhem >= r.mayhem ? ` · best ${bestMayhem.toLocaleString()}` : city && !dailyDate ? " · new best" : ""}` : "");
   const held = Math.max(0, sim.time - C.WARNING_S), hm = Math.floor(held / 60), hs = Math.floor(held % 60);
-  $("end-pct").textContent = `${r.pct.toFixed(1)}% evacuated (${r.saved.toLocaleString()} of ${sim.civN.toLocaleString()}) · held ${hm}:${String(hs).padStart(2, "0")} after the outbreak · ${sim.wave} hordes · ${sim.liftsFlown} lifts flown${sim.liftsAborted ? `, ${sim.liftsAborted} waved off` : ""}`;
+  $("end-pct").textContent = `${r.pct.toFixed(1)}% saved (${r.saved.toLocaleString()} of ${sim.civN.toLocaleString()})${r.left ? ` · ${r.left.toLocaleString()} left behind` : ""} · held ${hm}:${String(hs).padStart(2, "0")} after the outbreak · ${sim.wave} hordes · ${sim.liftsFlown} lifts flown${sim.liftsAborted ? `, ${sim.liftsAborted} waved off` : ""}`;
   const by = new Map<C.UnitKind, [number, number]>();
   for (const u of sim.units) { const v = by.get(u.kind) ?? [0, 0]; by.set(u.kind, [v[0] + 1, v[1] + u.kills]); }
   const rows = [...by].map(([k, [n, kills]]) => `${n} ${C.UNITS[k].name}${n > 1 ? "s" : ""}: ${kills.toLocaleString()}`).join(" · ");
@@ -945,6 +947,21 @@ function draw(now: number) {
     }
   }
 
+  // 0.30.1: gates and walls opening or closing take a few seconds: the cells fill with yellow as they move
+  for (const sw of sim.switching) {
+    const k = Math.min(1, (sim.time - sw.start) / Math.max(0.01, sw.at - sw.start));
+    ctx.fillStyle = sw.to === 2 ? "rgba(255,214,0,0.55)" : "rgba(79,195,247,0.55)";
+    ctx.strokeStyle = "#ffd600"; ctx.lineWidth = 1;
+    for (const c of sw.cells) {
+      const px = cam.x + (c % sim.w) * s, py = cam.y + ((c / sim.w) | 0) * s;
+      ctx.strokeRect(px + 0.5, py + 0.5, s - 1, s - 1);
+      ctx.fillRect(px, py + s * (1 - k), s, s * k);
+    }
+    if (s > 1.5 && sw.cells.length <= 12) {
+      const c = sw.cells[0];
+      label(`${sw.to === 2 ? "Closing" : "Opening"} ${Math.max(0, sw.at - sim.time).toFixed(1)}s`, cam.x + ((c % sim.w) + 1.5) * s, cam.y + ((c / sim.w) | 0) * s - 4);
+    }
+  }
   // Bridge charges.
   for (const b of sim.c4) {
     if (sim.blown.has(b)) continue;
@@ -2069,7 +2086,7 @@ $("startbtn").addEventListener("click", () => {
 });
 $("heatmapbtn").addEventListener("click", () => { showHeatmap = !showHeatmap; refreshUi(); });
 $("end-heatmap").addEventListener("click", () => { showHeatmap = true; $("end").hidden = true; refreshUi(); say("Showing kill heatmap. Press H or Menu when done.", 5000); });
-$("closegates").addEventListener("click", () => { const n = sim.closeAllGates(); buildZone(); log("info", "close-all-gates", { closed: n, t: +sim.time.toFixed(1), phase: sim.phase }); say(n ? "All gates closed." : "No open gates left."); });
+$("closegates").addEventListener("click", () => { const n = sim.closeAllGates(); buildZone(); log("info", "close-all-gates", { closed: n, t: +sim.time.toFixed(1), phase: sim.phase }); say(n ? (sim.phase === "battle" ? `Closing ${n} gate cells (${C.GATE_CLOSE_S}s).` : "All gates closed.") : "No open gates left."); });
 $("clear").addEventListener("click", () => { if (sim.phase === "plan") { sim.clearZone(); draft = []; buildZone(); refreshUi(); } });
 $("end-retry").addEventListener("click", () => newSim(true));
 $("end-continue").addEventListener("click", () => { $("end").hidden = true; speed = pausedSpeed || 1; log("info", "round-continue", { t: +sim.time.toFixed(1) }); refreshUi(); });
@@ -2115,6 +2132,16 @@ $("p-reset").addEventListener("click", () => { // fresh map: same city, nothing 
   if (!confirm("Restart this city with an empty map? Your zone, walls and units will be removed.")) return;
   resume(); newSim(false);
 });
+// 0.30.1: End round (stats bar button, rebuilt every HUD refresh, so delegated)
+const endRoundNow = () => {
+  if (sim.phase !== "battle" || sim.roundDone) return;
+  const c = sim.counts();
+  if (!confirm(`End the round now? ${c.safe.toLocaleString()} people in the zone count as saved; ${c.civ.toLocaleString()} still outside are left behind.`)) return;
+  const e = sim.endRoundNow(); if (e) { say(e); return; }
+  log("info", "end-round", { t: +sim.time.toFixed(1), safe: c.safe, left: c.civ, evacuated: sim.evacuated });
+};
+$("stats").addEventListener("click", ev => { if ((ev.target as HTMLElement).closest("[data-act=endround]")) endRoundNow(); });
+$("p-endround").addEventListener("click", () => { resume(); endRoundNow(); });
 $("p-withdraw").addEventListener("click", () => {
   if (sim.phase !== "battle") { resume(); return; }
   log("info", "withdraw", { t: +sim.time.toFixed(1), evacuated: sim.evacuated });

@@ -391,6 +391,8 @@
   #end-headline { font-size: 26px; font-weight: 900; color: #fca5a5; letter-spacing: 0.5px; }
   #end-score { font-size: 13px; color: #cbd5e1; line-height: 1.5; }
   #end-score b { color: #fff; }
+  #stats .endround { margin-left: 6px; padding: 2px 10px; font-size: 12px; font-weight: 700; background: #7c2d12; border: 1px solid #fb923c; color: #fff; border-radius: 6px; cursor: pointer; }
+  #stats .endround:hover { background: #9a3412; }
 </style>
 </head>
 <body class="attract">
@@ -455,7 +457,7 @@
       <button class="ctl2" id="recall" title="Q">Recall<br>Units<span class="hk">Q</span></button>
       <button class="ctl2" id="closegates" title="L">Lock<br>Gates<span class="hk">L</span></button>
       <button class="ctl2" id="clear" title="K">Clear<br>Zone<span class="hk">K</span></button>
-      <div class="spd3"><div class="row"><button data-speed="1" title="1">1x<span class="k">1</span></button><button data-speed="2" title="2">2x<span class="k">2</span></button><button data-speed="3" title="3">3x<span class="k">3</span></button></div><button class="pausebar" data-speed="0" title="Space">PAUSE<span class="k">Space</span></button></div>
+      <div class="spd3"><div class="row"><button data-speed="0.5" title="1">½x<span class="k">1</span></button><button data-speed="1" title="2">1x<span class="k">2</span></button><button data-speed="2" title="3">2x<span class="k">3</span></button></div><button class="pausebar" data-speed="0" title="Space">PAUSE<span class="k">Space</span></button></div>
       <button id="startbtn">Start Battle</button>
     </div>
     <div id="tool-cards" hidden>
@@ -607,7 +609,7 @@
     <p><b>4. Warning.</b> When the battle starts an emergency broadcast goes out: people head for your safe zones and the first cases turn somewhere outside your zones after 20 seconds.</p>
     <p><b>5. Evacuate.</b> Build <b>Evac Points</b> (rooftop helipads) inside your zone: every 12 s a lift flies people out, and trains carry people out on the rails. Each extra pad costs double the last ($3M, $6M, $12M...), so plan where they go. Each person flown out brings $24,000 in federal evacuation funding. A lift waves off if infected crowd the pad.</p>
     <p><b>Money is real.</b> Prices are real-world US dollars: ground hardware and helicopters at their unit price, ships and jets at the cost of the mission. Ordnance is cheap next to hardware but limited per battle, like a real stockpile (one MOAB, one nuke, four Tomahawks). The end card shows what you spent and the property damage bill.</p>
-    <p><b>6. Survive the hordes.</b> Hordes walk in from outside the city along highways, rail lines, bridges and the river (an amber arrow shows where the next one comes in). Each is bigger and comes sooner. <b>The round ends</b> when nobody is left in the city (everyone alive is out), or when only a few stuck stragglers remain. Your round score (0 to 100) is mostly people saved, plus how fast, how intact the city is and how many of the infected you killed: Bronze 10, Silver 30, Gold 50, Platinum 75 points, and at least 5% saved for any medal. Then <b>Keep fighting</b>: endless, harder hordes scored as <b>Mayhem</b> (kills plus city damage, the more the better) until you pull out. Bonus XP for keeping the city intact (Light Touch) or for wrecking it (Scorched Earth, 35% wrecked or a $1 billion damage bill). Pause menu: Pull out ends the battle.</p>
+    <p><b>6. Survive the hordes.</b> Hordes walk in from outside the city along highways, rail lines, bridges and the river (an amber arrow shows where the next one comes in). Each is bigger and comes sooner. <b>The round ends</b> when nobody is left in the city (everyone alive is out), or when only a few stuck stragglers remain. Your round score (0 to 100) is mostly people saved, plus how fast, how intact the city is and how many of the infected you killed: Bronze 10, Silver 30, Gold 50, Platinum 75 points, and at least 5% saved for any medal. Then <b>Keep fighting</b>: endless, harder hordes scored as <b>Mayhem</b> (kills plus city damage, the more the better) until you pull out. Bonus XP for keeping the city intact (Light Touch) or for wrecking it (Scorched Earth, 35% wrecked or a $1 billion damage bill). Pause menu: Pull out ends the battle. <b>End round</b> (top bar, after the outbreak) scores the round right away when only stragglers are left: people in the zone count as saved, the rest are left behind.</p>
     <p><b>Abilities &amp; Realistic Deployment.</b> Buy abilities while planning or mid-battle: <b>Airstrike</b> sends an F-15E Strike Eagle to bomb a line, <b>Firebomb</b> drops incendiary canisters, <b>Paratroopers</b> sends a C-130J Hercules to drop an airborne squad on parachutes, and <b>Supply drop</b> parachutes 4 GPS-guided crates that refill 100% ammo, heal mobile squads, repair walls within 70 m, and leave a field supply depot for 45 s. Mid-battle units arrive via <b>UH-60 Black Hawk</b>, <b>CH-47 Chinook</b> sling-load, or <b>C-130J heavy APC parachute drop</b>, and Supply Depots dispatch autonomous <b>Cargo Drones</b>.</p>
     <p><b>Terrain &amp; Structure Destruction.</b> Heavy weapons (Mortars, Howitzers, Battleships, Airstrikes, and Fuel Depots) crater streets, scorch terrain, shear floors off buildings, and collapse heavily shelled buildings into walkable rubble that slows advancing hordes by 30%.</p>
     <p><b>Money.</b> Every 10 seconds of battle you earn money for each person safe in your zones, plus a little for every infected killed. Spend it any time: new units (they take a few seconds to set up), abilities, bridge charges, even extra safe zones (those cost a lot more). Gates can be opened and closed whenever you like. Stronger units take longer to set up. Selling a unit mid-battle (Sell / Evac) dispatches an extraction helicopter to pull it out; then you get its cost back.</p>
@@ -658,6 +660,7 @@
       <button id="p-restart">Restart city (keep plan)</button>
       <button data-go="howto">How to play</button>
       <button data-go="settings">Settings</button>
+      <button id="p-endround">End round (score it now; the zone counts as saved)</button>
       <button id="p-withdraw">Pull out (end battle, keep who got out)</button>
       <button id="p-title">Quit to menu</button>
       <button id="p-quit">Quit to desktop</button>

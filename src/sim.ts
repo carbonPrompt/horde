@@ -23,6 +23,7 @@ export interface Score {
   saved: number; pct: number; medal: string | null; reason: string; intact: number; bonus: string | null; xp: number; waves: number; round: boolean; damage: number; spent: number;
   score: number; parts: RoundParts; kills: number; // 0.20: round score 0..100 and its four parts
   killsAfter?: number; damageAfter?: number; mayhem?: number; // Keep fighting (after the round)
+  left?: number; zoneHeld?: number; // 0.30.1: people still outside (left behind) and in the zone when the round was scored
 }
 
 export interface Entry { kind: "highway" | "rail" | "bridge" | "road" | "river"; cells: [number, number][]; x: number; y: number; edge: number; weight: number }
@@ -181,6 +182,7 @@ export class Sim {
   fieldDirty = true;
   // 0.30 crowd model (see stepCiv): velocity, fear, odd panic acts, knocked down, families.
   velX: Float32Array; velY: Float32Array; // cells/s
+  zWand: Float32Array; // 0.30.1: each infected's wandering heading offset (rad)
   fear: Float32Array; zStim: Float32Array; // fear 0..1; how scary the nearest infected is (sensed every 4th tick)
   act: Uint8Array; actT: Float32Array; // panic acts: 1 run the wrong way, 2 freeze; seconds left
   downT: Float32Array; crushT: Float32Array; // knocked down (s left); time spent in a crush
@@ -394,7 +396,7 @@ export class Sim {
     this.biasC = new Float32Array(this.n); this.biasS = new Float32Array(this.n);
     for (let k = 0; k < this.n; k++) { const a = (((k * 0.6180339887) % 1) - 0.5) * 1.0; this.biasC[k] = Math.cos(a); this.biasS[k] = Math.sin(a); }
     this.chase = new Uint8Array(this.n);
-    this.velX = new Float32Array(this.n); this.velY = new Float32Array(this.n);
+    this.velX = new Float32Array(this.n); this.velY = new Float32Array(this.n); this.zWand = new Float32Array(this.n);
     this.fear = new Float32Array(this.n); this.zStim = new Float32Array(this.n);
     this.act = new Uint8Array(this.n); this.actT = new Float32Array(this.n);
     this.downT = new Float32Array(this.n); this.crushT = new Float32Array(this.n);
@@ -680,6 +682,47 @@ export class Sim {
   }
 
   /** Toggle a gate on a wall cell (and its wall neighbors across the road width). */
+  /** 0.30.1: gates and walls take time to open or close during a battle (people get out of the way first). */
+  switching: { cells: number[]; to: 2 | 3; start: number; at: number }[] = [];
+  private applySwitch(cells: number[], to: 2 | 3) {
+    const gMax = this.gateMaxHp(), wMax = this.wallMaxHp();
+    for (const c of cells) {
+      if (this.wallHp[c] <= 0 || this.inZone[c] === to || (this.inZone[c] !== 2 && this.inZone[c] !== 3)) continue; // broken meanwhile
+      this.wallHp[c] = to === 2 ? (this.wallHp[c] / gMax) * wMax : (this.wallHp[c] / wMax) * gMax; // keeps its damage
+      this.inZone[c] = to;
+    }
+    if (to === 2) this.clearCells(cells);
+    this.fieldDirty = true;
+  }
+  /** Anyone (not infected) standing in these cells steps into the zone. */
+  private clearCells(cells: number[]) {
+    const set = new Set(cells);
+    for (let k = 0; k < this.civN; k++) {
+      const st = this.state[k];
+      if (st !== CIV && st !== SAFE_CIV) continue;
+      if (set.has(this.idx(this.ax[k] | 0, this.ay[k] | 0))) this.stepInside(k);
+    }
+  }
+  /** Put a person caught in a wall on the nearest open cell inside the zone (they are safe). */
+  private stepInside(k: number) {
+    const cx = this.ax[k] | 0, cy = this.ay[k] | 0;
+    for (let r = 1; r <= 5; r++) for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) {
+      if (Math.abs(dx) !== r && Math.abs(dy) !== r) continue;
+      const x = cx + dx, y = cy + dy;
+      if (x < 0 || y < 0 || x >= this.w || y >= this.h) continue;
+      const i = this.idx(x, y);
+      if (this.inZone[i] === 1 && walkable(this.map.tile[i]) && !this.occ[i]) {
+        this.ax[k] = Math.fround(x + 0.5); this.ay[k] = Math.fround(y + 0.5); this.state[k] = SAFE_CIV; this.velX[k] = 0; this.velY[k] = 0; return;
+      }
+    }
+  }
+  private stepSwitching() {
+    for (let i = this.switching.length - 1; i >= 0; i--) {
+      const sw = this.switching[i];
+      if (this.time >= sw.at) { this.applySwitch(sw.cells, sw.to); this.switching.splice(i, 1); }
+    }
+  }
+
   toggleGate(x: number, y: number): string | null {
     const i = this.idx(x, y);
     const z = this.inZone[i];
@@ -702,25 +745,29 @@ export class Sim {
     const to = z === 2 ? 3 : 2;
     if (this.phase !== "plan" && run.some(c => this.wallHp[c] <= 0)) return "That crossing is already broken.";
     const gMax = this.gateMaxHp(), wMax = this.wallMaxHp();
-    for (const c of run) {
-      if (this.phase === "plan") this.wallHp[c] = to === 3 ? gMax : wMax;
-      else this.wallHp[c] = to === 2 ? (this.wallHp[c] / gMax) * wMax : (this.wallHp[c] / wMax) * gMax; // keeps its damage
-      this.inZone[c] = to;
+    if (this.phase === "plan") {
+      for (const c of run) { this.wallHp[c] = to === 3 ? gMax : wMax; this.inZone[c] = to; }
+      this.fieldDirty = true;
+      return null;
     }
-    this.fieldDirty = true;
+    if (this.switching.some(sw => sw.cells.some(c => run.includes(c)))) return "That crossing is already moving.";
+    const dur = to === 2 ? C.GATE_CLOSE_S : C.GATE_OPEN_S;
+    this.switching.push({ cells: run, to, start: this.time, at: this.time + dur });
     return null;
   }
 
   /** Turn every intact gate into a wall (planning or battle). Returns how many crossings changed. */
   closeAllGates() {
     let n = 0;
-    const gMax = this.gateMaxHp(), wMax = this.wallMaxHp();
+    const wMax = this.wallMaxHp(), cells: number[] = [];
+    const moving = new Set(this.switching.flatMap(sw => sw.cells));
     for (let i = 0; i < this.inZone.length; i++) {
-      if (this.inZone[i] !== 3 || this.wallHp[i] <= 0) continue;
-      this.wallHp[i] = this.phase === "plan" ? wMax : (this.wallHp[i] / gMax) * wMax;
-      this.inZone[i] = 2; n++;
+      if (this.inZone[i] !== 3 || this.wallHp[i] <= 0 || moving.has(i)) continue;
+      if (this.phase === "plan") { this.wallHp[i] = wMax; this.inZone[i] = 2; } else cells.push(i);
+      n++;
     }
-    if (n) this.fieldDirty = true;
+    if (cells.length) this.switching.push({ cells, to: 2, start: this.time, at: this.time + C.GATE_CLOSE_S });
+    else if (n) this.fieldDirty = true;
     return n;
   }
 
@@ -1922,11 +1969,12 @@ export class Sim {
       this.nextWaveT = this.time + rollGap(this.diff, h, r, this.mutators.has("blitz_hordes"));
     }
     if (this.marching.length) this.stepMarch(r, dt);
+    if (this.switching.length) this.stepSwitching();
     this.rebuildOcc(dt);
     { this.waitN = this.waitCount; this.waitCount = 0;
       const need = Math.ceil(this.waitN / (C.WAIT_RHO * C.CELL_M * C.CELL_M)), ring = this.padRing; // street cells the crowd needs
       this.gatherD = Math.max(C.EVAC_GATHER_D, ring.length ? ring[Math.min(ring.length - 1, need)] : 0); }
-    { let alive = 0; for (let k = 0; k < this.civN; k++) if (this.state[k] === CIV) alive++;
+    { let alive = 0; for (let k = 0; k < this.civN; k++) if (this.state[k] === CIV || this.state[k] === SAFE_CIV) alive++;
       this.lod = alive > 120000 ? 8 : alive > 6000 ? 4 : alive > 2000 ? 2 : 1; } // people rethink every 0.2 s (8 ticks = 0.4 s for huge crowds): human reaction time
     { const fd = Math.pow(0.5, dt / C.FEAR_GRID_HALF), nd = Math.pow(0.5, dt / C.NOISE_HALF), fb = this.fearB, nzb = this.noiseB;
       for (let b = 0; b < fb.length; b++) { fb[b] *= fd; nzb[b] *= nd; } }
@@ -1934,6 +1982,7 @@ export class Sim {
     for (let k = 0; k < this.n; k++) {
       const s = this.state[k];
       if (s === DEAD) continue;
+      if ((s === SAFE_CIV || s === CIV) && this.inZone[this.idx(this.ax[k] | 0, this.ay[k] | 0)] === 2 && this.wallHp[this.idx(this.ax[k] | 0, this.ay[k] | 0)] > 0) { this.stepInside(k); continue; } // 0.30.1: never stuck in a wall
       if (s === SAFE_CIV) {
         // 0.28: just through the gate: walk on in every tick at full pace, so the doorway never plugs
         // 0.30: through the gate they stay on the crowd model until clear of the gateway (no grid-stepping jam)
@@ -1941,9 +1990,10 @@ export class Sim {
         const gateway = this.depth[gi] < C.GATE_CLEAR_DEPTH;
         const routed = this.hasPads && this.inZone[gi] === 1 && this.padField[gi] !== 65535, waiting = routed && this.padField[gi] <= this.gatherD;
         if (routed) this.waitCount++; // everyone headed for a pad ends up in its crowd
-        if (gateway && !this.occ[gi] && !waiting) this.stepCiv(k, r, dt, gi, 0, true);
-        else if (gateway) this.mill(k, r, dt);
-        else if ((k + this.tick) % 4 === 0) this.mill(k, r, dt * 4);
+        // 0.30.1: everyone inside is on the crowd model too (no grid-stepping lines or piles); mill only steps
+        // people out from under a unit
+        if (!this.occ[gi]) this.stepCiv(k, r, dt, gi, 0, true);
+        else this.mill(k, r, dt);
         continue;
       }
       const x = this.ax[k], y = this.ay[k];
@@ -2000,7 +2050,13 @@ export class Sim {
           }
           const gl = hyp(gx, gy);
           // 0.30: a slow sway around the way they're going, not a fixed lean (a fixed lean walks them into the walls)
-          const sw = C.INF_SWAY * Math.sin(this.time * (0.2 + 0.3 * ((k * 0.618034) % 1)) + k * 2.399963), c = Math.cos(sw), sn = Math.sin(sw);
+          // 0.30.1: a shamble: the heading wanders at random around the way they're going and drifts back, so a
+          // horde becomes a mob instead of marching in fixed lanes
+          let zw = this.zWand[k];
+          zw += -zw * C.INF_WANDER_BACK * dt + C.INF_WANDER * Math.sqrt(dt) * (r() + r() + r() - 1.5) * 2;
+          if (zw > 1.1) zw = 1.1; else if (zw < -1.1) zw = -1.1;
+          this.zWand[k] = zw;
+          const c = Math.cos(zw), sn = Math.sin(zw);
           if (gl > 0.02) { gx /= gl; gy /= gl; vx = gx * c - gy * sn; vy = gx * sn + gy * c; }
           else if (ddx !== 0 || ddy !== 0) { vx = ddx * c - ddy * sn; vy = ddx * sn + ddy * c; }
           else {
@@ -2317,7 +2373,8 @@ export class Sim {
       } else this.zStim[k] = 0;
     }
     let f = this.fear[k];
-    const stim = Math.min(1, Math.max(this.zStim[k], this.fearB[b], C.FEAR_SPREAD * this.panPrev[b]));
+    // an evacuation order is out: nobody strolls (EVAC_URGENCY is the floor of everyone's fear outside a zone)
+    const stim = Math.min(1, Math.max(this.zStim[k], this.fearB[b], C.FEAR_SPREAD * this.panPrev[b], safe ? 0 : C.EVAC_URGENCY));
     f += (stim - f) * Math.min(1, stim > f ? C.FEAR_RISE * dt : 3 * dt / C.FEAR_FADE_S);
     this.fear[k] = f;
     this.panSum[b] += f; if (this.panCnt[b] < 65535) this.panCnt[b]++;
@@ -2404,14 +2461,19 @@ export class Sim {
       }
     }
     // --- where they want to go
-    let dx = 0, dy = 0, wander = false;
+    let dx = 0, dy = 0, wander = false, queue = false;
     if (this.act[k] === 1) { dx = this.hx[k]; dy = this.hy[k]; }
     else {
       if (safe) { // just inside: walk on in, away from the gate
         const pf = this.hasPads && this.inZone[ci] === 1 ? this.padField[ci] : 65535;
         const d = this.inZone[ci] !== 1 ? (this.routeAt(this.civDir, x, y) ? [this.rdx, this.rdy] : null)
-          : (pf !== 65535 && pf > this.gatherD ? this.downhill(this.padField, cx, cy) : null) ?? this.inward(cx, cy); // on to the Evac Point
+          : (pf !== 65535 && pf > C.EVAC_GATHER_D ? (queue = true, this.downhill(this.padField, cx, cy)) : null) // on to the Evac Point (a queue: they stop where it's full)
+            ?? (this.depth[ci] < C.GATE_CLEAR_DEPTH ? this.inward(cx, cy) : null); // clear of the gate; deeper in they settle
         if (d) { const a = C.AIM_SWAY * Math.sin(this.time * 0.3 + k * 2.399963), ca = Math.cos(a), sa = Math.sin(a); dx = d[0] * ca - d[1] * sa; dy = d[0] * sa + d[1] * ca; }
+        else if (this.dens[ci] > C.SETTLE_DENS * C.CELL_M * C.CELL_M) { // nowhere to be: move off toward emptier ground, filling the zone evenly
+          this.spread(cx, cy);
+          if (hyp(this.spx, this.spy) > 0.05) { dx = this.spx; dy = this.spy; queue = true; }
+        }
       } else if (this.zoneClosed && this.routeAt(this.civDir, x, y)) {
         const a = C.AIM_SWAY * Math.sin(this.time * (0.15 + 0.25 * ((k * 0.754877666) % 1)) + k * 2.399963), ca = Math.cos(a), sa = Math.sin(a);
         dx = this.rdx * ca - this.rdy * sa; dy = this.rdx * sa + this.rdy * ca;
@@ -2433,13 +2495,13 @@ export class Sim {
     // speed is set by the space in front of them (Weidmann), not by the crowd behind
     const dl0 = hyp(dx, dy) || 1, fcx = (x + (dx / dl0) * 0.9) | 0, fcy = (y + (dy / dl0) * 0.9) | 0;
     const rhoF = fcx >= 0 && fcy >= 0 && fcx < w && fcy < this.h && walkable(this.map.tile[fcy * w + fcx]) && fcy * w + fcx !== ci ? this.dens[fcy * w + fcx] / (M * M) : this.dens[ci] / (M * M); // the front of a jam sees open space and goes
-    const rmax = C.RHO_MAX + (C.PANIC_RHO_MAX - C.RHO_MAX) * f;
+    const rmax = queue ? C.WAIT_RHO * 1.5 : C.RHO_MAX + (C.PANIC_RHO_MAX - C.RHO_MAX) * f;
     const rv = C.SPEED_RHO_CELL ? rhoF : rho;
     if (rv > 0.05) v0 *= rv >= rmax ? 0 : Math.max(0, 1 - Math.exp(-C.RHO_GAMMA * (1 / rv - 1 / rmax)));
     // faster is slower (Helbing 2000): a panicked crowd pushing into a packed opening jams; bodies wedge and arch
     if (f > 0.3 && rv > C.CLOG_RHO) v0 /= 1 + C.PANIC_CLOG * (f - 0.3) * (rv - C.CLOG_RHO);
     if (this.act[k] === 2) v0 = 0;
-    if (wander) v0 *= 0.5;
+    if (wander) v0 *= safe ? 0.25 : 0.5; // the waiting crowd mostly stands and shuffles
     const dl = hyp(dx, dy) || 1;
     // --- steer: relax toward the wanted velocity, add the pushes (m/s2 -> cells/s2)
     const fl = hyp(fx, fy); if (fl > 12) { fx *= 12 / fl; fy *= 12 / fl; }
@@ -3117,21 +3179,31 @@ export class Sim {
   origFloors?: Uint8Array; // building heights before the battle (collapses lower them)
 
   /** The score as it stands: evacuated share, medal, city damage bonus and XP. */
-  scoreNow(reason: string): Score {
-    const saved = this.evacuated, pct = (100 * saved) / this.civN;
+  scoreNow(reason: string, zoneCredit = 0): Score {
+    const cnt = this.counts();
+    const saved = this.evacuated + zoneCredit, pct = (100 * saved) / this.civN;
     const { intact, bill } = this.cityDamage();
     const emptiedAfterS = this.roundDone && this.roundEmptied && this.roundAt !== null ? Math.max(0, this.roundAt - C.WARNING_S) : null;
     const parts = roundParts({ pct, emptiedAfterS, intact, kills: this.kills, infAlive: this.counts().inf });
     const score = roundScore(parts), medal = medalFor(score, pct);
     const bonus = intact >= C.INTACT_BONUS_PCT ? "Light Touch" : 100 - intact >= C.SCORCHED_BONUS_PCT || bill >= C.BILLION ? "Scorched Earth" : null;
     const xp = Math.max(0, Math.round((score * 10 + this.wave * 20 + (bonus ? C.BONUS_XP : 0) - this.nukesUsed * C.NUKE_XP_PENALTY) * this.diff.xpMul));
-    return { saved, pct, medal, reason, intact, bonus, xp, waves: this.wave, round: this.roundDone && saved > 0, damage: bill, spent: this.spent(), score, parts, kills: this.kills };
+    return { saved, pct, medal, reason, intact, bonus, xp, waves: this.wave, round: this.roundDone && saved > 0, damage: bill, spent: this.spent(), score, parts, kills: this.kills, left: cnt.civ, zoneHeld: cnt.safe };
   }
   /** The round is over (city empty or stalled): score it, freeze it, keep the battle running for Keep fighting. */
-  private endRound(reason: string, emptied: boolean) {
+  /** 0.30.1: the player ends the round (only stragglers left): people inside the zone count as saved, the zone
+   *  holds them until the lifts take them; everyone still outside is left behind. */
+  endRoundNow(): string | null {
+    if (this.phase !== "battle" || this.roundDone) return "No round to end.";
+    if (!this.outbreak) return "Wait for the outbreak first.";
+    const c = this.counts();
+    this.endRound(`You ended the round. ${c.safe.toLocaleString()} people in the zone count as saved; ${c.civ.toLocaleString()} left behind.`, false, c.safe);
+    return null;
+  }
+  private endRound(reason: string, emptied: boolean, zoneCredit = 0) {
     this.roundDone = true; this.roundAt = this.time; this.roundEmptied = emptied;
     this.killsAtRound = this.kills; this.damageAtRound = this.cityDamage().bill;
-    this.roundResult = this.scoreNow(reason);
+    this.roundResult = this.scoreNow(reason, zoneCredit);
   }
 
   private checkEnd(force = false) {
