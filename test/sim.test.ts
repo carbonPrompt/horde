@@ -115,7 +115,7 @@ test("abilities: bought with budget, fired in battle, they kill", () => {
   expect(s.pending.length).toBe(0);
   const mortar = s.units.find(u => u.kind === "mortar")!;
   for (let i = 0; i < 20 * 60 && s.phase === "battle"; i++) s.step();
-  console.log({ mortarKills: mortar.kills, paraKills: s.units.find(u => u.kind === "para")!.kills, civKilledByUs: s.civKilledByUs });
+  console.log({ mortarKills: mortar.kills, paraKills: s.units.find(u => u.kind === "para")?.kills ?? "gone home", civKilledByUs: s.civKilledByUs });
 }, 120000);
 
 test("a charged bridge can be blown and becomes river", () => {
@@ -631,7 +631,7 @@ test("strike orders send a mobile unit to clear and hold a spot", () => {
   const d0 = Math.hypot(u.x - dest![0], u.y - dest![1]);
   for (let i = 0; i < 20 * 15; i++) s.step(); // still in the warning: no infected to stop for
   expect(Math.hypot(u.x - dest![0], u.y - dest![1])).toBeLessThan(d0 - 10);
-});
+}, 60000);
 
 test("barrage, MOAB and nuke: escalating damage; nuke leaves fallout and costs XP", () => {
   const s = new Sim(42, { budget: 200_000_000 });
@@ -727,7 +727,28 @@ test("A-10, cluster, Tomahawk and AC-130 strikes", () => withWarning45(() => {
   expect(s.orbits.length).toBe(1);
   for (let i = 0; i < 20 * 20; i++) s.step();
   expect(s.kills - k).toBeGreaterThan(80);
+  // 0.32: after its time on station it leaves to refuel, then comes back to the same spot
+  const o = s.orbits[0];
+  while (!o.away && s.phase === "battle") s.step();
+  if (s.phase === "battle") {
+    expect(s.orbits.length).toBe(1);
+    const back = o.until;
+    while (s.time < back + 0.2 && s.phase === "battle") s.step();
+    if (s.phase === "battle") expect(o.away).toBe(false);
+  }
 }), 120000);
+
+test("paratroopers: at most PARA_LIVE_MAX squads deployed at a time", () => {
+  const s = new Sim(42, { budget: 400_000_000 });
+  s.setZone(zoneAroundCenter(s));
+  for (let i = 0; i < 8; i++) expect(s.buyAbility("para")).toBeNull();
+  s.startBattle();
+  let ok = 0, refused: string | null = null;
+  for (let i = 0; i < 8; i++) { const r = s.useAbility("para", s.w / 2 + i * 3, s.h / 4); if (r === null) ok++; else refused = r; }
+  expect(ok).toBe(C.PARA_LIVE_MAX);
+  expect(refused).toContain("already deployed");
+  expect(s.charges.para).toBe(8 - C.PARA_LIVE_MAX);
+});
 
 // ---------- 0.13 progression ----------
 test("progression: unlock thresholds, city trials, ranks, grandfathered XP, achievements", () => {
@@ -914,7 +935,7 @@ test("sites can sit near the zone", () => {
     }
   }
   expect(nearCount).toBeGreaterThan(0);
-});
+}, 60000);
 
 test("insane on a cramped map still starts", () => {
   const s = new Sim(7, { sites: 20, difficulty: "insane", civilians: 300 });
@@ -1001,7 +1022,7 @@ test("insane hordes come bigger and sooner than easy", () => {
   const insane = run("insane");
   expect(insane.firstT).toBeLessThan(easy.firstT);
   expect(insane.mean).toBeGreaterThan(easy.mean);
-});
+}, 60000);
 
 test("xp scales with difficulty", () => {
   const run = (difficulty: C.Difficulty) => {

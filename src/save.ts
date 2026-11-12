@@ -4,7 +4,7 @@ import type * as C from "./config";
 
 export interface Plan { poly: [number, number][]; zones?: [number, number][][]; walls: number[]; units: [C.UnitKind, number, number, C.TargetMode?][]; supports?: [C.SupportKind, number, number][]; abilities?: Partial<Record<C.AbilityKind, number>>; c4?: number[] }
 export interface Settings { fullscreen: boolean; edgeScroll: boolean; showRanges: boolean; devMode?: boolean; crowd?: number; vol?: { master: number; sfx: number; music: number }; quickbar?: (string | null)[]; difficulty?: C.Difficulty;
-  autoUpdate?: boolean; checkUpdates?: boolean; updatePin?: string } // 0.26 updater: install by itself / look on start / stay on a picked older version
+  autoUpdate?: boolean; checkUpdates?: boolean; updatePin?: string; speed?: number } // 0.26 updater: install by itself / look on start / stay on a picked older version
 export interface Best { pct: number; medal: string | null; mayhem?: number } // pct: round score 0..100 since 0.20 ("% evacuated" before)
 export interface SaveData { settings: Settings; best: Record<string, Best>; plans: Record<string, Plan>; daily?: Record<string, Best>; xp?: number | null; achievements?: Record<string, string>; gameVersion?: string } // gameVersion: the version that last wrote it (0.26+)
 
@@ -43,6 +43,7 @@ export function clean(s: SaveData): SaveData {
   if (typeof settings.autoUpdate !== "boolean") delete settings.autoUpdate;
   if (typeof settings.checkUpdates !== "boolean") delete settings.checkUpdates;
   if (typeof settings.updatePin !== "string" || !VER.test(settings.updatePin)) delete settings.updatePin;
+  if (settings.speed !== 0.5 && settings.speed !== 1 && settings.speed !== 2) delete settings.speed; // 0.32: last game speed
   const gv = typeof s.gameVersion === "string" && VER.test(s.gameVersion) ? { gameVersion: s.gameVersion } : {};
   return { settings, best: best(s.best), daily: best(s.daily), plans, achievements: ach, xp: Number.isFinite(s.xp) ? Math.max(0, s.xp as number) : null, ...gv };
 }

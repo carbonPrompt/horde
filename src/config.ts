@@ -110,6 +110,7 @@ export let RHO_MAX = 5.4; // people/m2 where a calm crowd stops (Weidmann)
 export let RHO_GAMMA = 1.913; // Weidmann curve shape
 export let PANIC_RHO_MAX = 9; // people/m2 a panicked crowd will press to
 export let AIM_SWAY = 0.3; // rad: people weave a little around the route direction, each at their own slow pace
+export let EVAC_HURRY_OUT = 0, EVAC_HURRY = 0.4; // 0.32: speed floor (share of the way from walk to sprint) outside a zone (0: EVAC_URGENCY already has them jogging; more packed the gates into crushes) and on the way to a pad
 export let EVAC_URGENCY = 0.3; // 0.30.1: fear floor for people outside a zone during an evacuation: they hurry (about 2.3 m/s)
 export let FEAR_RISE = 4; // 1/s: how fast fear rises to what a person senses
 export let FEAR_FADE_S = 15; // s: how long fear takes to fade once it's quiet
@@ -168,6 +169,7 @@ export let INCOME_PER_SAFE = 180; // dollars per sheltered person per 10 s (emer
 export let KILL_BOUNTY = 1_000;
 export let EXTRACT_MUL = 1.5; // selling mid-battle: the unit sits out 1.5x its deploy time (at least 5 s) before it is pulled out
 export let CRUSH_SLOW_S = 0.8; // 0.25: seconds a tank or APC stays slowed after crushing infected
+export let VEH_A = 10, VEH_CLEAR = 1.5, VEH_AHEAD = 5; // 0.32: people step aside from a tank/APC: push (m/s2), clearance and look-ahead (cells)
 export let CRUSH_YIELD_MUL = 0.3; // speed when civilians are in its way (it never runs people over)
 /** 0.27: extra steps the Evac Point route charges for squeezing past a unit that plugs a street (so people walk around one when they can). */
 export let SQUEEZE_COST = 30;
@@ -355,7 +357,7 @@ export let SWIMMER_BASE_FRAC = 0.08;
 export let SWIMMER_WAVE_GROWTH = 0.015;
 export let SWIMMER_MAX_FRAC = 0.25;
 
-export const VERSION = "0.31.0";
+export const VERSION = "0.32.0";
 
 /** The campaign: fixed cities that unlock in order (a medal on one opens the next). */
 export interface CityDef { id: string; name: string; seed: number; budget: number; waveMul: number; sites: number; speedMul: number; blurb: string; real?: boolean; trial?: string } // trial: hardware this city lends you before you unlock it
@@ -451,8 +453,8 @@ export const ABILITIES: Record<AbilityKind, AbilitySpec> = {
     hint: "Click where the run starts, then where it ends. An F-15E Strike Eagle drops a stick of bombs 3 s later, demolishing buildings and cratering streets. Hurts civilians too." },
   firebomb: { name: "Firebomb", cost: 600_000, max: 6, delay: 1.5, color: "#ff9100",
     hint: "Click a spot. A strike jet drops incendiary canisters that burn for 12 s and scorch terrain. Parks burn wider. Hurts civilians too." },
-  para: { name: "Paratroopers", cost: 2_400_000, max: 4, delay: 4, color: "#a5d6a7",
-    hint: "Click a street or roof. A C-130J Hercules flies over and drops an airborne squad on parachutes 4 s later." },
+  para: { name: "Paratroopers", cost: 2_400_000, max: 10, delay: 4, color: "#a5d6a7",
+    hint: "Click a street or roof. A C-130J Hercules flies over and drops an airborne squad on parachutes 4 s later. Up to 6 squads can be deployed at a time." },
   supply_drop: { name: "Supply Drop", cost: 500_000, max: 8, delay: 3.5, color: "#4fc3f7",
     hint: "Click near your units or walls. A C-130J drops 4 GPS-guided supply crates 3.5 s later: refills 100% ammo, heals mobile units, repairs walls within 70 m, and leaves an active field depot for 45 s." },
   barrage: { name: "Artillery Barrage", cost: 900_000, max: 8, delay: 6, color: "#f48fb1",
@@ -466,7 +468,7 @@ export const ABILITIES: Record<AbilityKind, AbilitySpec> = {
   tomahawk: { name: "Tomahawk", cost: 2_000_000, max: 4, delay: 10, color: "#e0e0e0",
     hint: "Click a spot. A Tomahawk cruise missile from a destroyer offshore hits it 10 s later: a precise 14 m blast that destroys whatever is there, building included." },
   gunship: { name: "AC-130 Gunship", cost: 1_600_000, max: 3, delay: 5, color: "#ce93d8",
-    hint: "Click a spot. An AC-130J Ghostrider orbits it for 40 s, firing its 30 mm cannon and 105 mm howitzer at infected within 60 m. Precise: it only shoots infected." },
+    hint: "Click a spot. An AC-130J Ghostrider orbits it for 40 s at a time (it leaves to refuel and comes back, all battle), firing its 30 mm cannon and 105 mm howitzer at infected within 60 m. Precise: it only shoots infected." },
   nuke: { name: "Tactical Nuke", cost: 28_000_000, max: 1, delay: 15, color: "#76ff03",
     hint: "LAST RESORT. Click a spot. 15 s later a tactical nuclear warhead erases everything within 160 m: infected, civilians (even inside a zone), walls and buildings. Fallout lingers 90 s and kills anything that stays in it. Costs 500 XP." },
 };
@@ -477,7 +479,9 @@ export let NUKE_XP_PENALTY = 500;
 export let A10_WIDTH = 1.6, A10_DMG = 3000, A10_LEN = 80;
 export let CLUSTER_RADIUS = 16, CLUSTER_BOMBLETS = 50, CLUSTER_SPLASH = 1.6, CLUSTER_DMG = 900;
 export let TOMAHAWK_RADIUS = 7;
+export let PARA_LIVE_MAX = 6; // 0.32: paratrooper squads on the ground (or inbound) at once
 export let GUNSHIP_RADIUS = 30, GUNSHIP_S = 40, GUNSHIP_GUN_DMG = 350, GUNSHIP_GUN_RATE = 6, GUNSHIP_HOW_DMG = 2200, GUNSHIP_HOW_EVERY = 3, GUNSHIP_HOW_SPLASH = 4;
+export let GUNSHIP_REFUEL_S = 45; // 0.32: after each 40 s on station it flies off the map to refuel and comes back, for the rest of the battle
 export let AIRSTRIKE_LEN = 70; // cells, longest run
 export let AIRSTRIKE_RADIUS = 3.5;
 export let FIRE_RADIUS = 5, FIRE_RADIUS_PARK = 8, FIRE_S = 12, FIRE_DPS = 160;
@@ -792,6 +796,8 @@ export const TUNABLE: Record<string, [() => number, (v: number) => void]> = {
   RHO_GAMMA: [() => RHO_GAMMA, v => { RHO_GAMMA = v; }],
   PANIC_RHO_MAX: [() => PANIC_RHO_MAX, v => { PANIC_RHO_MAX = v; }],
   AIM_SWAY: [() => AIM_SWAY, v => { AIM_SWAY = v; }],
+  EVAC_HURRY_OUT: [() => EVAC_HURRY_OUT, v => { EVAC_HURRY_OUT = v; }],
+  EVAC_HURRY: [() => EVAC_HURRY, v => { EVAC_HURRY = v; }],
   EVAC_URGENCY: [() => EVAC_URGENCY, v => { EVAC_URGENCY = v; }],
   FEAR_RISE: [() => FEAR_RISE, v => { FEAR_RISE = v; }],
   FEAR_FADE_S: [() => FEAR_FADE_S, v => { FEAR_FADE_S = v; }],
@@ -842,6 +848,9 @@ export const TUNABLE: Record<string, [() => number, (v: number) => void]> = {
   KILL_BOUNTY: [() => KILL_BOUNTY, v => { KILL_BOUNTY = v; }],
   EXTRACT_MUL: [() => EXTRACT_MUL, v => { EXTRACT_MUL = v; }],
   CRUSH_SLOW_S: [() => CRUSH_SLOW_S, v => { CRUSH_SLOW_S = v; }],
+  VEH_A: [() => VEH_A, v => { VEH_A = v; }],
+  VEH_CLEAR: [() => VEH_CLEAR, v => { VEH_CLEAR = v; }],
+  VEH_AHEAD: [() => VEH_AHEAD, v => { VEH_AHEAD = v; }],
   CRUSH_YIELD_MUL: [() => CRUSH_YIELD_MUL, v => { CRUSH_YIELD_MUL = v; }],
   SQUEEZE_COST: [() => SQUEEZE_COST, v => { SQUEEZE_COST = v; }],
   MOBILE_HURT_DPS: [() => MOBILE_HURT_DPS, v => { MOBILE_HURT_DPS = v; }],
@@ -889,6 +898,7 @@ export const TUNABLE: Record<string, [() => number, (v: number) => void]> = {
   CLUSTER_SPLASH: [() => CLUSTER_SPLASH, v => { CLUSTER_SPLASH = v; }],
   CLUSTER_DMG: [() => CLUSTER_DMG, v => { CLUSTER_DMG = v; }],
   TOMAHAWK_RADIUS: [() => TOMAHAWK_RADIUS, v => { TOMAHAWK_RADIUS = v; }],
+  PARA_LIVE_MAX: [() => PARA_LIVE_MAX, v => { PARA_LIVE_MAX = v; }],
   GUNSHIP_RADIUS: [() => GUNSHIP_RADIUS, v => { GUNSHIP_RADIUS = v; }],
   GUNSHIP_S: [() => GUNSHIP_S, v => { GUNSHIP_S = v; }],
   GUNSHIP_GUN_DMG: [() => GUNSHIP_GUN_DMG, v => { GUNSHIP_GUN_DMG = v; }],
@@ -896,6 +906,7 @@ export const TUNABLE: Record<string, [() => number, (v: number) => void]> = {
   GUNSHIP_HOW_DMG: [() => GUNSHIP_HOW_DMG, v => { GUNSHIP_HOW_DMG = v; }],
   GUNSHIP_HOW_EVERY: [() => GUNSHIP_HOW_EVERY, v => { GUNSHIP_HOW_EVERY = v; }],
   GUNSHIP_HOW_SPLASH: [() => GUNSHIP_HOW_SPLASH, v => { GUNSHIP_HOW_SPLASH = v; }],
+  GUNSHIP_REFUEL_S: [() => GUNSHIP_REFUEL_S, v => { GUNSHIP_REFUEL_S = v; }],
   AIRSTRIKE_LEN: [() => AIRSTRIKE_LEN, v => { AIRSTRIKE_LEN = v; }],
   AIRSTRIKE_RADIUS: [() => AIRSTRIKE_RADIUS, v => { AIRSTRIKE_RADIUS = v; }],
   FIRE_RADIUS: [() => FIRE_RADIUS, v => { FIRE_RADIUS = v; }],

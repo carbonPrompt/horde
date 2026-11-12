@@ -18,6 +18,7 @@ export interface Airframe {
   rotors?: Rotor[];
   edge?: EdgeOn[];
   glow?: Pt[];            // jet exhausts
+  burner?: Pt[];          // 0.32: afterburner nozzles: a flame plume with shock diamonds
   minPx?: number;
 }
 
@@ -39,6 +40,9 @@ const PAL = {
   hog: { h: "#646c6f", H: "#7a8285", d: "#464c4f", e: "#596063", n: "#141618", m: "#8e9598", ...GLASS },
   drone: { h: "#a6abaf", H: "#c0c4c7", d: "#7e8387", e: "#959a9e", n: "#1a1c1e", m: "#5c6166", ...GLASS },
   missile: { h: "#9aa1a7", H: "#b7bdc2", d: "#6f757a", e: "#8a9197", n: "#1c1e20", m: "#5c6166", ...GLASS },
+  shell: { h: "#59623f", H: "#6f7a50", d: "#3c4329", e: "#4b5334", n: "#1c1e20", m: "#5c6166", b: "#b87333", y: "#d9bb3a", ...GLASS }, // olive drab, yellow HE band, copper driving band
+  bomb: { h: "#5b6343", H: "#717a55", d: "#3d432c", e: "#4d5438", n: "#1c1e20", m: "#8a9197", b: "#9aa1a7", y: "#d9bb3a", ...GLASS },
+  nuke: { h: "#b9bfc4", H: "#d3d8dc", d: "#8b9196", e: "#a3a9ae", n: "#1c1e20", m: "#6f757a", b: "#9aa1a7", y: "#e8e8e8", ...GLASS },
   quad: { h: "#2e3236", H: "#464b50", d: "#1b1e21", e: "#25282b", n: "#0d0e10", m: "#5c6166", b: "#a88552", B: "#cfae78", ...GLASS },
 };
 
@@ -123,7 +127,7 @@ export const AIRFRAMES: Record<string, Airframe> = {
       ...Rm("n", -10.1, 0.3, -9.5, 1.3),                                          // nozzles
       M("w", [[7.0, -0.2], [6.6, -0.5], [3.6, -0.55], [3.2, -0.3]]),
     ],
-    glow: [[-10.1, 0.8], [-10.1, -0.8]],
+    burner: [[-10.1, 0.8], [-10.1, -0.8]],
   },
   a10: { // A-10 Thunderbolt II: 16.3 m long, 17.5 m straight wing, engines high on the rear fuselage
     res: 0.5, len: 16.3, alt: 4, pal: PAL.hog,
@@ -148,6 +152,60 @@ export const AIRFRAMES: Record<string, Airframe> = {
       R("d", 2.55, -0.1, 2.8, 0.1),
     ],
     glow: [[-2.9, 0]],
+  },
+  // --- 0.32: munitions, real dimensions; minPx keeps them readable (a 155 mm shell is under a meter long) ---
+  shell: { // 155 mm high-explosive shell (also stands in for naval rounds): 0.9 m, ogive nose, yellow band, copper driving band
+    res: 0.02, len: 0.9, alt: 0, pal: PAL.shell, minPx: 12,
+    shapes: [
+      M("h", [[0.45, 0], [0.4, -0.035], [0.3, -0.07], [0.2, -0.0775], [-0.42, -0.0775], [-0.45, -0.065]]),
+      R("y", 0.12, -0.0775, 0.16, 0.0775), R("b", -0.33, -0.085, -0.28, 0.085), R("n", 0.42, -0.02, 0.45, 0.02),
+    ],
+  },
+  mortar: { // 120 mm mortar bomb: 0.7 m teardrop with tail fins
+    res: 0.015, len: 0.7, alt: 0, pal: PAL.shell, minPx: 11,
+    shapes: [
+      M("h", [[0.35, 0], [0.3, -0.04], [0.18, -0.06], [0.02, -0.06], [-0.12, -0.04], [-0.2, -0.022], [-0.33, -0.022]]),
+      ...Rm("d", -0.35, 0.02, -0.24, 0.075), R("y", 0.08, -0.06, 0.12, 0.06),
+    ],
+  },
+  gmlrs: { // M31 GMLRS rocket (HIMARS): 3.94 m, 0.227 m body, nose canards and tail fins
+    res: 0.06, len: 3.94, alt: 0, pal: PAL.missile, minPx: 18,
+    shapes: [
+      M("h", [[1.97, 0], [1.75, -0.08], [1.4, -0.114], [-1.97, -0.114]]),
+      ...Rm("d", 1.15, 0.1, 1.35, 0.26), ...Rm("d", -1.97, 0.1, -1.6, 0.36), R("n", 1.85, -0.04, 1.97, 0.04),
+    ],
+    glow: [[-2.05, 0]],
+  },
+  hellfire: { // AGM-114 Hellfire: 1.63 m, 0.178 m body, mid wings and tail fins
+    res: 0.03, len: 1.63, alt: 0, pal: PAL.missile, minPx: 14,
+    shapes: [
+      M("h", [[0.815, 0], [0.7, -0.07], [0.55, -0.089], [-0.815, -0.089]]),
+      ...Rm("d", 0.1, 0.08, 0.35, 0.18), ...Rm("d", -0.815, 0.08, -0.6, 0.2), R("n", 0.76, -0.03, 0.815, 0.03),
+    ],
+    glow: [[-0.86, 0]],
+  },
+  jdam: { // GBU-31 JDAM (2,000 lb): 3.9 m, 0.46 m body, tail kit fins, yellow nose band
+    res: 0.06, len: 3.9, alt: 0, pal: PAL.bomb, minPx: 12,
+    shapes: [
+      M("h", [[1.95, 0], [1.6, -0.15], [1.0, -0.23], [-1.1, -0.23], [-1.6, -0.17], [-1.95, -0.15]]),
+      ...Rm("m", -1.95, 0.12, -1.45, 0.42), R("y", 1.2, -0.23, 1.32, 0.23), R("m", -1.95, -0.15, -1.1, 0.15),
+    ],
+  },
+  napalm: { // BLU-27 fire bomb: 3.3 m unfinned canister, tumbles as it falls
+    res: 0.06, len: 3.3, alt: 0, pal: PAL.bomb, minPx: 11,
+    shapes: [M("h", [[1.65, 0], [1.4, -0.2], [0.9, -0.24], [-1.2, -0.24], [-1.55, -0.16], [-1.65, 0]]), R("y", 0.9, -0.24, 1.0, 0.24)],
+  },
+  cbu97: { // CBU-97 dispenser: 2.3 m, 0.4 m body, pop-out tail fins
+    res: 0.05, len: 2.3, alt: 0, pal: PAL.bomb, minPx: 11,
+    shapes: [M("h", [[1.15, 0], [0.9, -0.17], [0.6, -0.2], [-0.9, -0.2], [-1.15, -0.14]]), ...Rm("m", -1.15, 0.12, -0.8, 0.38), R("y", 0.62, -0.2, 0.72, 0.2)],
+  },
+  moab: { // GBU-43 MOAB: 9.2 m, 1.03 m body, lattice fins
+    res: 0.15, len: 9.2, alt: 0, pal: PAL.bomb, minPx: 18,
+    shapes: [M("h", [[4.6, 0], [4.0, -0.4], [3.0, -0.515], [-3.6, -0.515], [-4.6, -0.35]]), ...Rm("m", -4.6, 0.3, -3.7, 1.25), R("y", 3.2, -0.515, 3.45, 0.515)],
+  },
+  b61: { // B61 nuclear bomb: 3.6 m, 0.33 m body, tail fins
+    res: 0.05, len: 3.6, alt: 0, pal: PAL.nuke, minPx: 13,
+    shapes: [M("h", [[1.8, 0], [1.5, -0.13], [1.0, -0.165], [-1.3, -0.165], [-1.8, -0.1]]), ...Rm("d", -1.8, 0.1, -1.3, 0.38), R("n", 1.7, -0.04, 1.8, 0.04)],
   },
   quad: { // heavy-lift hexacopter, 2.4 m across, crate slung underneath
     res: 0.1, len: 2.4, alt: 1.2, pal: PAL.quad, minPx: 12,
@@ -284,6 +342,21 @@ export function drawAirframe(ctx: CanvasRenderingContext2D, key: string, px: num
       const t = Math.max(0.3, a.res * 0.8);
       if (e.along === "x") ctx.fillRect(e.x - e.r, e.y - t / 2, e.r * 2, t);
       else ctx.fillRect(e.x - t / 2, e.y - e.r, t, e.r * 2);
+    }
+    if (!sh && !stopped && a.burner) { // 0.32: afterburner: a flickering plume, blue-white core, orange edges, shock diamonds
+      const op = ctx.globalCompositeOperation; ctx.globalCompositeOperation = "lighter";
+      for (const [gx, gy] of a.burner) {
+        const f = 0.85 + 0.15 * Math.sin(spin * 9 + gy * 3) + 0.06 * Math.sin(spin * 23 + gx), L = 9 * f, wd = 0.8;
+        let g = ctx.createLinearGradient(gx, 0, gx - L, 0);
+        g.addColorStop(0, "rgba(255,190,90,0.8)"); g.addColorStop(0.5, "rgba(255,120,30,0.35)"); g.addColorStop(1, "rgba(255,80,10,0)");
+        ctx.fillStyle = g; ctx.beginPath(); ctx.moveTo(gx, gy - wd); ctx.quadraticCurveTo(gx - L * 0.3, gy - wd * 1.05, gx - L, gy); ctx.quadraticCurveTo(gx - L * 0.3, gy + wd * 1.05, gx, gy + wd); ctx.closePath(); ctx.fill();
+        g = ctx.createLinearGradient(gx, 0, gx - L * 0.55, 0);
+        g.addColorStop(0, "rgba(235,245,255,0.95)"); g.addColorStop(0.5, "rgba(150,190,255,0.55)"); g.addColorStop(1, "rgba(120,160,255,0)");
+        ctx.fillStyle = g; ctx.beginPath(); ctx.moveTo(gx, gy - wd * 0.55); ctx.lineTo(gx - L * 0.55, gy); ctx.lineTo(gx, gy + wd * 0.55); ctx.closePath(); ctx.fill();
+        ctx.fillStyle = "rgba(255,240,210,0.7)";
+        for (let i = 1; i <= 3; i++) { ctx.beginPath(); ctx.ellipse(gx - L * 0.12 * i, gy, 0.22, 0.32 - i * 0.05, 0, 0, 6.2832); ctx.fill(); }
+      }
+      ctx.globalCompositeOperation = op;
     }
     if (!sh && !stopped) for (const [gx, gy] of a.glow ?? []) {
       const rr = a.res * 2.2, g = ctx.createRadialGradient(gx, gy, 0, gx, gy, rr);

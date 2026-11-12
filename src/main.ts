@@ -70,7 +70,7 @@ const simOpts = () => ({
   ...(city ? { budget: city.budget, waveMul: city.waveMul, sites: city.sites, speedMul: city.speedMul } : {}),
 });
 let sim = new Sim(seed);
-let pausedSpeed = 1;
+let pausedSpeed = save.settings.speed ?? 1; // 0.32: the player's last chosen speed (½x, 1x, 2x), kept through pause and between rounds
 let tool: Tool = "zone";
 let speed = 1; // 0 paused
 let draft: [number, number][] = []; // zone being drawn
@@ -401,7 +401,7 @@ function pause() {
   if (mode !== "game") return;
   openPicker(null);
   log("info", "pause", { phase: sim.phase, t: +sim.time.toFixed(1) });
-  pausedSpeed = speed || pausedSpeed; speed = 0; refreshUi();
+  speed = 0; refreshUi();
   stack.length = 0; go("pause");
 }
 function resume() {
@@ -663,7 +663,7 @@ addEventListener("keydown", e => {
     return;
   }
   if (mode !== "game" || stack.length) return;
-  if (k === " ") { e.preventDefault(); if (sim.phase === "battle") setSpeed(speed ? 0 : 1); }
+  if (k === " ") { e.preventDefault(); if (sim.phase === "battle") setSpeed(speed ? 0 : pausedSpeed); }
   else if (k === "j" || k === "J") showHeights = !showHeights; // 0.22: V went to the quick bar
   else if (k === "r" || k === "R") showRanges = !showRanges;
   else if (k === "h" || k === "H") { showHeatmap = !showHeatmap; refreshUi(); }
@@ -675,14 +675,18 @@ addEventListener("keydown", e => {
 });
 addEventListener("keyup", e => keys.delete(e.key.toLowerCase()));
 
-function setSpeed(s: number) { speed = s === 4 ? 2 : s; refreshUi(); } // 0.30.1: half, real time, 2x (dev tools keep 8x/16x)
+function setSpeed(s: number) {
+  speed = s === 4 ? 2 : s;
+  if (speed === 0.5 || speed === 1 || speed === 2) { if (pausedSpeed !== speed) { pausedSpeed = speed; if (mode === "game") { save.settings.speed = speed; Save.store(save); } } }
+  refreshUi();
+} // 0.30.1: half, real time, 2x (dev tools keep 8x/16x)
 function startBattle() {
   if (sim.phase !== "plan") return;
   if (!sim.zoneClosed) { say("Draw a safe zone first."); return; }
   if (draft.length) { say("Finish or cancel (Esc) the zone you're drawing first."); return; }
   const planKey = dailyDate ? `daily:${dailyDate}` : city ? city.id : null;
   if (planKey) { save.plans[planKey] = exportPlan(); Save.store(save); }
-  sim.startBattle(); speed = 1; setTool("pan"); refreshUi();
+  sim.startBattle(); speed = pausedSpeed; setTool("pan"); refreshUi();
   snd.music("battle");
   log("info", "battle-start", { ...cityTag(), ...planSummary(), sites: sim.sites.map(([x, y]) => [Math.round(x), Math.round(y)]) });
   messageT = -1e9; // the planning tip goes; battle news runs in the ticker
@@ -787,7 +791,7 @@ function hud(now: number) {
   }
   if (sim.breaches > lastBreaches && now - lastAlarm > 30000) { notify("Breach: the infected are through a wall.", true); lastAlarm = now; }
   if (sim.breaches !== lastBreaches) { log("warn", "breach", { total: sim.breaches, t: +sim.time.toFixed(1) }); lastBreaches = sim.breaches; }
-  if (sim.roundResult && !roundShown && sim.phase === "battle") { roundShown = true; pausedSpeed = speed || 1; speed = 0; showEnd(sim.roundResult, true); }
+  if (sim.roundResult && !roundShown && sim.phase === "battle") { roundShown = true; speed = 0; showEnd(sim.roundResult, true); }
   if (sim.phase === "over" && sim.result && ($("end").hidden || !$("end-round-row").hidden)) showEnd(sim.result, false);
 }
 
@@ -1028,6 +1032,14 @@ function draw(now: number) {
   // AC-130s on station: the orbit ring and the plane circling it.
   for (const o of sim.orbits) {
     const ox = cam.x + o.x * s, oy = cam.y + o.y * s, R = C.GUNSHIP_RADIUS * s;
+    if (o.away) { // 0.32: refueling: flies out along its heading, later flies back in to the same point of the orbit
+      const left = o.until - sim.time, gone = C.GUNSHIP_REFUEL_S - left, fly = 14, v = C.GUNSHIP_RADIUS * 1.15 * 0.5; // orbit speed, cells/s
+      const h = o.angle - Math.PI / 2, jx = ox + Math.cos(o.angle) * R * 1.15, jy = oy + Math.sin(o.angle) * R * 1.15;
+      const d = gone < fly ? gone * v * s : left < fly ? -left * v * s : NaN;
+      if (Number.isFinite(d)) drawAirframe(ctx, "ac130", jx + Math.cos(h) * d, jy + Math.sin(h) * d, s, h, 1, now / 1000 * 12);
+      label(`AC-130 refueling, back in ${Math.ceil(left)}s`, ox - 50, oy);
+      continue;
+    }
     ctx.strokeStyle = "rgba(206,147,216,0.5)"; ctx.lineWidth = 1.5; ctx.setLineDash([8, 6]);
     ctx.beginPath(); ctx.arc(ox, oy, R, 0, 7); ctx.stroke(); ctx.setLineDash([]);
     const px = ox + Math.cos(o.angle) * R * 1.15, py = oy + Math.sin(o.angle) * R * 1.15;
@@ -1230,6 +1242,7 @@ function draw(now: number) {
   }
 
   drawShots(s);
+  drawOrdnance(s, now);
 
   // Zone draft.
   if (draft.length) {
@@ -1277,13 +1290,22 @@ function drawShots(s: number) {
       const L = Math.max(3, s * 0.42 * f), Wd = Math.max(2, s * 0.2 * f), lift = hgt * Math.min(40, len * 0.18);
       ctx.globalAlpha = 0.35; ctx.fillStyle = "#000";
       ctx.beginPath(); ctx.ellipse(px, py, L * 0.5, Wd * 0.5, Math.atan2(dy, dx), 0, 7); ctx.fill();
-      ctx.globalAlpha = 1; ctx.fillStyle = "#4a4636"; ctx.strokeStyle = "#cfc39b"; ctx.lineWidth = 1;
-      ctx.beginPath(); ctx.ellipse(px, py - lift, L * 0.5, Wd * 0.5, Math.atan2(dy, dx), 0, 7); ctx.fill(); if (s >= 6) ctx.stroke();
+      ctx.globalAlpha = 1;
+      // 0.32: the round itself (pitching nose-up on the climb, nose-down on the fall reads as a slight turn of the sprite)
+      drawAirframe(ctx, sh.kind === "mortar" ? "mortar" : "shell", px, py - lift, s * f, Math.atan2(dy, dx) - (0.5 - k) * 0.25, 0, 0);
     } else if (sh.cls === SHOT_ROCKET) {
-      const k0 = Math.max(0, k - 0.3);
+      const k0 = Math.max(0, k - 0.3), ang = Math.atan2(dy, dx);
       ctx.globalAlpha = 0.5; ctx.strokeStyle = "#b0b0b0"; ctx.lineWidth = Math.max(1.5, s * 0.16);
       ctx.beginPath(); ctx.moveTo(x0 + dx * k0, y0 + dy * k0); ctx.lineTo(px, py); ctx.stroke();
-      ctx.globalAlpha = 1; ctx.fillStyle = "#fff3c4"; ctx.beginPath(); ctx.arc(px, py, Math.max(1.5, s * 0.12), 0, 7); ctx.fill();
+      // 0.32: the motor's flame behind the rocket, then the rocket
+      const key = sh.kind === "reaper" ? "hellfire" : "gmlrs", half = airHalfPx(key, s), fl2 = half * (0.9 + 0.3 * Math.random());
+      ctx.globalAlpha = 0.9; ctx.globalCompositeOperation = "lighter";
+      const g = ctx.createLinearGradient(px - ux * half, py - uy * half, px - ux * (half + fl2), py - uy * (half + fl2));
+      g.addColorStop(0, "rgba(255,245,200,1)"); g.addColorStop(0.4, "rgba(255,160,50,0.7)"); g.addColorStop(1, "rgba(255,90,20,0)");
+      ctx.strokeStyle = g; ctx.lineWidth = Math.max(2, half * 0.35);
+      ctx.beginPath(); ctx.moveTo(px - ux * half, py - uy * half); ctx.lineTo(px - ux * (half + fl2), py - uy * (half + fl2)); ctx.stroke();
+      ctx.globalCompositeOperation = "source-over"; ctx.globalAlpha = 1;
+      drawAirframe(ctx, key, px, py, s, ang, 0, 0);
     } else {
       // tracer streak: its length in cells, its width by caliber
       const Lc = sh.cls === SHOT_SNIPER ? 3 : sh.cls === SHOT_CANNON ? 1.4 : 1.1;
@@ -1297,6 +1319,35 @@ function drawShots(s: number) {
     }
   }
   ctx.restore();
+}
+
+/** 0.32: bombs and shells on their way down from aircraft and off-map guns, drawn the last moment before they hit:
+ *  the bomb above its shadow, the two meeting at the impact. */
+const FALL_KEY: Partial<Record<string, string>> = { airstrike: "jdam", bomb: "jdam", firebomb: "napalm", cluster: "cbu97", moab: "moab", nuke: "b61", shell: "shell" };
+function drawOrdnance(s: number, now: number) {
+  if (s < 1.5 || sim.phase !== "battle") return;
+  const t = sim.time + Math.min(Math.max(0, acc), 0.1);
+  const one = (key: string, gx: number, gy: number, land: number, fall: number, head: number, tumble = 0, from?: [number, number]) => {
+    const left = land - t; if (left < 0 || left > fall) return;
+    const k = 1 - left / fall, X = cam.x + gx * s, Y = cam.y + gy * s;
+    const lift = (1 - k) * Math.min(90, Math.max(30, s * 10));
+    let bx = X, by = Y - lift;
+    if (from) { bx = X - from[0] * (1 - k) * s * 12; by = Y - from[1] * (1 - k) * s * 12 - lift * 0.6; } // a shell coming in from its battery
+    const r = Math.max(2, airHalfPx(key, s) * (0.4 + 0.6 * k));
+    ctx.globalAlpha = 0.25 + 0.3 * k; ctx.fillStyle = "#000";
+    ctx.beginPath(); ctx.ellipse(X, Y, r, r * 0.4, head, 0, 7); ctx.fill(); ctx.globalAlpha = 1;
+    drawAirframe(ctx, key, bx, by, s * (0.8 + 0.2 * k), head + tumble * (now / 1000) * 4, 0, 0);
+  };
+  for (const p of sim.pending) {
+    const key = FALL_KEY[p.kind]; if (!key) continue;
+    const head = Math.atan2(p.y2 - p.y, p.x2 - p.x) || 0;
+    if (p.kind === "airstrike") { // the stick leaves the jet a moment before the first bomb hits
+      const l = Math.hypot(p.x2 - p.x, p.y2 - p.y), n = Math.max(2, Math.round(l / 5));
+      for (let i = 0; i <= n; i++) one(key, p.x + (p.x2 - p.x) * i / n, p.y + (p.y2 - p.y) * i / n, p.at + i * 0.08, 1.2, head);
+    } else if (p.kind === "shell") one(key, p.x, p.y, p.at, 1.1, Math.atan2(0.6, 0.8), 0, [0.8, 0.6]); // the battery is off the map to the north-west
+    else if (p.kind === "bomb") one(key, p.x, p.y, p.at, 1.2, 0);
+    else one(key, p.x, p.y, p.at, p.kind === "moab" ? 2.5 : p.kind === "nuke" ? 2 : 1.4, p.kind === "firebomb" ? 0.4 : 0, p.kind === "firebomb" ? 1 : 0);
+  }
 }
 
 /** Draw a sprite: the 64 px art is shrunk smoothly (nearest-neighbor shrinking makes it shimmer), 16 px grids stay crisp. */

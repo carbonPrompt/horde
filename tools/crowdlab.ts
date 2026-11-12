@@ -1,5 +1,5 @@
 // Crowd lab (0.30): headless test maps that measure how natural the crowd is, against numbers from real crowds.
-//   bun tools/crowdlab.ts [street|gate|perf|all]
+//   bun tools/crowdlab.ts [street|gate|horde|evac|perf|all]
 // street: a 16 m wide street, 2000 people walking to a zone. Measures wall-hugging (share of people within 30 cm
 //         of a building), rows (how much people's positions across the street bunch into lines; 1.0 = random) and
 //         walking speed against density (real: about 1.3 m/s free, slower as it packs, Weidmann 1993).
@@ -127,6 +127,55 @@ function horde() {
   console.log(`horde: wall-hug ${(100 * hug / cnt).toFixed(1)}%, rows ${((sum2 * bins.length) / (1 + bins.length / per)).toFixed(2)} (1.00 = random)`);
 }
 
+/** 0.32: a real city round with two Evac Points and a howitzer in the zone. Measures how fast people head for the
+ *  zone and the pads (median speed, m/s), how many sit still for 20 s while not yet at a pad ("stuck"), and lifts. */
+function evac() {
+  const s = new Sim(42, { budget: 80_000_000, civilians: +(process.env.CL_N ?? 15000) } as any);
+  const cx = s.w / 2, cy = s.h / 4, half = 34;
+  const err = s.setZone([[cx - half, cy - half], [cx + half, cy - half], [cx + half, cy + half], [cx - half, cy + half]]);
+  if (err) throw new Error(err);
+  const bld: [number, number][] = [];
+  for (let i = 0; i < s.inZone.length; i++) if (s.inZone[i] === 1 && s.map.tile[i] === BUILDING) bld.push([i % s.w, (i / s.w) | 0]);
+  let pads = 0;
+  for (const [x, y] of bld.sort((a, b) => (a[0] - cx) ** 2 + (a[1] - cy) ** 2 - ((b[0] - cx) ** 2 + (b[1] - cy) ** 2)).filter((_, i) => i % 40 === 0)) { if (!s.placeSupport("evac", x, y)) pads++; if (pads >= 2) break; }
+  let guns = 0;
+  for (let y = 5; y < s.h - 5 && guns < 2; y++) for (let x = 5; x < s.w - 5 && guns < 2; x++) if (s.inZone[s.idx(x, y)] === 1 && s.map.tile[s.idx(x, y)] === ROAD && Math.abs(x - cx) < 15 && !s.place("howitzer", x, y)) guns++;
+  s.dev.bites = false; s.dev.waves = false;
+  s.startBattle();
+  const a = s as any, n = s.civN;
+  const lx = new Float32Array(n), ly = new Float32Array(n), still = new Float32Array(n);
+  const spOut: number[] = [], spIn: number[] = [];
+  let stuckMax = 0;
+  const px = new Float32Array(n), py = new Float32Array(n);
+  for (let t = 0; t < 300 * C.TICK_HZ; t++) {
+    const sample = t % C.TICK_HZ === 0;
+    if (sample) for (let k = 0; k < n; k++) { px[k] = s.ax[k]; py[k] = s.ay[k]; }
+    s.step();
+    if (!sample) continue;
+    let stuck = 0;
+    for (let k = 0; k < n; k++) {
+      const st = s.state[k]; if (st === DEAD || st === INF) continue;
+      const v = Math.hypot(s.ax[k] - px[k], s.ay[k] - py[k]) * M * C.TICK_HZ;
+      const i = s.idx(s.ax[k] | 0, s.ay[k] | 0), pf = a.padField[i] as number;
+      const atPad = st === SAFE && pf <= a.gatherD;
+      if (st === CIV && t > 60 * C.TICK_HZ) spOut.push(v);
+      if (st === SAFE && !atPad && pf !== 65535) spIn.push(v);
+      if (Math.hypot(s.ax[k] - lx[k], s.ay[k] - ly[k]) > 0.5) { lx[k] = s.ax[k]; ly[k] = s.ay[k]; still[k] = 0; } else still[k] += 1;
+      if (still[k] >= 20 && !atPad && (st === SAFE || st === CIV)) stuck++;
+    }
+    stuckMax = Math.max(stuckMax, stuck);
+    if (t % (60 * C.TICK_HZ) === 0 && t) {
+      let safe = 0, civ = 0; for (let k = 0; k < n; k++) { if (s.state[k] === SAFE) safe++; else if (s.state[k] === CIV) civ++; }
+      console.log(`  t=${t / C.TICK_HZ}s: outside ${civ}, in zone ${safe}, flown out ${s.evacuated}, lifts ${s.liftsFlown}, stuck now ${stuck}`);
+    }
+  }
+  const med = (v: number[]) => { v.sort((p, q) => p - q); return v.length ? v[v.length >> 1].toFixed(2) : "-"; };
+  const slow = (v: number[]) => (100 * v.filter(x => x < 0.5).length / Math.max(1, v.length)).toFixed(0);
+  let noPad = 0, waitFar = 0; const R = C.SUPPORTS.evac.radius;
+  for (let k = 0; k < n; k++) if (s.state[k] === SAFE) { const i = s.idx(s.ax[k] | 0, s.ay[k] | 0); if (a.padField[i] === 65535) noPad++; else if (a.padField[i] <= a.gatherD && a.padField[i] > R) waitFar++; }
+  console.log(`evac: median speed outside ${med(spOut)} m/s (${slow(spOut)}% under 0.5), in zone to pad ${med(spIn)} m/s (${slow(spIn)}% under 0.5), stuck peak ${stuckMax}, flown out ${s.evacuated}, crushed ${s.crushed}; in zone with no pad route ${noPad}, waiting beyond lift reach ${waitFar}, gatherD ${a.gatherD}, lift reach ${R}`);
+}
+
 function perf() {
   for (const n of [15000, 50000, 200000]) {
     const s = new Sim(7, { civilians: n, budget: 500_000_000 } as any);
@@ -146,4 +195,5 @@ const what = process.argv[2] ?? "all";
 if (what === "street" || what === "all") street();
 if (what === "gate" || what === "all") { gate(false); gate(true); }
 if (what === "horde" || what === "all") horde();
+if (what === "evac" || what === "all") evac();
 if (what === "perf" || what === "all") perf();

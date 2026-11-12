@@ -55,6 +55,7 @@ export interface Unit {
   recallFrom?: [number, number]; // 0.24: its post before a Recall
   crushT?: number; // 0.25: seconds left slowed from crushing infected
   yieldCiv?: boolean; // 0.25: civilians in its way this tick: it creeps
+  lastX?: number; lastY?: number; headX?: number; headY?: number; // 0.32: where a vehicle is heading (people clear its path)
   goal?: number; nav?: Uint16Array; thinkT?: number; reloadT?: number;
 }
 
@@ -68,7 +69,7 @@ export interface Blast { x: number; y: number; r: number; t: number; color: stri
 /** 0.28: what a round looks like in flight: small arms, sniper, cannon, shell, rocket. */
 export const SHOT_SMALL = 0, SHOT_SNIPER = 1, SHOT_CANNON = 2, SHOT_SHELL = 3, SHOT_ROCKET = 4;
 /** 0.28: one round in the air, for the renderer: fired at t from (x0,y0), arrives at `land` at (x1,y1). */
-export interface Shot { x0: number; y0: number; x1: number; y1: number; t: number; land: number; cls: number; kind: C.UnitKind }
+export interface Shot { x0: number; y0: number; x1: number; y1: number; t: number; land: number; cls: number; kind: C.UnitKind | "ac130" }
 /** 0.28: a shell or rocket on its way; it explodes (damage, craters, blast) when it lands. */
 interface Impact { x: number; y: number; r: number; dmg: number; maxHits?: number; sDmg: number; u: Unit; t: number; color: string }
 /** Muzzle velocity in meters per second, for flight time (gameplay-compressed for the slow ones). */
@@ -228,13 +229,26 @@ export class Sim {
    *  fields route around these; a change in them rebuilds the fields. */
   occStatic: Uint8Array;
   private occSig = 0;
+  /** 0.32: tanks and APCs this tick: center, half size (cells) and heading, so people step out of their way. */
+  private movers: { x: number; y: number; h: number; dx: number; dy: number; moving: boolean }[] = [];
+  private nearMover(x: number, y: number) {
+    for (const v of this.movers) { const r = v.h + C.VEH_CLEAR + C.VEH_AHEAD; if (Math.abs(x - v.x) < r && Math.abs(y - v.y) < r) return true; }
+    return false;
+  }
   private rebuildOcc(dt = 0) {
     this.occ.fill(0);
+    this.movers.length = 0;
     let sig = 0;
     for (const u of this.units) {
       const spec = C.UNITS[u.kind];
       if (spec.on !== "ground" || u.extractT !== undefined || (u.hp !== undefined && u.hp <= 0)) continue;
       const [x0, y0, x1, y1] = this.footRect(spec.foot, Math.floor(u.x), Math.floor(u.y));
+      if (spec.crushSlow !== undefined) {
+        const mx = u.x - (u.lastX ?? u.x), my = u.y - (u.lastY ?? u.y), ml = hyp(mx, my);
+        if (ml > 1e-4) { u.headX = mx / ml; u.headY = my / ml; }
+        u.lastX = u.x; u.lastY = u.y;
+        this.movers.push({ x: (x0 + x1 + 1) / 2, y: (y0 + y1 + 1) / 2, h: (x1 - x0 + 1) / 2, dx: u.headX ?? 0, dy: u.headY ?? 0, moving: ml > 1e-4 });
+      }
       if (spec.crushSlow !== undefined && !(u.deployT && u.deployT > 0)) this.crushUnder(u, x0, y0, x1, y1, dt);
       for (let y = Math.max(0, y0); y <= Math.min(this.h - 1, y1); y++) for (let x = Math.max(0, x0); x <= Math.min(this.w - 1, x1); x++) this.occ[y * this.w + x] = 1;
       if (!spec.mobile) sig = (sig + Math.imul((x0 + 1) * 73856093 ^ (y0 + 1) * 19349663, spec.foot + 1)) | 0;
@@ -302,7 +316,7 @@ export class Sim {
   charges: Record<C.AbilityKind, number> = { airstrike: 0, firebomb: 0, para: 0, supply_drop: 0, barrage: 0, moab: 0, nuke: 0, a10: 0, cluster: 0, tomahawk: 0, gunship: 0 };
   bought: Record<C.AbilityKind, number> = { airstrike: 0, firebomb: 0, para: 0, supply_drop: 0, barrage: 0, moab: 0, nuke: 0, a10: 0, cluster: 0, tomahawk: 0, gunship: 0 };
   fallout: Fallout[] = [];
-  orbits: { x: number; y: number; until: number; gunT: number; howT: number; angle: number }[] = []; // AC-130s on station
+  orbits: { x: number; y: number; until: number; gunT: number; howT: number; angle: number; away?: boolean }[] = []; // AC-130s: on station until `until`, or away refueling until `until`
   nukesUsed = 0;
   bridges: number[][] = []; // cells of each bridge
   c4 = new Set<number>(); // bridge ids with a charge planted
@@ -1131,6 +1145,10 @@ export class Sim {
       const t = this.tileAt(x | 0, y | 0);
       if (t === WATER) return `${C.ABILITIES[k].name} can't land in the river.`;
     }
+    if (k === "para") {
+      const live = this.units.filter(u => u.kind === "para" && (u.hp ?? 1) > 0).length + this.pending.filter(p => p.kind === "para").length;
+      if (live >= C.PARA_LIVE_MAX) return `${C.PARA_LIVE_MAX} paratrooper squads are already deployed. Wait for one to go home.`;
+    }
     if (k === "a10") {
       const dx = x2 - x, dy = y2 - y, l = hyp(dx, dy);
       if (l < 4) return "Drag the run out a bit longer.";
@@ -1318,8 +1336,13 @@ export class Sim {
 
   /** AC-130 on station: circles the spot, 30 mm on single infected, 105 mm on packs. Precise: infected only. */
   private stepOrbits(dt: number) {
-    this.orbits = this.orbits.filter(o => o.until > this.time);
     for (const o of this.orbits) {
+      if (this.time >= o.until) { // 0.32: 40 s on station, off the map to refuel, back to the same spot, repeat
+        o.away = !o.away;
+        o.until = this.time + (o.away ? C.GUNSHIP_REFUEL_S : C.GUNSHIP_S);
+        o.gunT = 0; o.howT = 1;
+      }
+      if (o.away) continue;
       o.angle -= dt * 0.5; // a left-hand orbit: the guns point out the left side, at the middle
       o.gunT -= dt;
       while (o.gunT <= 0) {
@@ -1328,6 +1351,8 @@ export class Sim {
         const a = rr() * 6.2832, d = Math.sqrt(rr()) * C.GUNSHIP_RADIUS;
         const t = this.nearest(o.x + Math.cos(a) * d, o.y + Math.sin(a) * d, 8, INF, 255, 60);
         if (t < 0) continue;
+        const gx = o.x + Math.cos(o.angle) * C.GUNSHIP_RADIUS * 1.15, gy = o.y + Math.sin(o.angle) * C.GUNSHIP_RADIUS * 1.15;
+        if (this.shots.length < 4000) this.shots.push({ x0: gx, y0: gy, x1: this.ax[t], y1: this.ay[t], t: this.time - 0.2, land: this.time, cls: SHOT_CANNON, kind: "ac130" }); // 0.32: 30 mm tracers from the plane
         this.hp[t] -= C.GUNSHIP_GUN_DMG;
         if (this.hp[t] <= 0) { this.state[t] = DEAD; this.recordKill(t); }
       }
@@ -1344,6 +1369,8 @@ export class Sim {
         }
         if (best >= 0 && this.clearOfZone(this.ax[best], this.ay[best], C.GUNSHIP_HOW_SPLASH)) {
           const sx = this.ax[best], sy = this.ay[best];
+          const gx = o.x + Math.cos(o.angle) * C.GUNSHIP_RADIUS * 1.15, gy = o.y + Math.sin(o.angle) * C.GUNSHIP_RADIUS * 1.15;
+          if (this.shots.length < 4000) this.shots.push({ x0: gx, y0: gy, x1: sx, y1: sy, t: this.time - 0.35, land: this.time, cls: SHOT_CANNON, kind: "ac130" }); // the 105 mm round
           this.areaDamage(sx, sy, C.GUNSHIP_HOW_SPLASH, C.GUNSHIP_HOW_DMG, false);
           this.damageTerrain(sx, sy, C.GUNSHIP_HOW_SPLASH * 0.7, 60);
           this.blasts.push({ x: sx, y: sy, r: C.GUNSHIP_HOW_SPLASH, t: this.time, color: "#ce93d8" });
@@ -2356,11 +2383,12 @@ export class Sim {
   private stepCiv(k: number, r: () => number, dt0: number, ci: number, infra: number, safe = false) {
     const w = this.w, M = C.CELL_M, x = this.ax[k], y = this.ay[k], cx = x | 0, cy = y | 0;
     if (safe) this.sqFrom = ci;
-    if (this.lod > 1 && (k + this.tick) % this.lod !== 0) { // big crowds: coast on the velocity between thinks
+    const byTank = this.movers.length > 0 && this.lod > 1 && this.nearMover(x, y);
+    if (this.lod > 1 && (k + this.tick) % this.lod !== 0 && !byTank) { // big crowds: coast on the velocity between thinks (not beside a tank)
       if (this.downT[k] <= 0) this.moveCiv(k, x, y, this.velX[k], this.velY[k], 0, 0, dt0, safe);
       return;
     }
-    const dt = dt0 * this.lod; // time since this person last thought
+    const dt = byTank ? dt0 : dt0 * this.lod; // time since this person last thought
     if (safe) this.sqFrom = ci;
     const b = ((y / BUCKET) | 0) * this.bw + ((x / BUCKET) | 0);
     // --- senses and fear
@@ -2450,6 +2478,20 @@ export class Sim {
       const p = C.WALL_A * (1 - d / C.WALL_RANGE);
       fx -= (qx / d) * p; fy -= (qy / d) * p;
     }
+    // --- vehicles: people get out of the way of a tank or APC, sideways off its path (it never runs them over)
+    for (const v of this.movers) {
+      const px = x - v.x, py = y - v.y, R = v.h + C.VEH_CLEAR;
+      if (px * px + py * py > (R + C.VEH_AHEAD) * (R + C.VEH_AHEAD)) continue;
+      const d = hyp(px, py) || 1e-3;
+      if (d < R) { const p = C.VEH_A * (1 - d / R) * 2; fx += (px / d) * p; fy += (py / d) * p; } // too close: away from it
+      if (v.moving) {
+        const along = px * v.dx + py * v.dy, side = px * -v.dy + py * v.dx;
+        if (along > -v.h && along < v.h + C.VEH_AHEAD && Math.abs(side) < v.h + C.VEH_CLEAR) { // in its path: step aside
+          const sg = Math.abs(side) > 0.05 ? Math.sign(side) : (k & 1 ? 1 : -1), p = C.VEH_A * (1 - Math.abs(side) / (v.h + C.VEH_CLEAR));
+          fx += -v.dy * sg * p; fy += v.dx * sg * p;
+        }
+      }
+    }
     // --- family: drift back toward the group (until terror takes over)
     const lead = this.famLead[k];
     if (lead >= 0 && f < 0.85) {
@@ -2489,7 +2531,10 @@ export class Sim {
         if (hl > 1e-3) { const q = C.HERD_MAX * (f - 0.5) / 0.5, dl = hyp(dx, dy) || 1; dx = dx / dl * (1 - q) + hvx / hl * q; dy = dy / dl * (1 - q) + hvy / hl * q; }
       }
     }
-    let v0 = this.pspd[k] * (C.CIV_SPEED + f * (C.CIV_SPRINT - C.CIV_SPEED));
+    // 0.32: an evacuation is a hurry, not a stroll: on the way to a pad people jog (speed only;
+    // fear, and with it panic, crush and herding, stays as it was)
+    const hurry = safe ? (queue || this.inZone[ci] !== 1 ? C.EVAC_HURRY : 0) : C.EVAC_HURRY_OUT;
+    let v0 = this.pspd[k] * (C.CIV_SPEED + Math.max(f, hurry) * (C.CIV_SPRINT - C.CIV_SPEED));
     v0 *= infra === INFRA_HIGHWAY ? C.HIGHWAY_SPEED_MUL : infra === INFRA_RAIL || infra === INFRA_STATION ? C.RAIL_SPEED_MUL : 1;
     if (this.rough[ci]) v0 *= this.roughMul(ci);
     // speed is set by the space in front of them (Weidmann), not by the crowd behind
