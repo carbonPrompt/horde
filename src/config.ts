@@ -169,8 +169,18 @@ export let INCOME_PER_SAFE = 180; // dollars per sheltered person per 10 s (emer
 export let KILL_BOUNTY = 1_000;
 export let EXTRACT_MUL = 1.5; // selling mid-battle: the unit sits out 1.5x its deploy time (at least 5 s) before it is pulled out
 export let CRUSH_SLOW_S = 0.8; // 0.25: seconds a tank or APC stays slowed after crushing infected
-export let VEH_A = 10, VEH_CLEAR = 1.5, VEH_AHEAD = 5; // 0.32: people step aside from a tank/APC: push (m/s2), clearance and look-ahead (cells)
-export let CRUSH_YIELD_MUL = 0.3; // speed when civilians are in its way (it never runs people over)
+export let VEH_A = 4, VEH_CLEAR = 1.5, VEH_AHEAD = 5; // 0.32: people step aside from a tank/APC: push (m/s2), clearance and look-ahead (cells)
+export let CRUSH_YIELD_MUL = 0.12; // 0.33: slowest crawl when civilians are in its way (it never runs people over)
+export let CRUSH_CROWD_N = 6; // 0.33: people around a tank/APC that halve its speed (it slows as the crowd thickens)
+export let VEH_NUDGE = 2; // 0.33: people a tank/APC may nudge into at its leading edge (they shuffle out); more, it waits
+export let VEH_SLOW = 0.55; // 0.33: people next to a moving tank/APC slow to this share of their pace and edge around it
+// 0.33: line of sight. Buildings block direct fire unless the shooter sees over them (heights in meters).
+export let LEVEL_M = 3.5; // one building level
+export let EYE_M = 2; // a ground unit's gun height (tanks, ships and rooftop units set their own)
+export let TARGET_M = 1; // aim point on an infected
+// 0.33: infected don't know the map. When a bridge goes, they keep heading where they were going; the ones that reach
+// the gap mill on the bank until a person in sight or noise pulls them. Within this many cells of the zone they see it.
+export let INF_KNOW_D = 30;
 /** 0.27: extra steps the Evac Point route charges for squeezing past a unit that plugs a street (so people walk around one when they can). */
 export let SQUEEZE_COST = 30;
 export let MOBILE_HURT_DPS = 6; // per infected touching an APC or squad
@@ -195,6 +205,7 @@ export interface UnitSpec {
   mobile?: { speed: number; hp: number; leash: number; nav: "road" | "water" | "air"; flee: number; rearmS?: number }; // air: flies straight over everything, out of reach
   splash?: number; // cells: blast radius (infected only)
   minRange?: number; // cells: can't hit closer than this
+  eye?: number; // 0.33: gun height in meters (line of sight over buildings); default EYE_M
   maxHits?: number; // most infected one shell can hit (a packed crowd shields itself)
   salvo?: number; // shells per volley, scattered around the target (battleship broadsides)
   /** A second, slower gun with a small blast (APC autocannon). Fires on its own timer, uses the same ammo. */
@@ -230,7 +241,7 @@ export const UNITS: Record<UnitKind, UnitSpec> = {
     rate: 0.1, damage: 600, ammo: 30, reloadsInZone: true, color: "#f48fb1", splash: 4, minRange: 20, maxHits: 30,
   },
   apc: {
-    name: "APC", crushSlow: 0.55, clawMul: 0.25, foot: 3, cost: 4_900_000, deploy: 8, on: "ground", range: 13, roofBonus: 0,
+    name: "APC", eye: 2.6, crushSlow: 0.55, clawMul: 0.25, foot: 3, cost: 4_900_000, deploy: 8, on: "ground", range: 13, roofBonus: 0,
     rate: 9, damage: 100, ammo: 300, reloadsInZone: false, color: "#80cbc4",
     cannon: { range: 17, rate: 1.2, damage: 350, splash: 1.4, maxHits: 6 },
     mobile: { speed: 7, hp: 900, leash: 50, nav: "road", flee: 7 },
@@ -240,7 +251,7 @@ export const UNITS: Record<UnitKind, UnitSpec> = {
     rate: 1 / 14, damage: 900, ammo: 12, reloadsInZone: true, color: "#ff80ab", splash: 3.5, minRange: 30, maxHits: 20, salvo: 6,
   },
   tank: {
-    name: "M1 Abrams", crushSlow: 0.8, clawMul: 0.08, foot: 4, cost: 10_000_000, deploy: 15, on: "ground", range: 15, roofBonus: 0,
+    name: "M1 Abrams", eye: 2.9, crushSlow: 0.8, clawMul: 0.08, foot: 4, cost: 10_000_000, deploy: 15, on: "ground", range: 15, roofBonus: 0,
     rate: 10, damage: 100, ammo: 1200, reloadsInZone: false, color: "#a1887f",
     cannon: { range: 20, rate: 0.35, damage: 1800, splash: 2.5, maxHits: 14 },
     mobile: { speed: 4.5, hp: 3000, leash: 60, nav: "road", flee: 16 },
@@ -257,7 +268,7 @@ export const UNITS: Record<UnitKind, UnitSpec> = {
     mobile: { speed: 6, hp: Infinity, leash: 130, nav: "air", flee: 999, rearmS: 12 },
   },
   gunboat: {
-    name: "Gunboat", foot: 4, cost: 9_000_000, deploy: 12, on: "water", range: 18, roofBonus: 0,
+    name: "Gunboat", eye: 4, foot: 4, cost: 9_000_000, deploy: 12, on: "water", range: 18, roofBonus: 0,
     rate: 6, damage: 120, ammo: Infinity, reloadsInZone: false, color: "#90caf9",
     mobile: { speed: 4.5, hp: Infinity, leash: 90, nav: "water", flee: 999 },
   },
@@ -357,7 +368,7 @@ export let SWIMMER_BASE_FRAC = 0.08;
 export let SWIMMER_WAVE_GROWTH = 0.015;
 export let SWIMMER_MAX_FRAC = 0.25;
 
-export const VERSION = "0.32.0";
+export const VERSION = "0.33.0";
 
 /** The campaign: fixed cities that unlock in order (a medal on one opens the next). */
 export interface CityDef { id: string; name: string; seed: number; budget: number; waveMul: number; sites: number; speedMul: number; blurb: string; real?: boolean; trial?: string } // trial: hardware this city lends you before you unlock it
@@ -852,6 +863,13 @@ export const TUNABLE: Record<string, [() => number, (v: number) => void]> = {
   VEH_CLEAR: [() => VEH_CLEAR, v => { VEH_CLEAR = v; }],
   VEH_AHEAD: [() => VEH_AHEAD, v => { VEH_AHEAD = v; }],
   CRUSH_YIELD_MUL: [() => CRUSH_YIELD_MUL, v => { CRUSH_YIELD_MUL = v; }],
+  CRUSH_CROWD_N: [() => CRUSH_CROWD_N, v => { CRUSH_CROWD_N = v; }],
+  VEH_NUDGE: [() => VEH_NUDGE, v => { VEH_NUDGE = v; }],
+  VEH_SLOW: [() => VEH_SLOW, v => { VEH_SLOW = v; }],
+  LEVEL_M: [() => LEVEL_M, v => { LEVEL_M = v; }],
+  EYE_M: [() => EYE_M, v => { EYE_M = v; }],
+  TARGET_M: [() => TARGET_M, v => { TARGET_M = v; }],
+  INF_KNOW_D: [() => INF_KNOW_D, v => { INF_KNOW_D = v; }],
   SQUEEZE_COST: [() => SQUEEZE_COST, v => { SQUEEZE_COST = v; }],
   MOBILE_HURT_DPS: [() => MOBILE_HURT_DPS, v => { MOBILE_HURT_DPS = v; }],
   GATE_HP: [() => GATE_HP, v => { GATE_HP = v; }],

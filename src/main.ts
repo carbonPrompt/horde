@@ -4,6 +4,7 @@ import { fetchLiveOsmCity } from "./osm";
 import { CIV, INF, SAFE_CIV, SHOT_CANNON, SHOT_ROCKET, SHOT_SHELL, SHOT_SNIPER, Sim } from "./sim";
 import type { Score } from "./sim";
 import * as Save from "./save";
+import * as Snap from "./snapshot";
 import * as P from "./progress";
 import * as Mods from "./mods";
 // Mods first: they change numbers that everything below reads. Desktop: <userData>\mods\*.json; browser: stored copies.
@@ -243,6 +244,7 @@ function show(id: string | null) {
   if (id === "cities") renderCities();
   if (id === "settings") { syncSettings(); renderMods(); const vb = document.getElementById("versions-btn") as HTMLButtonElement | null; if (vb) { vb.disabled = mode === "game"; $("ver-ingame").hidden = mode !== "game"; } }
   if (id === "record") renderRecord();
+  if (id === "slots") renderSlots();
 }
 function go(id: string) { stack.push(id); show(id); }
 function renderRecord() {
@@ -654,8 +656,9 @@ addEventListener("keydown", e => {
   const k = e.key;
   if (k === "F10") { e.preventDefault(); toggleDevPanel(); return; }
   if (k === "F11") { e.preventDefault(); save.settings.fullscreen = !save.settings.fullscreen; Save.store(save); applyFullscreen(); return; }
+  if (k === "F5") { e.preventDefault(); void saveGame(); return; } // 0.33: quick save
   if (k === "Escape") {
-    if (stack.length) { if (stack[stack.length - 1] !== "title") back(); return; }
+    if (stack.length) { const top = stack[stack.length - 1]; if (top !== "title" && !(top === "slots" && !Save.activeSlot())) back(); return; }
     if (mode === "game" && pickerCat) { openPicker(null); return; }
     if (mode === "game" && draft.length) { draft = []; return; }
     if (mode === "game" && strikeStart) { strikeStart = null; return; }
@@ -2341,12 +2344,155 @@ document.querySelector("#s-title .ver")!.textContent = `v${C.VERSION}`;
 for (const k of C.BUILDABLE) $(`cost-${k}`).textContent = `${C.money(C.UNITS[k].cost)}`;
 for (const k of C.SUPPORT_KINDS) $(`cost-${k}`).textContent = C.money(C.SUPPORTS[k].cost);
 
+// ---------- 0.33: save slots and battle saves ----------
+let saving = false;
+const fmtT = (t: number) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, "0")}`;
+const fmtMB = (b: number) => b >= 1e6 ? `${(b / 1e6).toFixed(1)} MB` : `${Math.max(1, Math.round(b / 1e3))} KB`;
+const esc = (t: string) => t.replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]!));
+/** Everything the page needs besides the Sim to carry on a saved battle (plain data). */
+function pageState(): Snap.PageState {
+  return { cityId: city?.id ?? null, dailyDate, customName: customMap?.name ?? null, mutators: [...activeMutators], seed, xpGiven, roundShown,
+    tipGates, lastWave, warnedWave, warnShown, outbreakShown, lastBreaches, lastEarned, cam: { x: cam.x, y: cam.y, scale: cam.scale } };
+}
+async function saveGame() {
+  if (mode !== "game") { say("Start a city first, then save the battle.", 2500); return; }
+  if (sim.phase === "over") { say("This battle is over; there's nothing to save.", 2500); return; }
+  const n = Save.activeSlot();
+  if (!n) { say("Pick a save slot first.", 2500); go("slots"); return; }
+  if (saving) return;
+  saving = true;
+  const label = $("cityname").textContent ?? "Battle", t0 = performance.now(), at = sim.time, phase = sim.phase;
+  say(`Saving to Slot ${n}...`, 60000);
+  try {
+    const bytes = await Snap.pack(C.VERSION, label, sim, pageState()); // the battle is copied before this awaits
+    if (!(await Save.writeBattle(n, bytes))) throw new Error("the file couldn't be written");
+    save.battle = { version: C.VERSION, savedAt: new Date().toISOString(), label, t: at, phase, bytes: bytes.length };
+    Save.store(save);
+    say(`Saved to Slot ${n} (${fmtMB(bytes.length)}).`, 2500);
+    log("info", "battle-saved", { slot: n, bytes: bytes.length, ms: Math.round(performance.now() - t0), t: +at.toFixed(1), phase });
+  } catch (err) {
+    say(`Couldn't save: ${(err as Error).message}`, 6000);
+    log("error", "battle-save-failed", { slot: n, error: String((err as Error)?.stack ?? err) });
+  } finally { saving = false; if (!stack.length || stack[stack.length - 1] === "slots") renderSlots(); }
+}
+/** Bring a battle back from the active slot. It loads paused. */
+async function loadBattle(n: number) {
+  const gz = await Save.readBattle(n);
+  if (!gz) { say("No battle saved in this slot.", 3000); return; }
+  const meta = await Snap.peek(gz);
+  if (!meta) { say("That battle file is damaged.", 4000); return; }
+  if (meta.version !== C.VERSION) { say(`That battle was saved in version ${meta.version}; it only loads in ${meta.version}.`, 5000); return; }
+  let snap: Snap.Snapshot;
+  try { snap = await Snap.unpack(gz); } catch (err) { say("That battle file is damaged.", 4000); log("error", "battle-load-failed", { slot: n, error: String(err) }); return; }
+  const p = snap.page as Record<string, any>;
+  openPicker(null); clearTicker();
+  mode = "game"; showHeatmap = false;
+  city = typeof p.cityId === "string" ? C.ALL_CITIES.find(c => c.id === p.cityId) ?? null : null;
+  dailyDate = typeof p.dailyDate === "string" ? p.dailyDate : null;
+  customMap = typeof p.customName === "string" ? { name: p.customName, map: snap.sim.map } : null;
+  activeMutators.clear(); for (const m of Array.isArray(p.mutators) ? p.mutators : []) if (m in C.MUTATORS) activeMutators.add(m);
+  seed = Number(p.seed) || 0;
+  sim = snap.sim;
+  document.body.classList.remove("attract");
+  stack.length = 0; show(null);
+  $("osm-credit").hidden = !(city?.real || customMap);
+  Object.assign(perf, new Perf());
+  draft = []; strikeStart = null; orderSel = null; nukeArm = null;
+  xpGiven = Number(p.xpGiven) || 0; roundShown = !!p.roundShown; tipGates = !!p.tipGates; lastWave = Number(p.lastWave) || 0; warnedWave = Number(p.warnedWave ?? -1);
+  warnShown = !!p.warnShown; outbreakShown = !!p.outbreakShown; lastBreaches = Number(p.lastBreaches) || 0; lastEarned = Number(p.lastEarned) || 0;
+  showRanges = save.settings.showRanges;
+  resize(); buildBase(); buildZone(); fitCamera();
+  if (p.cam && Number.isFinite(p.cam.x) && Number.isFinite(p.cam.y) && Number.isFinite(p.cam.scale)) Object.assign(cam, { x: p.cam.x, y: p.cam.y, scale: p.cam.scale });
+  $("end").hidden = true;
+  $("cityname").textContent = snap.label;
+  syncDev();
+  setTool(sim.phase === "plan" ? "zone" : "pan");
+  speed = 0; refreshUi();
+  if (sim.phase === "battle") snd.music("battle");
+  say(`Loaded the battle from Slot ${n} (${fmtT(Math.max(0, sim.time))} in). ${sim.phase === "battle" ? "Paused: press Space to carry on." : ""}`, 6000);
+  log("info", "battle-loaded", { slot: n, ...cityTag(), t: +sim.time.toFixed(1), phase: sim.phase });
+}
+/** The slot's profile is now the game's: settings, quick bar and speed follow it. */
+function applyProfile() {
+  if (save.xp == null) { save.xp = P.grandfatherXp(save.best); Save.store(save); }
+  quick = cleanQuickbar(save.settings.quickbar, t => PICKER_TOOLS.has(t)); renderQuickbar();
+  pausedSpeed = save.settings.speed ?? 1;
+  showRanges = save.settings.showRanges;
+  applyVolumes(); applyFullscreen(); updateDailyButton(); syncDifficultyButtons(); syncDev();
+  $("title-slots").textContent = Save.activeSlot() ? `Save Slots (Slot ${Save.activeSlot()})` : "Save Slots";
+}
+function pickSlot(n: number) {
+  const empty = !Save.listSlots()[n - 1]?.data, keep = save.settings;
+  save = Save.selectSlot(n);
+  if (empty) { save.settings = { ...keep }; Save.store(save); } // a new player keeps this computer's settings
+  log("info", "slot-picked", { slot: n, empty });
+  applyProfile();
+}
+// a delete needs a second click within 3 s
+let armed: { key: string; t: number } | null = null;
+const confirmed = (key: string) => { const ok = armed?.key === key && performance.now() - armed.t < 3000; armed = ok ? null : { key, t: performance.now() }; return ok; };
+function renderSlots() {
+  const act = Save.activeSlot(), inGame = mode === "game";
+  $("slots-back").hidden = !act;
+  $("slots-sub").textContent = act ? "Each slot is its own player: rank, medals, unlocks and plans, plus one saved battle (F5 or Save game in the Esc menu)."
+    : "Pick a slot to play in. Each slot is its own player: rank, medals, unlocks and plans, plus one saved battle (F5 or Save game in the Esc menu).";
+  $("slots-folder").hidden = !Save.canOpenFolder();
+  const box = $("slot-list"); box.innerHTML = "";
+  for (const sl of Save.listSlots()) {
+    const d = sl.data, card = document.createElement("div");
+    card.className = "slot" + (sl.n === act ? " active" : "");
+    let html = `<h3>SLOT ${sl.n}${sl.n === act ? " · PLAYING" : ""}</h3>`;
+    if (!d) html += `<div class="meta">Empty</div>`;
+    else {
+      const xp = d.xp ?? P.grandfatherXp(d.best), medals = Object.values(d.best).filter(b => b.medal).length;
+      html += `<div class="meta"><b>${esc(P.rankFor(xp).name)}</b> · ${xp.toLocaleString()} XP<br>${medals} medal${medals === 1 ? "" : "s"} · ${Object.keys(d.plans).length} saved plan${Object.keys(d.plans).length === 1 ? "" : "s"}</div>`;
+      const b = d.battle;
+      if (b && sl.battleBytes) html += `<div class="meta">Battle: <b>${esc(b.label)}</b><br>${b.phase === "plan" ? "planning" : fmtT(b.t) + " in"} · saved ${esc(new Date(b.savedAt).toLocaleString())} · ${fmtMB(sl.battleBytes)}${b.version !== C.VERSION ? `<br>Made in ${esc(b.version)}: can't load in ${C.VERSION}` : ""}</div>`;
+      else html += `<div class="meta">No saved battle</div>`;
+    }
+    html += `<div class="acts"></div>`;
+    card.innerHTML = html;
+    const acts = card.querySelector(".acts")!;
+    const btn = (text: string, fn: () => void, cls = "") => { const e = document.createElement("button"); e.textContent = text; if (cls) e.className = cls; e.addEventListener("click", fn); acts.appendChild(e); return e; };
+    if (sl.n !== act) btn(d ? "Play this slot" : "New game here", () => {
+      if (inGame) { say("Quit to the menu to switch slots.", 3000); return; }
+      pickSlot(sl.n); stack.length = 0; go("title");
+    }).disabled = inGame;
+    const b = d?.battle;
+    if (d && b && sl.battleBytes && b.version === C.VERSION) btn("Load battle", () => {
+      if (sl.n !== act) { if (inGame) { say("Quit to the menu to switch slots.", 3000); return; } pickSlot(sl.n); }
+      void loadBattle(sl.n);
+    }).disabled = inGame && sl.n !== act;
+    if (d && sl.battleBytes) btn("Delete battle", () => {
+      const key = `b${sl.n}`; if (!confirmed(key)) { say("Click Delete battle again to confirm.", 3000); return; }
+      Save.deleteBattle(sl.n);
+      if (sl.n === act) { delete save.battle; Save.store(save); }
+      log("info", "battle-deleted", { slot: sl.n }); renderSlots();
+    }, "danger");
+    if (d) btn("Delete slot", () => {
+      if (inGame && sl.n === act) { say("Quit to the menu to delete the slot you're playing.", 3500); return; }
+      const key = `s${sl.n}`; if (!confirmed(key)) { say(`Click Delete slot again to delete Slot ${sl.n} (rank, medals, plans and its battle).`, 3000); return; }
+      Save.deleteSlot(sl.n);
+      log("info", "slot-deleted", { slot: sl.n });
+      if (sl.n === act) { save = Save.load(); applyProfile(); stack.length = 0; go("slots"); return; }
+      renderSlots();
+    }, "danger");
+    box.appendChild(card);
+  }
+}
+$("p-save").addEventListener("click", () => void saveGame());
+$("slots-folder").addEventListener("click", () => Save.openFolder());
+$("save-folder").addEventListener("click", () => Save.openFolder());
+$("save-folder").hidden = !Save.canOpenFolder();
+$("title-slots").textContent = Save.activeSlot() ? `Save Slots (Slot ${Save.activeSlot()})` : "Save Slots";
+
 resize();
 applyVolumes();
 log("info", "app-start", { version: C.VERSION, renderer: glv.ok ? "webgl" : "2d", desktop: !!Save.desktop, screen: [screen.width, screen.height], window: [innerWidth, innerHeight], dpr: devicePixelRatio, ua: navigator.userAgent, cores: navigator.hardwareConcurrency, settings: save.settings, citiesWon: Object.keys(save.best).length });
 applyFullscreen();
 setTool("zone");
 startAttract();
+if (!Save.activeSlot()) go("slots"); // 0.33: first time: pick a slot (an old save is already in Slot 1)
 initUpdater({ save: () => save, go, say, log: (ev, d) => log("info", ev, d), inGame: () => mode === "game" }); // 0.26: Windows app only
 requestAnimationFrame(frame);
 

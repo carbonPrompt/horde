@@ -1,4 +1,4 @@
-// The only things the game page can ask of Windows: fullscreen on/off, quit, its save file, its log, mods, and updates.
+// The only things the game page can ask of Windows: fullscreen on/off, quit, its save slots, its log, mods, and updates.
 const { contextBridge, ipcRenderer } = require("electron");
 contextBridge.exposeInMainWorld("hordeDesktop", {
   setFullscreen: on => ipcRenderer.send("fullscreen", !!on),
@@ -16,4 +16,12 @@ contextBridge.exposeInMainWorld("hordeDesktop", {
   restoreOffer: saveVersion => ipcRenderer.sendSync("restore-offer", saveVersion == null ? null : String(saveVersion)),
   restoreBackup: name => ipcRenderer.sendSync("backup-restore", String(name)),
   openReleases: () => ipcRenderer.send("open-releases"),
+  // 0.33 save slots
+  slotsList: () => ipcRenderer.sendSync("slots-list"),
+  slotSelect: n => ipcRenderer.sendSync("slot-select", Number(n)),
+  slotDelete: n => ipcRenderer.sendSync("slot-delete", Number(n)),
+  battleWrite: (n, bytes) => ipcRenderer.invoke("battle-write", Number(n), bytes),
+  battleRead: n => ipcRenderer.invoke("battle-read", Number(n)),
+  battleDelete: n => ipcRenderer.sendSync("battle-delete", Number(n)),
+  openSaves: () => ipcRenderer.send("open-saves"),
 });

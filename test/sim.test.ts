@@ -3,6 +3,7 @@ import { Sim, INF, SAFE_CIV } from "../src/sim";
 import type { Support } from "../src/sim";
 import { BUILDING } from "../src/map";
 import * as C from "../src/config";
+import * as Save from "../src/save";
 
 function zoneAroundCenter(s: Sim, half = 30): [number, number][] {
   const cx = s.w / 2, cy = s.h / 4;
@@ -1441,3 +1442,89 @@ test("closing a gate in battle takes time and steps people in it clear; nobody s
     expect(s.inZone[i] === 2 && s.wallHp[i] > 0).toBe(false);
   }
 }, 60000);
+
+test("0.33: buildings block direct fire unless the shooter sees over them", () => {
+  const s = new Sim(42);
+  // a road cell, a run of tall building, a road cell on the same row
+  let found: [number, number, number] | null = null;
+  for (let y = 5; y < s.h - 5 && !found; y++) for (let x = 2; x < s.w - 12 && !found; x++) {
+    if (s.map.tile[s.idx(x, y)] !== 0) continue;
+    let e = x + 1; while (e < x + 10 && s.map.tile[s.idx(e, y)] === BUILDING) e++;
+    if (e > x + 2 && s.map.tile[s.idx(e, y)] === 0 && s.map.height[s.idx(x + 1, y)] >= 3) found = [x, e, y];
+  }
+  expect(found).not.toBeNull();
+  const [x0, x1, y] = found!;
+  expect(s.sightClear(x0 + 0.5, y + 0.5, C.EYE_M, x1 + 0.5, y + 0.5)).toBe(false); // from the street: the building is in the way
+  expect(s.sightClear(x0 + 0.5, y + 0.5, 200, x1 + 0.5, y + 0.5)).toBe(true); // from high above: over it
+  expect(s.sightLine("turret")).toBe(true);
+  expect(s.sightLine("howitzer")).toBe(false); // artillery fires over
+  expect(s.sightLine("apache")).toBe(false); // aircraft see down
+});
+
+test("0.33: infected walk to a blown bridge they were heading for and mill there instead of re-pathing", () => {
+  const out = Bun.spawnSync(["bun", "tools/bridgelab.ts", "5"], { cwd: import.meta.dir + "/.." }).stdout.toString();
+  const m = out.match(/t\+120s: (\d+) of (\d+), (\d+) within 30 m of the gap/);
+  expect(m).not.toBeNull();
+  expect(+m![3]).toBeGreaterThan(+m![2] * 0.7);
+}, 60000);
+
+test("0.33: a tank in a crowd never teleports people; it edges through slowly", () => {
+  const s = new Sim(42, { budget: 80_000_000, civilians: 6000 });
+  const cx = s.w / 2, cy = s.h / 4, H = 34;
+  s.setZone([[cx - H, cy - H], [cx + H, cy - H], [cx + H, cy + H], [cx - H, cy + H]]);
+  let placed = false;
+  for (let y = cy - 25; y < cy + 25 && !placed; y++) for (let x = cx - 25; x < cx + 25 && !placed; x++)
+    if (s.inZone[s.idx(x, y)] === 1 && s.map.tile[s.idx(x, y)] === 0 && !s.place("tank", x, y)) placed = true;
+  expect(placed).toBe(true);
+  s.dev.bites = false;
+  s.startBattle();
+  const u = s.units.find(v => v.kind === "tank")!;
+  let jumps = 0, driven = 0;
+  const px = new Float32Array(s.civN), py = new Float32Array(s.civN);
+  for (let t = 0; t < 40 * C.TICK_HZ; t++) {
+    if (t % (10 * C.TICK_HZ) === 0) s.orderUnit?.(u, Math.round(cx + (t % (20 * C.TICK_HZ) ? 40 : -40)), Math.round(cy));
+    for (let k = 0; k < s.civN; k++) { px[k] = s.ax[k]; py[k] = s.ay[k]; }
+    const ux = u.x, uy = u.y;
+    s.step();
+    driven += Math.hypot(u.x - ux, u.y - uy);
+    for (let k = 0; k < s.civN; k++) if ((s.state[k] === 0 || s.state[k] === 3) && Math.hypot(s.ax[k] - px[k], s.ay[k] - py[k]) > 1.2) jumps++;
+  }
+  console.log({ jumps, driven: driven.toFixed(1) });
+  expect(jumps).toBe(0);
+  expect(driven).toBeGreaterThan(10);
+}, 120000);
+
+test("0.33: a saved battle loads back exactly and plays on identically", async () => {
+  const { pack, unpack, peek } = await import("../src/snapshot");
+  const s = new Sim(42, { budget: 80_000_000, civilians: 5000 });
+  s.setZone(zoneAroundCenter(s));
+  let placed = 0;
+  for (let y = 10; y < s.h - 10 && placed < 3; y += 3) for (let x = 10; x < s.w - 10 && placed < 3; x += 3)
+    if (s.inZone[s.idx(x, y)] === 1 && !s.place((["mortar", "apc", "sniper"] as const)[placed], x, y)) placed++;
+  for (let b = 0; b < s.bridges.length; b++) s.c4.add(b);
+  s.startBattle();
+  for (let i = 0; i < 20 * 50; i++) s.step();
+  if (s.bridges.length) { const c = s.bridges[0][0]; s.blowBridge(c % s.w, (c / s.w) | 0); }
+  for (let i = 0; i < 20 * 5; i++) s.step();
+  const gz = await pack(C.VERSION, "test", s, { cityId: "x", cam: { x: 1, y: 2, scale: 3 } });
+  expect((await peek(gz))!.version).toBe(C.VERSION);
+  const snap = await unpack(gz);
+  const b = snap.sim;
+  expect(snap.page.cityId).toBe("x");
+  expect(b instanceof Sim).toBe(true);
+  for (let i = 0; i < 20 * 30; i++) { s.step(); b.step(); }
+  let diff = 0;
+  for (let k = 0; k < s.n; k++) if (s.ax[k] !== b.ax[k] || s.ay[k] !== b.ay[k] || s.state[k] !== b.state[k]) diff++;
+  expect(diff).toBe(0);
+  expect(b.kills).toBe(s.kills);
+  expect(b.time).toBe(s.time);
+  expect(b.units.map(u => [u.kind, u.x, u.y, u.ammo])).toEqual(s.units.map(u => [u.kind, u.x, u.y, u.ammo]));
+  expect([...b.blown]).toEqual([...s.blown]);
+}, 120000);
+
+test("0.33: save slot profiles keep only a well-formed battle summary", () => {
+  const ok = Save.clean({ settings: { fullscreen: true, edgeScroll: false, showRanges: false }, best: {}, plans: {}, battle: { version: "0.33.0", savedAt: "2026-11-12T00:00:00Z", label: "Ashford", t: 120, phase: "battle", bytes: 1000 } } as any);
+  expect(ok.battle?.label).toBe("Ashford");
+  const bad = Save.clean({ settings: { fullscreen: true, edgeScroll: false, showRanges: false }, best: {}, plans: {}, battle: { version: "<b>", label: 3 } } as any);
+  expect(bad.battle).toBeUndefined();
+});

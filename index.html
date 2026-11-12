@@ -91,6 +91,16 @@
   .reclist > div { background: #151a24; border: 1px solid #222a38; border-radius: 7px; padding: 6px 9px; display: flex; flex-direction: column; gap: 2px; opacity: 0.55; }
   .reclist > div.got { opacity: 1; border-color: rgba(74, 222, 128, 0.45); }
   .reclist b { font-size: 12px; } .reclist span { font-size: 11px; color: #94a3b8; }
+  /* 0.33 save slots */
+  #slot-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 12px; max-width: 900px; width: 100%; }
+  .slot { background: #151a24; border: 1px solid #222a38; border-radius: 9px; padding: 12px 14px; display: flex; flex-direction: column; gap: 6px; text-align: left; }
+  .slot.active { border-color: rgba(74, 222, 128, 0.6); }
+  .slot h3 { margin: 0; font-size: 15px; color: #fff; letter-spacing: 1px; }
+  .slot .meta { font-size: 12px; color: #94a3b8; line-height: 1.45; }
+  .slot .meta b { color: #e2e8f0; font-weight: 600; }
+  .slot .acts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+  .slot .acts button { font-size: 12.5px; padding: 6px 10px; justify-content: center; }
+  .slot .acts button.danger { border-color: rgba(248, 113, 113, 0.5); color: #fca5a5; }
   nav .pair { display: flex; flex-direction: column; gap: 3px; justify-content: stretch; }
   nav .pair button {
     flex: 1; justify-content: center; font-size: 10.5px; font-weight: 600;
@@ -564,6 +574,7 @@
         <button data-diff="insane">Insane</button>
       </div>
       <button data-go="record">Service Record</button>
+      <button data-go="slots" id="title-slots">Save Slots</button>
       <button data-go="howto">How to Play</button>
       <button data-go="settings">Settings</button>
       <button id="quit" hidden>Quit to Desktop</button>
@@ -617,7 +628,7 @@
     <p><b>Support buildings.</b> Built on buildings inside your safe zone: <b>Budget office</b> cuts the cost of nearby units and buildings by 20%, <b>Repair yard</b> mends damaged walls, gates and vehicles, <b>Radio tower</b> extends nearby firing range by 40%, <b>Supply depot</b> feeds ammo via cargo drones to turrets, mobile squads and forward units outside the walls (and halves vehicle reload time), <b>Command post</b> boosts firing rate by 30% and patrol range by 25%, <b>Precinct</b> dispatches autonomous Police Squads, and <b>Armory</b> arms Militia squads to guard the walls while reinforcing indoor barricades.</p>
     <p><b>Real Cities, Mutators, Daily Challenge &amp; Kill Heatmaps.</b> Play on 8 built-in real OpenStreetMap cities (Castle Rock, Denver, Chicago, Pittsburgh, Boston, Manhattan, Portland, Paris) or search any real city live when online. Toggle <b>Mutators</b> on the Cities screen or play the deterministic <b>Daily Challenge</b>. Press <b>H</b> (or hover over any unit button in battle) to view spatial <b>Kill Heatmaps</b> showing where your defenses did the most damage.</p>
     <p class="credits"><b>Credits.</b> Map data &copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap contributors</a>, available under the Open Database License (ODbL). Music made with ACE-Step 1.5 (MIT license). Sound effects made with Stable Audio Open 1.0, Powered by Stability AI (Stability AI Community License). Built by AI agents (Claude and Gemini) and a human.</p>
-    <p><b>Controls.</b> Right-drag or WASD to move the map, wheel to zoom, Space to pause, 1/2/3 for speed, Q recalls units to the zone (again: back to their posts), L locks gates, K clears the zone, Z X C V B N M use quick bar slots 1-7, J height view, R shows unit ranges, H toggles kill heatmap, Esc opens the menu, F11 fullscreen (Windows app).</p>
+    <p><b>Controls.</b> Right-drag or WASD to move the map, wheel to zoom, Space to pause, 1/2/3 for speed, Q recalls units to the zone (again: back to their posts), L locks gates, K clears the zone, Z X C V B N M use quick bar slots 1-7, J height view, R shows unit ranges, H toggles kill heatmap, Esc opens the menu, F5 quick save (the battle goes in your slot), F11 fullscreen (Windows app).</p>
     <div class="row"><button data-back>Back</button></div>
   </div>
   <div class="screen" id="s-settings" hidden>
@@ -641,9 +652,16 @@
     <div class="subhead">Mods and save file</div>
     <div id="mod-status" class="opt"></div>
     <div class="row"><button id="mod-open">Open mods folder</button><button id="mod-load">Load mod file</button><button id="mod-clear">Remove browser mods</button><button id="mod-template">Export default stats</button></div>
+    <div class="row"><button data-go="slots">Save slots</button><button id="save-folder">Open save folder</button></div>
     <div class="row"><button id="save-export">Export save file</button><button id="save-import">Import save file</button></div>
     <input type="file" id="mod-file" accept=".json,application/json" hidden><input type="file" id="save-file" accept=".json,application/json" hidden>
     <div class="row"><button id="logs">Open log folder</button><button id="reset">Reset progress</button><button data-back>Back</button></div>
+  </div>
+  <div class="screen" id="s-slots" hidden>
+    <h2>SAVE SLOTS</h2>
+    <p class="subhead" id="slots-sub">Each slot is its own player: rank, medals, unlocks and plans, plus one saved battle (F5 or Save game in the Esc menu).</p>
+    <div id="slot-list"></div>
+    <div class="row"><button id="slots-folder">Open save folder</button><button data-back id="slots-back">Back</button></div>
   </div>
   <div class="screen" id="s-versions" hidden>
     <h2>VERSIONS</h2>
@@ -656,6 +674,7 @@
     <h2>PAUSED</h2>
     <div class="col">
       <button id="resume">Resume</button>
+      <button id="p-save">Save game (F5)</button>
       <button id="p-reset">Restart city (clear plan)</button>
       <button id="p-restart">Restart city (keep plan)</button>
       <button data-go="howto">How to play</button>

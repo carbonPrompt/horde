@@ -35,10 +35,26 @@ for (const [name, seed, opts] of runs) {
       for (const [, x, y] of inner) if (!s.placeSupport(kind, x, y)) break;
     }
   }
+  // 0.33: a sensible player picks roofs that see the approaches: score each building near a gate by how many
+  // street cells outside the zone it has a sight line to (buildings block shots since 0.33)
+  const view = new Map<string, number>();
+  const sees = (x: number, y: number) => {
+    const key = x + "," + y; let v = view.get(key);
+    if (v !== undefined) return v;
+    const eye = s.map.height[s.idx(x, y)] * C.LEVEL_M + 1.7, R = 18;
+    v = 0;
+    for (let ty = y - R; ty <= y + R; ty += 2) for (let tx = x - R; tx <= x + R; tx += 2) {
+      if (tx < 0 || ty < 0 || tx >= s.w || ty >= s.h || (tx - x) ** 2 + (ty - y) ** 2 > R * R) continue;
+      const i = s.idx(tx, ty);
+      if (s.inZone[i] !== 0 || s.map.tile[i] !== 0) continue;
+      if (s.sightClear(x + 0.5, y + 0.5, eye, tx + 0.5, ty + 0.5)) v++;
+    }
+    view.set(key, v); return v;
+  };
+  const near = cand.filter(c => c[0] <= 8).sort((a, b) => sees(b[1], b[2]) - sees(a[1], a[2]));
   const order: C.UnitKind[] = ["garrison", "sniper", "garrison", "sniper", "garrison", "garrison", "garrison", "sniper"];
   for (let k = 0; k < 24 && s.remaining() >= 1_200_000; k++) { const kind = order[k % order.length];
-    for (const [d, x, y] of cand) {
-      if (d > 8) break; // only buildings close to a gate
+    for (const [, x, y] of near) { // only buildings close to a gate, best view first
       if (s.units.some(u => Math.hypot(u.x - x, u.y - y) < 18)) continue; // spread out
       if (!s.place(kind, x, y)) break;
     }
