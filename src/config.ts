@@ -84,6 +84,10 @@ export let MILL_MAX_DENS = 24; // 0.30: people inside a zone don't step into a c
 export let SETTLE_DENS = 1; // 0.30.1: people/m2 above which people with nowhere to go in a zone move to emptier ground
 export let WAIT_RHO = 3; // 0.30: people/m2 in the crowd waiting at an Evac Point (its area grows with the crowd)
 export let EVAC_GATHER_D = 6; // cells from the pad where they stop and wait for the lift
+export let EVAC_LOAD_CELLS = 15; // 0.34: a full lift's worth of crowd at a pad counts as this many cells of walking (~one lift interval at a jog)
+export let EVAC_LOAD_R = 1.5; // 0.34: a pad's crowd = people within this many lift radii
+export let EVAC_LOAD_MAX = 600; // 0.34: cap on that cost (cells)
+export let EVAC_SEED_D = 4; // 0.34: how far out from a pad's footprint to look for the street its crowd stands on
 export let AGENT_RESERVE = 25000; // slots for infected beyond the civilians
 
 export let CIV_SPEED = 0.67; // cells per second: 0.30: a real walk, 1.34 m/s (was 2.8, a sprint)
@@ -368,7 +372,7 @@ export let SWIMMER_BASE_FRAC = 0.08;
 export let SWIMMER_WAVE_GROWTH = 0.015;
 export let SWIMMER_MAX_FRAC = 0.25;
 
-export const VERSION = "0.33.0";
+export const VERSION = "0.34.0";
 
 /** The campaign: fixed cities that unlock in order (a medal on one opens the next). */
 export interface CityDef { id: string; name: string; seed: number; budget: number; waveMul: number; sites: number; speedMul: number; blurb: string; real?: boolean; trial?: string } // trial: hardware this city lends you before you unlock it
@@ -784,6 +788,10 @@ export const TUNABLE: Record<string, [() => number, (v: number) => void]> = {
   SETTLE_DENS: [() => SETTLE_DENS, v => { SETTLE_DENS = v; }],
   WAIT_RHO: [() => WAIT_RHO, v => { WAIT_RHO = v; }],
   EVAC_GATHER_D: [() => EVAC_GATHER_D, v => { EVAC_GATHER_D = v; }],
+  EVAC_SEED_D: [() => EVAC_SEED_D, v => { EVAC_SEED_D = v; }],
+  EVAC_LOAD_CELLS: [() => EVAC_LOAD_CELLS, v => { EVAC_LOAD_CELLS = v; }],
+  EVAC_LOAD_R: [() => EVAC_LOAD_R, v => { EVAC_LOAD_R = v; }],
+  EVAC_LOAD_MAX: [() => EVAC_LOAD_MAX, v => { EVAC_LOAD_MAX = v; }],
   AGENT_RESERVE: [() => AGENT_RESERVE, v => { AGENT_RESERVE = v; }],
   CIV_SPEED: [() => CIV_SPEED, v => { CIV_SPEED = v; }],
   CIV_SPRINT: [() => CIV_SPRINT, v => { CIV_SPRINT = v; }],

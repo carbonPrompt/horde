@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { Sim, INF, SAFE_CIV } from "../src/sim";
 import type { Support } from "../src/sim";
-import { BUILDING } from "../src/map";
+import { BUILDING, WATER } from "../src/map";
 import * as C from "../src/config";
 import * as Save from "../src/save";
 
@@ -574,7 +574,14 @@ test("Evac Points fly people out (score + money); a swarmed pad waves off; round
   // swarm the pad while a lift is inbound (0.28: infected no longer park at a gate, they break it and pour in, so
   // a swarm spawned long before the lift may have moved on)
   while (s.supports.includes(pad!) && pad!.pickupAt === undefined) s.step();
-  for (let j = 0; j < C.EVAC_ABORT_INF + 4; j++) s.spawnInfected(pad!.x + 0.5, pad!.y + 2.5, 1e9);
+  // 0.34: only infected inside the zone count, so the swarm goes on the zone's own street beside the pad
+  let sw = -1;
+  for (let r = 1; r <= 8 && sw < 0; r++) for (let dy = -r; dy <= r && sw < 0; dy++) for (let dx = -r; dx <= r && sw < 0; dx++) {
+    const i = s.idx(pad!.x + dx, pad!.y + dy);
+    if (s.inZone[i] === 1 && s.map.tile[i] !== BUILDING && s.map.tile[i] !== WATER) sw = i;
+  }
+  expect(sw).toBeGreaterThanOrEqual(0);
+  for (let j = 0; j < C.EVAC_ABORT_INF + 4; j++) s.spawnInfected((sw % s.w) + 0.5, ((sw / s.w) | 0) + 0.5, 1e9);
   const t0 = s.time; while (s.time < t0 + C.EVAC_EVERY_S + 4) s.step();
   expect(s.liftsAborted).toBeGreaterThan(before);
   s.devClearInfected();
@@ -1527,4 +1534,33 @@ test("0.33: save slot profiles keep only a well-formed battle summary", () => {
   expect(ok.battle?.label).toBe("Ashford");
   const bad = Save.clean({ settings: { fullscreen: true, edgeScroll: false, showRanges: false }, best: {}, plans: {}, battle: { version: "<b>", label: 3 } } as any);
   expect(bad.battle).toBeUndefined();
+});
+
+test("0.34: a pad in the middle of a wide block still gets a route; a backed-up pad sends people to an idle one", () => {
+  // the Ashford pad at 203,241 had no street within 2 cells of its centre: nobody walked to it
+  const s = new Sim(C.CITIES[0].seed, { civilians: 2000, budget: 400_000_000 } as any);
+  s.ignoreFootprint = true;
+  expect(s.addZone([[185, 230], [185, 256], [248, 256], [248, 230]])).toBeNull();
+  expect(s.placeSupport("evac", 203, 241)).toBeNull();
+  expect(s.placeSupport("evac", 229, 241)).toBeNull();
+  s.ignoreFootprint = false;
+  s.dev.bites = false; s.dev.waves = false;
+  s.startBattle();
+  for (let i = 0; i < 25; i++) s.step();
+  const a = s as any;
+  expect(a.padField[s.idx(206, 241)]).toBe(0); // the street on the block's east side is the 203 pad's
+  // pile 1200 people at the 229 pad: cells between the pads now lead to 203
+  let k = 0;
+  for (let y = 236; y <= 252 && k < 1200; y++) for (let x = 222; x <= 236 && k < 1200; x++) {
+    const i = s.idx(x, y); if (s.inZone[i] !== 1 || s.map.tile[i] === BUILDING) continue;
+    for (let j = 0; j < 12 && k < 1200; j++, k++) { s.state[k] = SAFE_CIV; s.ax[k] = x + 0.1 + (j % 4) * 0.25; s.ay[k] = y + 0.1 + ((j / 4) | 0) * 0.3; }
+  }
+  for (let i = 0; i < 25; i++) s.step();
+  // a cell a bit nearer 229 than 203 by plain distance now costs less via 203
+  let tested = 0;
+  for (let x = 207; x <= 222; x++) {
+    const i = s.idx(x, 249); if (a.padField[i] === 65535) continue;
+    if (a.padGo[i] !== a.padField[i]) tested++;
+  }
+  expect(tested).toBeGreaterThan(0);
 });

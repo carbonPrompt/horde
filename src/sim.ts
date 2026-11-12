@@ -2585,7 +2585,7 @@ export class Sim {
       if (safe) { // just inside: walk on in, away from the gate
         const pf = this.hasPads && this.inZone[ci] === 1 ? this.padField[ci] : 65535;
         const d = this.inZone[ci] !== 1 ? (this.routeAt(this.civDir, x, y) ? [this.rdx, this.rdy] : null)
-          : (pf !== 65535 && pf > C.EVAC_GATHER_D ? (queue = true, this.downhill(this.padField, cx, cy)) : null) // on to the Evac Point (a queue: they stop where it's full)
+          : (pf !== 65535 && pf > C.EVAC_GATHER_D ? (queue = true, this.downhill(this.padGo, cx, cy)) : null) // on to the Evac Point (a queue: they stop where it's full)
             ?? (this.depth[ci] < C.GATE_CLEAR_DEPTH ? this.inward(cx, cy) : null); // clear of the gate; deeper in they settle
         if (d) { const a = C.AIM_SWAY * Math.sin(this.time * 0.3 + k * 2.399963), ca = Math.cos(a), sa = Math.sin(a); dx = d[0] * ca - d[1] * sa; dy = d[0] * sa + d[1] * ca; }
         else if (this.dens[ci] > C.SETTLE_DENS * C.CELL_M * C.CELL_M) { // nowhere to be: move off toward emptier ground, filling the zone evenly
@@ -2693,7 +2693,7 @@ export class Sim {
     // 0.22: people know where the Evac Points are and walk the zone's streets to the nearest one
     const pf = this.hasPads && this.inZone[ci] === 1 && this.hp[k] <= 0 ? this.padField[ci] : 65535;
     if (pf !== 65535 && pf > this.gatherD) {
-      const d = this.downhill(this.padField, this.ax[k] | 0, this.ay[k] | 0);
+      const d = this.downhill(this.padGo, this.ax[k] | 0, this.ay[k] | 0);
       if (d) { this.hx[k] = d[0]; this.hy[k] = d[1]; sp = C.CIV_SPEED * C.EVAC_WALK_MUL * dt; }
     }
     let hx = this.hx[k], hy = this.hy[k];
@@ -2831,7 +2831,9 @@ export class Sim {
     if (b.pickupAt !== undefined) {
       if (this.time < b.pickupAt) return;
       b.pickupAt = undefined;
-      if (this.countInf(x, y, C.SUPPORTS.evac.radius, C.EVAC_ABORT_INF) >= C.EVAC_ABORT_INF) {
+      // 0.34: only infected inside the zone (or in its gates) wave a lift off; a crowd outside a wall or gate is no
+      // threat to the pad (a pad near the east gates on Ashford waved off six lifts in a row)
+      if (this.countInf(x, y, C.SUPPORTS.evac.radius, C.EVAC_ABORT_INF, false, true) >= C.EVAC_ABORT_INF) {
         this.liftsAborted++; this.liftLog.push({ kind: "abort", n: 0, x: b.x, y: b.y });
         b.liftT = C.EVAC_EVERY_S * 0.5; return;
       }
@@ -2871,14 +2873,23 @@ export class Sim {
     const f = this.padField, q = this.padQ;
     f.fill(65535);
     let qh = 0, qt = 0;
+    const padSeeds: { b: Support; from: number; to: number }[] = [];
     for (const b of this.supports) {
       if (b.kind !== "evac" || b.extractT !== undefined || (b.deployT && b.deployT > 0)) continue;
-      for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) { // the street cells around the pad's building
-        const x = b.x + dx, y = b.y + dy;
-        if (x < 0 || y < 0 || x >= this.w || y >= this.h) continue;
-        const i = this.idx(x, y);
-        if (f[i] === 65535 && this.inZone[i] === 1 && walkable(this.map.tile[i])) { f[i] = 0; q[qt++] = i; }
+      const from = qt;
+      // the street cells around the pad's building. 0.34: the nearest ring of street around the footprint, out to
+      // EVAC_SEED_D cells (a pad set in the middle of a wide block had no street within 2 cells of its centre, so
+      // nobody walked to it and its lifts flew out empty: an Ashford pad at 203,241)
+      const [x0, y0, x1, y1] = this.footRect(C.SUPPORTS.evac.foot, b.x, b.y);
+      for (let d = 0, found = false; d <= C.EVAC_SEED_D && !found; d++) {
+        for (let y = y0 - d; y <= y1 + d; y++) for (let x = x0 - d; x <= x1 + d; x++) {
+          if (d && x > x0 - d && x < x1 + d && y > y0 - d && y < y1 + d) continue; // this ring only
+          if (x < 0 || y < 0 || x >= this.w || y >= this.h) continue;
+          const i = this.idx(x, y);
+          if (this.inZone[i] === 1 && walkable(this.map.tile[i])) { found = true; if (f[i] === 65535) { f[i] = 0; q[qt++] = i; } }
+        }
       }
+      if (qt > from) padSeeds.push({ b, from, to: qt });
     }
     // 0.27: first around the units (people never walk into a howitzer when there is a way past it)...
     const sq = this.padSqueeze.length === cells ? this.padSqueeze : (this.padSqueeze = new Uint8Array(cells));
@@ -2891,6 +2902,7 @@ export class Sim {
         f[n] = d; q[qt++] = n;
       }
     }
+    const seedCells = q.slice(0, qt);
     // 0.30: the street cells around the pads in order of distance, so the waiting area can be sized to its crowd
     this.padRing = new Uint16Array(qt); for (let i = 0; i < qt; i++) this.padRing[i] = f[q[i]];
     // ...then, for anyone a unit has cut off, squeezing past it (dearer, so only the cut-off side uses it)
@@ -2902,7 +2914,7 @@ export class Sim {
         f[n] = Math.min(65534, f[c] + C.SQUEEZE_COST); sq[n] = 1; seeds.push(n);
       }
     }
-    if (!seeds.length) return;
+    if (seeds.length) {
     seeds.sort((x, y) => f[x] - f[y]);
     qh = 0; qt = 0;
     for (const n of seeds) q[qt++] = n;
@@ -2913,7 +2925,60 @@ export class Sim {
         f[n] = d; sq[n] = 1; q[qt++] = n;
       }
     }
+    }
+    this.buildPadGo(padSeeds, seedCells);
   }
+  /** 0.34: which pad to walk to. People pick the pad that gets them out soonest, not just the nearest: a pad's
+   *  crowd counts as extra walking (EVAC_LOAD_CELLS per full lift already waiting there), so once one pad has a
+   *  queue the people behind it head for an emptier pad in the zone (playtest: "actively and urgently look for the evac
+   *  point"). padField stays the plain walking distance (who is standing at a pad); padGo only steers. */
+  padGo = new Uint16Array(0);
+  private buildPadGo(pads: { b: Support; from: number; to: number }[], seedCells: Int32Array) {
+    const cells = this.w * this.h, f = this.padField;
+    if (pads.length < 2) { this.padGo = f; return; }
+    if (this.padGo.length !== cells || this.padGo === f) this.padGo = new Uint16Array(cells);
+    const g = this.padGo, q = this.padQ, cap = Math.max(1, Math.round(C.EVAC_CAP * this.popMul)), R = C.SUPPORTS.evac.radius * C.EVAC_LOAD_R;
+    g.fill(65535);
+    // each pad's crowd: people in the zone around it
+    const load = pads.map(({ b }) => {
+      const x = b.x + 0.5, y = b.y + 0.5;
+      const b0x = Math.max(0, ((x - R) / BUCKET) | 0), b1x = Math.min(this.bw - 1, ((x + R) / BUCKET) | 0);
+      const b0y = Math.max(0, ((y - R) / BUCKET) | 0), b1y = Math.min(this.bh - 1, ((y + R) / BUCKET) | 0);
+      let n = 0;
+      for (let by = b0y; by <= b1y; by++) for (let bx = b0x; bx <= b1x; bx++)
+        for (let k = this.headC[by * this.bw + bx]; k !== -1; k = this.next[k]) {
+          if (this.state[k] !== SAFE_CIV) continue;
+          const dx = this.ax[k] - x, dy = this.ay[k] - y;
+          if (dx * dx + dy * dy <= R * R) n++;
+        }
+      return Math.min(C.EVAC_LOAD_MAX, Math.round((n / cap) * C.EVAC_LOAD_CELLS));
+    });
+    const order = pads.map((_, i) => i).sort((p0, p1) => load[p0] - load[p1]);
+    // breadth-first, level by level, from every pad's street; each pad's street joins at the level of its crowd cost
+    const nxt = this.padGoQ.length === cells ? this.padGoQ : (this.padGoQ = new Int32Array(cells));
+    let cur = q, curN = 0, oi = 0, d = load[order[0]];
+    while (curN || oi < order.length) {
+      while (oi < order.length && load[order[oi]] <= d) {
+        const p = pads[order[oi++]];
+        for (let j = p.from; j < p.to; j++) { const c = seedCells[j]; if (g[c] > d) { g[c] = d; cur[curN++] = c; } }
+      }
+      if (!curN) { d = load[order[oi]]; continue; }
+      const out = cur === q ? nxt : q;
+      let outN = 0;
+      const d1 = d + 1;
+      if (d1 >= 65535) break;
+      for (let i = 0; i < curN; i++) {
+        const c = cur[i], cx = c % this.w;
+        if (g[c] !== d) continue;
+        for (const n of [cx > 0 ? c - 1 : -1, cx < this.w - 1 ? c + 1 : -1, c - this.w, c + this.w]) {
+          if (n < 0 || n >= cells || f[n] === 65535 || g[n] <= d1) continue;
+          g[n] = d1; out[outN++] = n;
+        }
+      }
+      cur = out; curN = outN; d = d1;
+    }
+  }
+  private padGoQ = new Int32Array(0);
   /** 0.27: cells whose way to an Evac Point squeezes past a unit (a unit plugs the street). */
   padSqueeze = new Uint8Array(0);
 
@@ -3058,13 +3123,14 @@ export class Sim {
   private navQ?: Int32Array;
 
   /** Infected within r of (x,y), up to cap. */
-  private countInf(x: number, y: number, r: number, cap = 50, chasingOnly = false) {
+  private countInf(x: number, y: number, r: number, cap = 50, chasingOnly = false, zoneOnly = false) {
     const b0x = Math.max(0, ((x - r) / BUCKET) | 0), b1x = Math.min(this.bw - 1, ((x + r) / BUCKET) | 0);
     const b0y = Math.max(0, ((y - r) / BUCKET) | 0), b1y = Math.min(this.bh - 1, ((y + r) / BUCKET) | 0);
     let n = 0;
     for (let by = b0y; by <= b1y; by++) for (let bx = b0x; bx <= b1x; bx++)
       for (let k = this.head[by * this.bw + bx]; k !== -1; k = this.next[k]) {
         if (this.state[k] !== INF || (chasingOnly && !this.chase[k])) continue;
+        if (zoneOnly) { const z = this.inZone[this.idx(this.ax[k] | 0, this.ay[k] | 0)]; if (z !== 1 && z !== 3) continue; }
         const dx = this.ax[k] - x, dy = this.ay[k] - y;
         if (dx * dx + dy * dy <= r * r && ++n >= cap) return n;
       }
