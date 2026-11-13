@@ -1,7 +1,9 @@
+import { buildCity } from "./cities/build";
+import type { CityRecipe } from "./cities/recipe";
 import * as C from "./config";
 import { padCost, roundParts, roundScore, medalFor, mayhem, type RoundParts } from "./scoring";
 import { heat, rollGap, rollSize, routesFor } from "./storyteller";
-import { BRIDGE, BUILDING, CityMap, INFRA_HIGHWAY, INFRA_RAIL, INFRA_STATION, PARK, WATER, extractRailLines, generateCity, rng, walkable } from "./map";
+import { BRIDGE, BUILDING, CityMap, ROAD, INFRA_HIGHWAY, INFRA_RAIL, INFRA_STATION, PARK, WATER, extractRailLines, generateCity, rng, walkable } from "./map";
 import { decodeCityMap } from "./osm";
 import { REAL_CITY_MAPS } from "./realcities";
 
@@ -126,6 +128,8 @@ export interface SimOpts {
   civilians?: number;
   realCityId?: string;
   customMap?: CityMap;
+  /** 0.35: a designed campaign city (built by buildCity). */
+  recipe?: CityRecipe;
   mutators?: C.MutatorId[];
   difficulty?: C.Difficulty;
 }
@@ -399,7 +403,7 @@ export class Sim {
     if (this.mutators.has("supply_shortage")) { this.budget = Math.round(this.budget * 1.3); }
     if (this.mutators.has("blood_money")) { this.budget = Math.round(this.budget * 0.75); this.incomeMul *= 2; this.killBountyMul *= 2; }
     const rle = opts.realCityId && REAL_CITY_MAPS[opts.realCityId];
-    this.map = opts.customMap ? opts.customMap : rle ? decodeCityMap(rle, seed) : generateCity(seed);
+    this.map = opts.customMap ? opts.customMap : rle ? decodeCityMap(rle, seed) : opts.recipe ? buildCity(opts.recipe) : generateCity(seed);
     this.w = this.map.w; this.h = this.map.h;
     const cells = this.w * this.h;
     this.killGrid = new Uint16Array(cells);
@@ -1069,8 +1073,11 @@ export class Sim {
     if (x < 0 || y < 0 || x >= this.w || y >= this.h) return "Off the map.";
     if (!this.zoneClosed) return "Draw a safe zone first: support buildings go inside it.";
     const spec = C.SUPPORTS[kind];
-    if (this.tileAt(x, y) !== BUILDING) return `${spec.name}s go on buildings.`;
-    if (!this.unitInZone({ x, y })) return `${spec.name}s must be placed on a building inside a safe zone.`;
+    const t = this.tileAt(x, y);
+    // 0.35.1: an Evac Point can be a rooftop helipad or a landing zone on open ground (street or park)
+    if (kind === "evac") { if (t !== BUILDING && t !== ROAD && t !== PARK) return `${spec.name}s go on a rooftop, a street or a park.`; }
+    else if (t !== BUILDING) return `${spec.name}s go on buildings.`;
+    if (!this.unitInZone({ x, y })) return kind === "evac" ? `${spec.name}s must be placed inside a safe zone.` : `${spec.name}s must be placed on a building inside a safe zone.`;
     if (kind === "militia" && this.supports.filter(b => b.kind === "militia").length >= C.MILITIA_MAX) return `Only ${C.MILITIA_MAX} Armories per battle.`;
     const near = this.overlapAt(spec.foot, x, y);
     if (near) return near;

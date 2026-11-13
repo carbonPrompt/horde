@@ -178,9 +178,11 @@ function evac() {
 
 function perf() {
   for (const n of [15000, 50000, 200000]) {
-    const s = new Sim(7, { civilians: n, budget: 500_000_000 } as any);
+    // CL_CITY=<campaign id>: time a designed city (zone on its first stand point) instead of the seed-7 map
+    const rc = process.env.CL_CITY ? C.CITIES.find(c => c.id === process.env.CL_CITY)?.recipe : undefined;
+    const s = new Sim(7, { civilians: n, budget: 500_000_000, recipe: rc } as any);
     s.dev.waves = false;
-    const cx = s.w / 2, cy = s.h / 2;
+    const cx = rc ? rc.stands[0].x : s.w / 2, cy = rc ? rc.stands[0].y : s.h / 2;
     let err: string | null = "x";
     for (let r = 20; r < 60 && err; r += 4) err = s.setZone([[cx - r, cy - r], [cx + r, cy - r], [cx + r, cy + r], [cx - r, cy + r]]);
     s.startBattle();

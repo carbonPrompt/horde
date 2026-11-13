@@ -1,4 +1,6 @@
 // All balance numbers in one place. Distances are in cells; one cell is CELL_M meters.
+import type { CityRecipe } from "./cities/recipe";
+import { CAMPAIGN_RECIPES } from "./cities/campaign";
 export let CELL_M = 2;
 export let MAP_W = 480; // cells (960 m)
 export let MAP_H = 360; // cells (720 m)
@@ -312,7 +314,7 @@ export interface SupportSpec {
 export const SUPPORTS: Record<SupportKind, SupportSpec> = {
   evac: {
     name: "Evac Point", foot: 4, cost: 3_000_000, deploy: 10, radius: 12, color: "#fff176",
-    hint: "Click a building inside your safe zone. A rooftop helipad: every 12 s a lift flies people out of the zone. Each person evacuated is saved for good and brings $24,000 in federal evacuation funding. Lifts wave off when infected crowd the pad.",
+    hint: "Click a rooftop, a street or a park inside your safe zone. A helipad or landing zone: every 12 s a lift flies people out of the zone. Each person evacuated is saved for good and brings $24,000 in federal evacuation funding. Lifts wave off when infected crowd the pad.",
   },
   budget: {
     name: "Budget Office", foot: 4, cost: 1_000_000, deploy: 6, radius: 50, color: "#ffd54f",
@@ -372,19 +374,31 @@ export let SWIMMER_BASE_FRAC = 0.08;
 export let SWIMMER_WAVE_GROWTH = 0.015;
 export let SWIMMER_MAX_FRAC = 0.25;
 
-export const VERSION = "0.34.0";
+export const VERSION = "0.35.1";
 
 /** The campaign: fixed cities that unlock in order (a medal on one opens the next). */
-export interface CityDef { id: string; name: string; seed: number; budget: number; waveMul: number; sites: number; speedMul: number; blurb: string; real?: boolean; trial?: string } // trial: hardware this city lends you before you unlock it
+export interface CityDef { id: string; name: string; seed: number; budget: number; waveMul: number; sites: number; speedMul: number; blurb: string; real?: boolean; trial?: string; recipe?: CityRecipe; clearXp?: number; intro?: string[] } // 0.35: recipe = designed campaign map; clearXp = one-time bonus for the first medal; intro = lines shown the first time // trial: hardware this city lends you before you unlock it
+// 0.35: the designed campaign (src/cities/campaign.ts). Each city teaches one thing; `trial` lends the unit it
+// teaches; `clearXp` is paid once, for the first medal (see campaignPace for how it is sized).
+const R = CAMPAIGN_RECIPES;
 export const CITIES: CityDef[] = [
-  { id: "ashford", name: "Ashford", seed: 7, budget: 30_000_000, waveMul: 0.6, sites: 2, speedMul: 0.9, blurb: "A quiet river town. Small hordes, a generous budget. Learn the ropes." },
-  { id: "millbrook", trial: "howitzer", name: "Millbrook", seed: 42, budget: 27_000_000, waveMul: 0.8, sites: 3, speedMul: 0.95, blurb: "Mill towns sit low. Find the tall buildings for your snipers." },
-  { id: "harrow-bay", trial: "barrage", name: "Harrow Bay", seed: 1234, budget: 24_000_000, waveMul: 1, sites: 4, speedMul: 1, blurb: "A normal day in a normal city. Until it isn't." },
-  { id: "lowmoor", trial: "tank", name: "Lowmoor", seed: 2024, budget: 24_000_000, waveMul: 1.15, sites: 4, speedMul: 1.05, blurb: "The hordes come bigger here. Walls matter." },
-  { id: "redwater", trial: "himars", name: "Redwater", seed: 31337, budget: 22_000_000, waveMul: 1.3, sites: 5, speedMul: 1.05, blurb: "Less money, more teeth. Every dollar has to fire." },
-  { id: "granite-falls", trial: "apache", name: "Granite Falls", seed: 555, budget: 22_000_000, waveMul: 1.45, sites: 5, speedMul: 1.1, blurb: "The bridges are the battle. Hold them or lose them." },
-  { id: "port-kessel", trial: "battleship", name: "Port Kessel", seed: 9001, budget: 20_000_000, waveMul: 1.6, sites: 6, speedMul: 1.1, blurb: "A crowded port and a thin budget. Choose who you can save." },
-  { id: "cinder-hill", trial: "gunship", name: "Cinder Hill", seed: 666, budget: 18_000_000, waveMul: 1.8, sites: 7, speedMul: 1.15, blurb: "The last city. Nobody expects you to hold it." },
+  { id: "fairhaven", name: "Fairhaven", seed: R.fairhaven.seed, recipe: R.fairhaven, budget: 30_000_000, waveMul: 0.6, sites: 2, speedMul: 0.9, clearXp: 200, blurb: "A quiet river town and your first command. Learn the ropes." },
+  { id: "pike-landing", trial: "tank", name: "Pike Landing", seed: R["pike-landing"].seed, recipe: R["pike-landing"], budget: 27_000_000, waveMul: 0.8, sites: 3, speedMul: 0.95, clearXp: 250, intro: ["On loan here: the M1 Abrams. Park it on a wide street where it can roll; the boardwalk and the main avenue fit it.", "A Gunboat can work the harbor and shoot over the shore."], blurb: "A harbor town with wide streets. Room for the heavy armor." },
+  { id: "stonebridge", trial: "reaper", name: "Stonebridge", seed: R.stonebridge.seed, recipe: R.stonebridge, budget: 25_000_000, waveMul: 1, sites: 4, speedMul: 1, clearXp: 300, intro: ["On loan here: the MQ-9 Reaper, a drone that watches both bridges from high above.", "Only two bridges cross the river. Blow one with C4 and they have to go the long way round."],   blurb: "A wide river and only two bridges. Hold them, or blow them." },
+  { id: "lakemont", trial: "moab", name: "Lakemont", seed: R.lakemont.seed, recipe: R.lakemont, budget: 26_000_000, waveMul: 1.1, sites: 4, speedMul: 1.05, clearXp: 350, intro: ["On loan here: the MOAB, the biggest bomb short of a nuke. Drop it where the hordes bunch up on the shore.", "The lake splits the town. One zone will not reach everyone; think about two."],   blurb: "A lake in the middle of town. One zone can't reach everyone." },
+  { id: "highgate", name: "Highgate", seed: R.highgate.seed, recipe: R.highgate, budget: 24_000_000, waveMul: 1.25, sites: 5, speedMul: 1.05, clearXp: 400, intro: ["The towers on the point see a long way. Put snipers on the tallest roofs, and watch the bridges on the west channel."],   blurb: "Towers on a peninsula. The rooftops see for miles." },
+  { id: "tidewater", name: "Tidewater", seed: R.tidewater.seed, recipe: R.tidewater, budget: 24_000_000, waveMul: 1.4, sites: 5, speedMul: 1.1, clearXp: 450, intro: ["The harbor is deep. A Battleship can sit in the estuary and shell both banks, and Gunboats can patrol the river."],  blurb: "A deep harbor. Bring the navy in close." },
+  { id: "seven-isles", name: "Seven Isles", seed: R["seven-isles"].seed, recipe: R["seven-isles"], budget: 22_000_000, waveMul: 1.55, sites: 6, speedMul: 1.1, clearXp: 500, intro: ["Every island is joined by bridges. Hold the bridges or you will fight on every shore; air units cover more than one island."],  blurb: "Islands and bridges. Rule the air." },
+  { id: "marrow-delta", name: "Marrow Delta", seed: R["marrow-delta"].seed, recipe: R["marrow-delta"], budget: 20_000_000, waveMul: 1.7, sites: 7, speedMul: 1.15, clearXp: 550, intro: ["The river splits three ways. Artillery behind the water can reach every branch; a Barrage clears a bridgehead."],  blurb: "The river splits three ways. Artillery country." },
+  { id: "port-royal", name: "Port Royal", seed: R["port-royal"].seed, recipe: R["port-royal"], budget: 20_000_000, waveMul: 1.9, sites: 8, speedMul: 1.15, clearXp: 600, intro: ["Everything is unlocked now, the Tactical Nuke too. One per battle. Make it count, and keep your own people clear.", "Coast, river and lake together. Everything you have learned, all at once."], blurb: "Coast, river and lake. Everything you've learned, all at once." },
+];
+/** 0.34 and earlier campaign ids: a save with medals on N of them opens the first N+1 new cities. */
+export const LEGACY_CAMPAIGN_IDS = ["ashford", "millbrook", "harrow-bay", "lowmoor", "redwater", "granite-falls", "port-kessel", "cinder-hill"];
+/** Generated maps for the Daily Challenge (campaign cities stay out of it); knobs from the old campaign rows. */
+export const DAILY_GENERATED: CityDef[] = [
+  { id: "daily-small", name: "Harrow Bay", seed: 1234, budget: 24_000_000, waveMul: 1, sites: 4, speedMul: 1, blurb: "A generated city." },
+  { id: "daily-mid", name: "Redwater", seed: 31337, budget: 22_000_000, waveMul: 1.3, sites: 5, speedMul: 1.05, blurb: "A generated city." },
+  { id: "daily-big", name: "Cinder Hill", seed: 666, budget: 18_000_000, waveMul: 1.8, sites: 7, speedMul: 1.15, blurb: "A generated city." },
 ];
 
 /** Real-world OpenStreetMap cities, baked into the bundle for instant offline play. */
@@ -399,6 +413,8 @@ export const REAL_CITIES: CityDef[] = [
   { id: "manhattan", trial: "nuke", name: "Manhattan, NY", seed: 10038, budget: 250_000_000, waveMul: 3.0, sites: 6, speedMul: 1.12, real: true, blurb: "Lower Manhattan by the Brooklyn Bridge. Skyscrapers, dense crowds and relentless waves." },
 ];
 export const ALL_CITIES: CityDef[] = [...CITIES, ...REAL_CITIES];
+/** 0.35: any city a battle can be on, by id (campaign, real, generated daily). */
+export function cityById(id: string): CityDef | undefined { return [...ALL_CITIES, ...DAILY_GENERATED].find(c => c.id === id); }
 
 /** Battle mutators: optional rule modifiers for custom runs and Daily Challenges. */
 export type MutatorId = "titan_strain" | "swimmer_surge" | "blitz_hordes" | "supply_shortage" | "fragile_walls" | "blood_money";
@@ -452,7 +468,8 @@ export function dailyChallengeFor(dateStr = todayDateStr()): { date: string; cit
     h ^= h << 13; h ^= h >>> 17; h ^= h << 5;
     return (h >>> 0) / 4294967296;
   };
-  const city = ALL_CITIES[Math.floor(next() * ALL_CITIES.length)];
+  const pool = [...REAL_CITIES, ...DAILY_GENERATED]; // 0.35: campaign cities are designed maps, not in the daily
+  const city = pool[Math.floor(next() * pool.length)];
   const m1 = Math.floor(next() * MUTATOR_IDS.length);
   let m2 = Math.floor(next() * (MUTATOR_IDS.length - 1));
   if (m2 >= m1) m2++;
@@ -667,7 +684,7 @@ export interface SupportInfoSpec {
 }
 export const SUPPORT_INFO: Record<SupportKind, SupportInfoSpec> = {
   evac: {
-    role: "Rooftop Helipad · Civilian Airlift",
+    role: "Helipad or Landing Zone · Civilian Airlift",
     transport: "CH-47 Chinook modular lift",
     effect: "Lifts up to 80 people out every 12 s · $24,000 per person",
     specials: ["Evacuated people are saved for good: this is your score", "People inside the zone queue toward the nearest pad", "A lift waves off if 8+ infected are near the pad"],

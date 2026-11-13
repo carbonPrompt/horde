@@ -3,7 +3,7 @@ import { Sim } from "../src/sim";
 import * as C from "../src/config";
 // `bun tools/balance.ts campaign` plays every campaign city with its own budget and horde size.
 const runs: [string, number, import("../src/sim").SimOpts][] = process.argv[2] === "campaign"
-  ? C.CITIES.map(c => [c.name, c.seed, { budget: c.budget, waveMul: c.waveMul, sites: c.sites, speedMul: c.speedMul }])
+  ? C.CITIES.map(c => [c.name, c.seed, { budget: c.budget, waveMul: c.waveMul, sites: c.sites, speedMul: c.speedMul, recipe: c.recipe }])
   : process.argv[2] === "real"
   ? C.REAL_CITIES.map(c => [c.name, c.seed, { budget: c.budget, waveMul: c.waveMul, sites: c.sites, speedMul: c.speedMul, realCityId: c.id }])
   : (process.argv[2] ?? "7,42,1234").split(",").map(n => [`seed ${n}`, Number(n), {}]);
@@ -15,7 +15,8 @@ const difficulty: C.Difficulty = diffEnv && C.DIFFICULTY[diffEnv] ? diffEnv : "m
 const res: string[] = [];
 for (const [name, seed, opts] of runs) {
   const s = new Sim(seed, { ...opts, difficulty });
-  const cx = s.w / 2, cy = s.h / 3;
+  const st0 = opts.recipe?.stands[0]; // 0.35: designed cities: the bot defends the first stand point
+  const cx = st0 ? st0.x : s.w / 2, cy = st0 ? st0.y : s.h / 3;
   const err = s.setZone([[cx - 40, cy - 28], [cx + 40, cy - 28], [cx + 46, cy + 24], [cx - 36, cy + 30]]);
   if (err) { console.log(seed, err); continue; }
   const gates: number[][] = [];
@@ -74,6 +75,7 @@ for (const [name, seed, opts] of runs) {
   let lastW = 0, prevWaveT = C.WARNING_S;
   while (s.phase === "battle") {
     if (s.time > MAX_T) { s.withdraw(); break; }
+    if (process.env.STOP_AT_ROUND && s.roundResult) break; // 0.35: measure XP for a player who stops when the round is won
     if (s.roundResult && !round) round = `round@${Math.round(s.time)}s ${s.roundResult.score.toFixed(1)} pts ${s.roundResult.pct.toFixed(1)}% ${s.roundResult.medal ?? "-"}`;
     if (!closed && s.time > C.WARNING_S + 100) { closed = true; for (let i = 0; i < s.inZone.length; i++) if (s.inZone[i] === 3 && s.wallHp[i] > 0) s.toggleGate(i % s.w, (i / s.w) | 0); }
     if (spend && s.tick % SPEND_EVERY === 0) // reinvest income: more garrisons by the gates
@@ -89,7 +91,7 @@ for (const [name, seed, opts] of runs) {
     }
     if (s.tick % 50 === 0) { const c = s.counts(); peakInf = Math.max(peakInf, c.inf); peakSafe = Math.max(peakSafe, c.safe); } if (s.breaches && firstBreach.t < 0) firstBreach.t = Math.round(s.time);
   }
-  const r = s.result!;
+  const r = (s.result ?? s.roundResult)!;
   res.push(`${name} [${difficulty}]: ${r.pct.toFixed(1)}% evac ${r.medal ?? "-"} | ${round || "round not reached"} | ${r.reason} t=${s.time.toFixed(0)} waves=${s.wave} sizes=[${sizes5m.join(",")}] gaps=[${gaps5m.join(",")}] pads=${s.supports.filter(b => b.kind === "evac").length} lifts=${s.liftsFlown}/${s.liftsAborted}ab train=${s.trainsEvacuated} intact=${r.intact.toFixed(0)}% xp=${r.xp} kills=${s.kills} breaches=${s.breaches} peakInf=${peakInf} peakSafe=${peakSafe} firstBreach=${firstBreach.t}s units=${s.units.length} left=$${s.remaining()} earned=$${s.earned}`);
 }
 console.log(res.join("\n"));

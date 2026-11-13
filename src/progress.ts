@@ -1,15 +1,16 @@
 // Progression (phase 5): XP from every battle unlocks hardware, ranks mark the way, achievements reward play styles.
 // Pure functions only (no DOM), so the sim tests can cover them.
 import type { Score } from "./sim";
+import * as C from "./config";
+import { anyMedal } from "./scoring";
 
 /** XP needed to unlock a tool. Anything not listed is available from the start. */
-export const UNLOCK_XP: Record<string, number> = {
+export const UNLOCK_XP: Record<string, number> = { // 0.35.1: spaced so bronze on every campaign city opens it all before Port Royal
   howitzer: 400, radio: 400, supply: 600,
   command: 900, police: 900, militia: 900, barrage: 1200,
-  battleship: 1600, tank: 2200, himars: 2600,
-  apache: 3200, a10: 3200, cluster: 3800,
-  reaper: 4500, tomahawk: 5200, gunship: 6000,
-  moab: 8000, nuke: 15000,
+  battleship: 1600, tank: 2200,
+  himars: 2600, apache: 3200, a10: 3200, reaper: 4000,
+  moab: 4800, tomahawk: 6000, cluster: 7200, gunship: 8300, nuke: 9500,
 };
 
 export const RANKS: [string, number][] = [
@@ -65,4 +66,17 @@ export const ACHIEVEMENTS: Achievement[] = [
 /** Achievements earned by this battle that were not already held. */
 export function earned(b: BattleStats, have: Record<string, string>) {
   return ACHIEVEMENTS.filter(a => !have[a.id] && a.check(b));
+}
+
+/** 0.35: campaign city i is open when it is the first, the previous city has a medal, or the save carries medals on
+ *  at least i of the old (0.34) campaign cities. */
+export function campaignOpen(best: Record<string, { medal?: string | null }>, i: number): boolean {
+  if (i === 0) return true;
+  if (C.CITIES[i - 1] && anyMedal(best, C.CITIES[i - 1].id)) return true;
+  return i <= C.LEGACY_CAMPAIGN_IDS.filter(id => anyMedal(best, id)).length;
+}
+
+/** 0.35: one-time XP for a campaign city's first medal (any difficulty). */
+export function clearBonus(city: C.CityDef, hadMedal: boolean, medal: string | null): number {
+  return !hadMedal && medal ? city.clearXp ?? 0 : 0;
 }

@@ -23,6 +23,7 @@ import { partPoints, mergeBest, bestKey, anyMedal, difficultyFor } from "./scori
 import { soundDue, zoomGain } from "./audiotiming";
 import { cleanQuickbar, setSlot, swapSlots, clearSlot, type Slots } from "./quickbar";
 import { airHalfPx, drawAirframe, smoothHeading } from "./aircraft";
+import { tutorialSteps, currentStep, wantTutorial, type TutStep, type TutState } from "./tutorial";
 import { drawDepot, drawModel, drawSquad, drawSupport, drawWrecks, hasModel, hasSquad, MODEL_ZOOM, noteUnits, SQUAD_ZOOM } from "./models";
 
 installErrorHooks();
@@ -65,6 +66,7 @@ let seed = Math.floor(Math.random() * 1e9);
 const simOpts = () => ({
   civilians: save.settings.crowd ?? C.CIVILIANS,
   realCityId: city?.real ? city.id : undefined,
+  recipe: customMap || dailyDate ? undefined : city?.recipe,
   customMap: customMap?.map,
   mutators: [...activeMutators],
   difficulty: difficultyFor(!!dailyDate, save.settings.difficulty),
@@ -233,6 +235,7 @@ function newSim(keepPlan: boolean, newSeed = false) {
   syncDev();
   buildBase(); buildZone(); fitCamera();
   $("end").hidden = true;
+  startTut(); // 0.35: Retry/Fresh map on City 1 starts the prompts again (steps already done are skipped)
   refreshUi();
 }
 
@@ -260,7 +263,7 @@ function back() {
   if (!top && mode === "game") resume(); else show(top);
 }
 
-function cityUnlocked(i: number) { return i === 0 || anyMedal(save.best, C.CITIES[i - 1].id); }
+function cityUnlocked(i: number) { return P.campaignOpen(save.best, i); } // 0.35: old campaign medals carry over
 function cityBestHtml(cityId: string, lockedMsg: string | null, unplayed: string) {
   if (lockedMsg) return `<span class="best" style="color:#8a919c">${lockedMsg}</span>`;
   const cur = difficultyFor(false, save.settings.difficulty);
@@ -348,6 +351,7 @@ function applyFullscreen() {
 }
 
 function startAttract() {
+  tut = null; showTut(); // 0.35: no tutorial banner over the menus
   openPicker(null); clearTicker();
   mode = "attract"; city = null; customMap = null; dailyDate = null; showHeatmap = false;
   document.body.classList.add("attract");
@@ -363,6 +367,48 @@ function startAttract() {
   snd.music("title");
 }
 
+// ---------- 0.35: City 1 guided tutorial (steps in src/tutorial.ts) ----------
+let tut: { steps: TutStep[]; i: number; on: boolean } | null = null;
+/** (Re)start or clear the tutorial for the current city; `replay` = the player asked for it. */
+function startTut(replay = false) {
+  const c = city;
+  tut = mode === "game" && c && c.recipe && wantTutorial({ first: c === C.CITIES[0], medal: anyMedal(save.best, c.id), daily: !!dailyDate, replay })
+    ? { steps: tutorialSteps(c.recipe.stands[0]), i: 0, on: true } : null;
+  showTut();
+}
+function tutState(): TutState {
+  const zr = tut?.steps.find(st => st.id === "zone")?.highlight?.rect;
+  let cells = 0, inside = 0, gates = 0;
+  if (zr) for (let y = zr.y; y < zr.y + zr.h; y++) for (let x = zr.x; x < zr.x + zr.w; x++) {
+    if (x < 0 || y < 0 || x >= sim.w || y >= sim.h) continue;
+    const i = sim.idx(x, y); if (sim.map.tile[i] === 1 || sim.map.tile[i] === 3) continue; // buildings, water
+    cells++; if (sim.inZone[i] === 1) inside++;
+  }
+  for (let i = 0; i < sim.inZone.length; i++) if (sim.inZone[i] === 3) { gates++; break; }
+  const n = (k: string) => sim.units.filter(u => u.kind === k).length;
+  return { zoneCells: sim.zoneCells, zoneOverlap: cells ? inside / cells : 0, gates, garrisons: n("garrison"), snipers: n("sniper"),
+    evacs: sim.supports.filter(b => b.kind === "evac").length, phase: sim.phase === "plan" ? "plan" : sim.phase === "battle" ? "battle" : "over", lifts: sim.liftsFlown };
+}
+function showTut() {
+  const box = $("tut");
+  document.querySelectorAll(".tut-glow").forEach(e => e.classList.remove("tut-glow"));
+  if (!tut || !tut.on) { box.hidden = true; return; }
+  const st = tut.steps[tut.i];
+  box.hidden = false;
+  $("tut-text").textContent = `${tut.i + 1}/${tut.steps.length}  ${st.text}`;
+  $("tut-next").hidden = st.id !== "pan";
+  if (st.highlight?.kind === "tool") {
+    document.querySelectorAll(`[data-tool="${st.highlight.tool}"]`).forEach(e => e.classList.add("tut-glow"));
+    const cat = catOf(st.highlight.tool!); // the tool may sit in a closed category: light that up too
+    if (cat) document.querySelectorAll(`#classes [data-cat="${cat}"]`).forEach(e => e.classList.add("tut-glow"));
+  }
+}
+function stepTut() {
+  if (!tut || !tut.on || mode !== "game") return;
+  const i = currentStep(tut.steps, tutState(), tut.i);
+  if (i !== tut.i) { tut.i = i; log("info", "tutorial-step", { step: tut.steps[i].id }); showTut(); }
+}
+
 function playCity(c: C.CityDef | null, seedOverride?: number) {
   clearTicker();
   mode = "game"; city = c; showHeatmap = false;
@@ -375,7 +421,10 @@ function playCity(c: C.CityDef | null, seedOverride?: number) {
   if (saved) importPlan(saved);
   log("info", "city-start", { ...cityTag(), loadedPlan: !!saved, civilians: sim.civN });
   $("osm-credit").hidden = !(c?.real || customMap);
-  if (c?.trial && !P.unlocked(c.trial, save.xp ?? 0)) setTimeout(() => say(`Field trial: ${toolName(c.trial!)} is on loan to you in ${c.name}. Earn ${P.UNLOCK_XP[c.trial!].toLocaleString()} XP to keep it everywhere.`, 9000), 600);
+  const firstTime = !!c?.recipe && !anyMedal(save.best, c.id);
+  if (c?.intro && firstTime) setTimeout(() => say(c.intro!.join(" "), 12000), 600); // 0.35: what this city teaches
+  else if (c?.trial && !P.unlocked(c.trial, save.xp ?? 0)) setTimeout(() => say(`Field trial: ${toolName(c.trial!)} is on loan to you in ${c.name}. Earn ${P.UNLOCK_XP[c.trial!].toLocaleString()} XP to keep it everywhere.`, 9000), 600);
+  startTut(); // 0.35: City 1 tutorial
   Object.assign(perf, new Perf()); // perf numbers cover play time only
   draft = []; speed = 1; tipGates = false; lastWave = 0; warnedWave = -1; warnShown = false; outbreakShown = false; xpGiven = 0; roundShown = false;
   showRanges = save.settings.showRanges;
@@ -404,6 +453,7 @@ function pause() {
   openPicker(null);
   log("info", "pause", { phase: sim.phase, t: +sim.time.toFixed(1) });
   speed = 0; refreshUi();
+  $("p-tutorial").hidden = !(city && city === C.CITIES[0] && !dailyDate); // 0.35
   stack.length = 0; go("pause");
 }
 function resume() {
@@ -436,6 +486,15 @@ function recordResult(r: Score) {
     return;
   }
   if (!city) return;
+  if (city.recipe) { // 0.35: one-time bonus for a campaign city's first medal
+    const cb = P.clearBonus(city, anyMedal(save.best, city.id), r.medal ?? null);
+    if (cb) {
+      const x0 = save.xp ?? 0; save.xp = x0 + cb;
+      const fr = P.newlyUnlocked(x0, save.xp).map(toolName);
+      lastNews = [lastNews, `First medal in ${city.name}: +${cb.toLocaleString()} XP`, fr.length ? `Unlocked: ${fr.join(", ")}` : ""].filter(Boolean).join(" · ");
+      log("info", "clear-bonus", { city: city.id, xp: cb, total: save.xp });
+    }
+  }
   const key = bestKey(city.id, sim.difficulty);
   const prev = save.best[key];
   // 0.20: pct holds the round score (0..100); old entries were "% evacuated" and only go when beaten
@@ -979,6 +1038,12 @@ function draw(now: number) {
     ctx.lineWidth = 2; ctx.setLineDash([5, 3]);
     ctx.strokeRect(cam.x + x0 * s, cam.y + y0 * s, (x1 - x0 + 1) * s, (y1 - y0 + 1) * s); ctx.setLineDash([]);
     if (s > 1.2) label("C4", cam.x + (x1 + 1) * s + 4, cam.y + ((y0 + y1) / 2) * s);
+  }
+  // 0.35: tutorial highlight on the map
+  const th = tut && tut.on ? tut.steps[tut.i].highlight : undefined;
+  if (th?.rect) {
+    ctx.strokeStyle = `rgba(250,204,21,${0.55 + 0.45 * Math.sin(now / 250)})`; ctx.lineWidth = 3; ctx.setLineDash([8, 5]);
+    ctx.strokeRect(cam.x + th.rect.x * s, cam.y + th.rect.y * s, th.rect.w * s, th.rect.h * s); ctx.setLineDash([]);
   }
 
   // Agents.
@@ -1861,8 +1926,10 @@ function applyVolumes() {
 
 // ---------- Loop ----------
 let acc = 0, last = performance.now(), drawErrors = 0, slowWarned = 0, slowTipShown = false;
+let tutTick = 0;
 function frame(now: number) {
   const real = Math.min(0.1, (now - last) / 1000); last = now;
+  if (++tutTick % 10 === 0) stepTut();
   // keyboard panning
   const pan = 600 * real * devicePixelRatio;
   if (keys.has("a") || keys.has("arrowleft")) cam.x += pan;
@@ -2377,6 +2444,7 @@ async function saveGame() {
 }
 /** Bring a battle back from the active slot. It loads paused. */
 async function loadBattle(n: number) {
+  tut = null; showTut(); // 0.35: a loaded battle has no tutorial
   const gz = await Save.readBattle(n);
   if (!gz) { say("No battle saved in this slot.", 3000); return; }
   const meta = await Snap.peek(gz);
@@ -2387,7 +2455,7 @@ async function loadBattle(n: number) {
   const p = snap.page as Record<string, any>;
   openPicker(null); clearTicker();
   mode = "game"; showHeatmap = false;
-  city = typeof p.cityId === "string" ? C.ALL_CITIES.find(c => c.id === p.cityId) ?? null : null;
+  city = typeof p.cityId === "string" ? C.cityById(p.cityId) ?? null : null; // 0.35: daily cities too
   dailyDate = typeof p.dailyDate === "string" ? p.dailyDate : null;
   customMap = typeof p.customName === "string" ? { name: p.customName, map: snap.sim.map } : null;
   activeMutators.clear(); for (const m of Array.isArray(p.mutators) ? p.mutators : []) if (m in C.MUTATORS) activeMutators.add(m);
@@ -2494,7 +2562,10 @@ setTool("zone");
 startAttract();
 if (!Save.activeSlot()) go("slots"); // 0.33: first time: pick a slot (an old save is already in Slot 1)
 initUpdater({ save: () => save, go, say, log: (ev, d) => log("info", ev, d), inGame: () => mode === "game" }); // 0.26: Windows app only
+$("p-tutorial").addEventListener("click", () => { resume(); startTut(true); });
+$("tut-next").addEventListener("click", () => { if (tut) { tut.i = Math.min(tut.steps.length - 1, tut.i + 1); showTut(); } });
+$("tut-skip").addEventListener("click", () => { if (tut) { tut.on = false; log("info", "tutorial-skip", { step: tut.steps[tut.i].id }); showTut(); } });
 requestAnimationFrame(frame);
 
 // Exposed for automated checks.
-(window as any).horde = { get sim() { return sim; }, get mode() { return mode; }, get save() { return save; }, recentLog, click, closeDraft, startBattle, setTool, setSpeed, cam, playCity, startAttract, pause, resume };
+(window as any).horde = { get sim() { return sim; }, get mode() { return mode; }, get save() { return save; }, get tut() { return tut; }, cities: C.CITIES, recentLog, click, closeDraft, startBattle, setTool, setSpeed, cam, playCity, startAttract, pause, resume };

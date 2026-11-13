@@ -9,7 +9,7 @@ import { ROAD, BUILDING, WATER } from "../src/map";
 
 for (const kv of (process.env.CL_SET ?? "").split(",").filter(Boolean)) { const [k, v] = kv.split("="); C.TUNABLE[k][1](+v); }
 const CIV = 0, INF = 1, DEAD = 2, SAFE = 3;
-const city = C.CITIES[0];
+const city = { seed: 7, budget: 30_000_000, waveMul: 0.6, sites: 2, speedMul: 0.9 }; // Ashford, the 0.34 campaign city 1 (generated from seed 7)
 const s = new Sim(city.seed, { budget: 400_000_000, civilians: +(process.env.RL_N ?? C.CIVILIANS), waveMul: city.waveMul, sites: city.sites, speedMul: city.speedMul } as any);
 const a = s as any, W = s.w, H = s.h;
 

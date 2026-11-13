@@ -108,7 +108,7 @@ export function defaults(): Obj {
   const constants: Obj = {};
   for (const [n, [get]] of Object.entries(C.TUNABLE)) constants[n] = get();
   const cities: Obj = {};
-  for (const c of [...C.CITIES, ...C.REAL_CITIES]) { const { id, ...rest } = c; cities[id] = rest; }
+  for (const c of [...C.CITIES, ...C.REAL_CITIES]) { const { id, recipe: _r, intro: _i, ...rest } = c; cities[id] = rest; } // 0.35: maps (recipe) and intro text are not moddable
   return {
     name: "My mod", description: "Delete everything you do not change; keep the structure.", version: C.VERSION,
     constants, units: C.UNITS, unitInfo: C.UNIT_INFO, supports: C.SUPPORTS, abilities: C.ABILITIES,

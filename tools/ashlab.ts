@@ -6,7 +6,7 @@ import * as C from "../src/config";
 
 for (const kv of (process.env.CL_SET ?? "").split(",").filter(Boolean)) { const [k, v] = kv.split("="); C.TUNABLE[k][1](+v); }
 const SAFE = 3;
-const city = C.CITIES[0];
+const city = { seed: 7, budget: 30_000_000, waveMul: 0.6, sites: 2, speedMul: 0.9 }; // Ashford, the 0.34 campaign city 1 (generated from seed 7)
 const s = new Sim(city.seed, { civilians: 15000, difficulty: "medium", budget: city.budget, waveMul: city.waveMul, sites: city.sites, speedMul: city.speedMul } as any);
 const a = s as any;
 const plan = {

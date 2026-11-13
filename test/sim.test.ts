@@ -791,7 +791,7 @@ test("mods: change constants, unit stats, cities, unlocks, medals; report proble
       name: "Test mod",
       constants: { HORDE_SIZE_POW: 1.3, NOT_A_THING: 1, EVAC_PAY: "lots" },
       units: { tank: { damage: 999, cannon: { damage: 5000 }, bogus: 1 }, nosuchunit: { damage: 1 } },
-      cities: { ashford: { budget: 123 } },
+      cities: { fairhaven: { budget: 123 } },
       unlocks: { nuke: 0 }, medals: { Gold: 40 }, weird: {},
     }) });
     expect(r.name).toBe("Test mod");
@@ -1538,7 +1538,8 @@ test("0.33: save slot profiles keep only a well-formed battle summary", () => {
 
 test("0.34: a pad in the middle of a wide block still gets a route; a backed-up pad sends people to an idle one", () => {
   // the Ashford pad at 203,241 had no street within 2 cells of its centre: nobody walked to it
-  const s = new Sim(C.CITIES[0].seed, { civilians: 2000, budget: 400_000_000 } as any);
+  const s = new Sim(7, // Ashford (0.34 campaign city 1, generated from seed 7)
+    { civilians: 2000, budget: 400_000_000 } as any);
   s.ignoreFootprint = true;
   expect(s.addZone([[185, 230], [185, 256], [248, 256], [248, 230]])).toBeNull();
   expect(s.placeSupport("evac", 203, 241)).toBeNull();
@@ -1564,3 +1565,26 @@ test("0.34: a pad in the middle of a wide block still gets a route; a backed-up 
   }
   expect(tested).toBeGreaterThan(0);
 });
+
+// ---- 0.35.1: Evac Points on a rooftop or on open ground
+test("an Evac Point can go on a street or park inside the zone, never water, and lifts fly from a ground pad", () => {
+  const s = new Sim(42, { budget: 80_000_000 });
+  s.setZone(zoneAroundCenter(s, 34));
+  let road: [number, number] | null = null, water: [number, number] | null = null, outRoad: [number, number] | null = null;
+  for (let i = 0; i < s.inZone.length; i++) {
+    const x = i % s.w, y = (i / s.w) | 0, t = s.map.tile[i];
+    if (!road && s.inZone[i] === 1 && t === 0 && !s.canPlaceSupport("evac", x, y)) road = [x, y];
+    if (!water && t === 3) water = [x, y];
+    if (!outRoad && s.inZone[i] === 0 && t === 0) outRoad = [x, y];
+  }
+  expect(road).not.toBeNull();
+  if (water) expect(s.canPlaceSupport("evac", water[0], water[1])).toMatch(/rooftop, a street or a park/);
+  expect(s.canPlaceSupport("evac", outRoad![0], outRoad![1])).toMatch(/inside a safe zone/);
+  expect(s.canPlaceSupport("budget", road![0], road![1])).toMatch(/go on buildings/); // other supports stay on roofs
+  expect(s.placeSupport("evac", road![0], road![1])).toBeNull();
+  s.dev.bites = false;
+  s.startBattle();
+  while (s.time < 40) s.step();
+  expect(s.liftsFlown).toBeGreaterThan(0);
+  expect(s.evacuated).toBeGreaterThan(0);
+}, 120000);
