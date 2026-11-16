@@ -24,13 +24,15 @@ function defaults(): SaveData {
 
 const MEDAL_NAMES = ["Platinum", "Gold", "Silver", "Bronze"];
 const ID = /^[a-z0-9:_@-]{1,64}$/i;
+/** 0.36: bests and plans are also keyed by real-city area: "<city>/<area>" plus an optional "@difficulty". */
+const BEST_KEY = /^(?:[a-z0-9:_@-]{1,64}|[a-z0-9-]{1,40}\/[a-z0-9-]{1,60}(?:@[a-z]{1,12})?)$/i;
 const VER = /^\d{1,4}\.\d{1,4}\.\d{1,6}$/;
 /** Saves are hand-editable and importable, so keep only well-formed values (nothing from it reaches the page as markup). */
 export function clean(s: SaveData): SaveData {
   const best = (o: unknown) => {
     const out: Record<string, Best> = {};
     if (o && typeof o === "object") for (const [k, v] of Object.entries(o as Record<string, any>)) {
-      if (!ID.test(k) || !v || typeof v !== "object" || !Number.isFinite(v.pct)) continue;
+      if (!BEST_KEY.test(k) || !v || typeof v !== "object" || !Number.isFinite(v.pct)) continue;
       out[k] = { pct: Math.max(0, Math.min(100, v.pct)), medal: MEDAL_NAMES.includes(v.medal) ? v.medal : null, ...(Number.isFinite(v.mayhem) && v.mayhem >= 0 ? { mayhem: Math.floor(v.mayhem) } : {}) };
     }
     return out;
@@ -38,7 +40,7 @@ export function clean(s: SaveData): SaveData {
   const ach: Record<string, string> = {};
   if (s.achievements && typeof s.achievements === "object") for (const [k, v] of Object.entries(s.achievements)) if (ID.test(k) && typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v)) ach[k] = v;
   const plans: Record<string, Plan> = {};
-  if (s.plans && typeof s.plans === "object") for (const [k, v] of Object.entries(s.plans)) if (ID.test(k) && v && typeof v === "object" && Array.isArray((v as Plan).poly)) plans[k] = v as Plan;
+  if (s.plans && typeof s.plans === "object") for (const [k, v] of Object.entries(s.plans)) if (BEST_KEY.test(k) && v && typeof v === "object" && Array.isArray((v as Plan).poly)) plans[k] = v as Plan;
   const settings = { ...s.settings };
   const qb = settings.quickbar as unknown;
   if (!Array.isArray(qb) || qb.length > 9 || !qb.every(x => x === null || (typeof x === "string" && ID.test(x)))) delete settings.quickbar;

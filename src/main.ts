@@ -19,7 +19,9 @@ import { initUpdater } from "./updaterui";
 import { Sound } from "./audio";
 import { initSprites, SPRITE_CANVAS, SPRITE_URL, SpriteKey, supportSpriteKey } from "./sprites";
 import { AlertQueue } from "./ticker";
-import { partPoints, mergeBest, bestKey, anyMedal, difficultyFor } from "./scoring";
+import { partPoints, mergeBest, bestKey, anyMedal, difficultyFor, bestOfAreas } from "./scoring";
+import { loadRealArea, realAreaMap } from "./realcity/load";
+import { areaCardInfo, bindCityMap, cityMapModel, drawCityMap, fitView, type CityMapUi } from "./citymapui";
 import { soundDue, zoomGain } from "./audiotiming";
 import { cleanQuickbar, setSlot, swapSlots, clearSlot, type Slots } from "./quickbar";
 import { airHalfPx, drawAirframe, smoothHeading } from "./aircraft";
@@ -65,7 +67,8 @@ const activeMutators = new Set<C.MutatorId>();
 let seed = Math.floor(Math.random() * 1e9);
 const simOpts = () => ({
   civilians: save.settings.crowd ?? C.CIVILIANS,
-  realCityId: city?.real ? city.id : undefined,
+  realCityId: city?.real && !city.realArea && !city.areas?.length ? city.id : undefined, // pre-0.36 single map
+  realArea: customMap ? undefined : city?.realArea, // 0.36: a baked battle area
   recipe: customMap || dailyDate ? undefined : city?.recipe,
   customMap: customMap?.map,
   mutators: [...activeMutators],
@@ -146,7 +149,7 @@ function buildBase() {
       } else if (t === BUILDING) {
         const lv = height[i];
         if (heights) { // cool-to-warm by height
-          const k = lv / 14;
+          const k = Math.min(1, lv / 14);
           [r, gg, b] = [40 + 215 * k, 60 + 120 * (1 - Math.abs(k - 0.5) * 2), 160 * (1 - k) + 40];
         } else {
           // Subtle 3D rooftop bevel: brighter on N/W edge of each building footprint, darker on S/E edge
@@ -228,6 +231,7 @@ function newSim(keepPlan: boolean, newSeed = false) {
   openPicker(null); clearTicker();
   const plan = keepPlan ? exportPlan() : null;
   if (newSeed) seed = Math.floor(Math.random() * 1e9);
+  if (city?.realArea && !realAreaMap(city.realArea)) { const c = city; loadRealArea(c.realArea!).then(() => { if (city === c) newSim(keepPlan, false); }); return; } // review #2
   sim = new Sim(seed, simOpts());
   if (plan) importPlan(plan);
   log("info", "restart", { ...cityTag(), keptPlan: keepPlan });
@@ -264,16 +268,17 @@ function back() {
 }
 
 function cityUnlocked(i: number) { return P.campaignOpen(save.best, i); } // 0.35: old campaign medals carry over
-function cityBestHtml(cityId: string, lockedMsg: string | null, unplayed: string) {
+function cityBestHtml(cityId: string, lockedMsg: string | null, unplayed: string, areaKeys?: string[]) {
   if (lockedMsg) return `<span class="best" style="color:#8a919c">${lockedMsg}</span>`;
   const cur = difficultyFor(false, save.settings.difficulty);
+  const bestAt = (d: C.Difficulty) => areaKeys ? bestOfAreas(save.best, areaKeys, d) : save.best[bestKey(cityId, d)]; // 0.36: a real city = its best area
   const marks = C.DIFFICULTY_IDS.map(d => {
-    const b = save.best[bestKey(cityId, d)];
+    const b = bestAt(d);
     const m = b?.medal && C.MEDALS.find(x => x[0] === b.medal);
     const ch = d[0].toUpperCase();
     return `<b class="dmark" data-diff="${d}" title="${C.DIFFICULTY[d].name}: ${b?.medal ?? "No medal"}" style="color:${m ? m[2] : "#555c66"};margin-right:4px">${ch}</b>`;
   }).join("");
-  const best = save.best[bestKey(cityId, cur)];
+  const best = bestAt(cur);
   const medal = best && C.MEDALS.find(m => m[0] === best.medal);
   const txt = best ? `${best.medal ?? "No medal"} · ${best.pct.toFixed(0)} pts${best.mayhem ? ` · Mayhem ${best.mayhem.toLocaleString()}` : ""}` : unplayed;
   return `<span class="best" style="color:${medal ? medal[2] : "#8a919c"}">${marks} · ${txt}</span>`;
@@ -326,8 +331,8 @@ function renderCities() {
     b.className = "city";
     const stars = "●".repeat(1 + Math.floor((i * 4) / (C.REAL_CITIES.length - 1)));
     b.innerHTML = `<b>${c.name}</b><span class="stars" title="danger">${stars}</span><span class="blurb">${c.blurb}</span>` +
-      cityBestHtml(c.id, null, "OpenStreetMap · Ready");
-    b.addEventListener("click", () => { dailyDate = null; customMap = null; playCity(c); });
+      cityBestHtml(c.id, null, c.areas?.length ? `${c.areas.length} battle areas · OpenStreetMap` : "OpenStreetMap · Ready", c.areas?.map(a => a.key));
+    b.addEventListener("click", () => { dailyDate = null; customMap = null; openRealCity(c); });
     rlist.appendChild(b);
   });
 }
@@ -351,6 +356,7 @@ function applyFullscreen() {
 }
 
 function startAttract() {
+  loadSeq++; // a pending area load must not pull the player back into a battle
   tut = null; showTut(); // 0.35: no tutorial banner over the menus
   openPicker(null); clearTicker();
   mode = "attract"; city = null; customMap = null; dailyDate = null; showHeatmap = false;
@@ -409,7 +415,22 @@ function stepTut() {
   if (i !== tut.i) { tut.i = i; log("info", "tutorial-step", { step: tut.steps[i].id }); showTut(); }
 }
 
+/** 0.36: a real area's map is decoded on first use (async); everything else starts at once. */
+// Each start bumps loadSeq; an area decode that finishes after another start (Daily, Load battle, Title) is dropped.
+let loadSeq = 0;
 function playCity(c: C.CityDef | null, seedOverride?: number) {
+  const tok = ++loadSeq;
+  if (c?.realArea && !realAreaMap(c.realArea)) {
+    const btn = document.getElementById("cm-play") as HTMLButtonElement | null; if (btn) btn.disabled = true;
+    const done = () => { if (btn) btn.disabled = false; };
+    const want = { daily: dailyDate, custom: customMap };
+    loadRealArea(c.realArea).then(() => { done(); if (tok === loadSeq) { dailyDate = want.daily; customMap = want.custom; playCityNow(c, seedOverride); } },
+      err => { done(); if (tok === loadSeq) alert((err as Error).message); });
+    return;
+  }
+  playCityNow(c, seedOverride);
+}
+function playCityNow(c: C.CityDef | null, seedOverride?: number) {
   clearTicker();
   mode = "game"; city = c; showHeatmap = false;
   document.body.classList.remove("attract");
@@ -438,6 +459,43 @@ function playCity(c: C.CityDef | null, seedOverride?: number) {
   say((saved ? `Your last plan is loaded. Change it or press Start.`
     : "Plan your defense: draw a safe zone, add gates, place units, then Start.") + mutStr, 6000);
 }
+
+/** 0.36: a real city opens its City Map; a city with no baked areas plays its old single map. */
+let cmUi: CityMapUi | null = null;
+function openRealCity(c: C.CityDef) {
+  const model = c.areas?.length ? cityMapModel(c.id) : null;
+  if (!model) { playCity(c); return; }
+  const cv = $<HTMLCanvasElement>("cm-canvas");
+  go("citymap");
+  cv.width = Math.round(cv.clientWidth * devicePixelRatio); cv.height = Math.round(cv.clientHeight * devicePixelRatio);
+  const d = difficultyFor(false, save.settings.difficulty);
+  cmUi = {
+    model, view: fitView(model, cv.width, cv.height), selected: -1, onPick: i => pickArea(model.areas[i].key),
+    medalColor: key => { const b = save.best[bestKey(key, d)]; const m = b?.medal && C.MEDALS.find(x => x[0] === b.medal); return m ? m[2] : null; },
+  };
+  $("cm-title").textContent = model.name.toUpperCase();
+  $("cm-card").hidden = true;
+  const list = $("cm-list"); list.innerHTML = "";
+  model.areas.forEach(a => {
+    const b = document.createElement("button"); b.className = "city"; b.dataset.key = a.key;
+    const info = areaCardInfo(a.key, save.best, d);
+    b.innerHTML = `<b>${a.name}</b><span class="best" style="color:${cmUi!.medalColor(a.key) ?? "#8a919c"}">${info.best}</span>`;
+    b.addEventListener("click", () => pickArea(a.key));
+    list.appendChild(b);
+  });
+  drawCityMap(cv, cmUi);
+}
+function pickArea(key: string) {
+  if (!cmUi) return;
+  cmUi.selected = cmUi.model.areas.findIndex(a => a.key === key);
+  const info = areaCardInfo(key, save.best, difficultyFor(false, save.settings.difficulty));
+  $("cm-area").textContent = info.title; $("cm-best").textContent = info.best; $("cm-card").hidden = false;
+  $("cm-card").dataset.key = key;
+  document.querySelectorAll<HTMLElement>("#cm-list .city").forEach(e => e.classList.toggle("sel", e.dataset.key === key));
+  drawCityMap($<HTMLCanvasElement>("cm-canvas"), cmUi);
+}
+bindCityMap(document.getElementById("cm-canvas") as HTMLCanvasElement, () => cmUi, () => { if (cmUi) drawCityMap($<HTMLCanvasElement>("cm-canvas"), cmUi); });
+$("cm-play").addEventListener("click", () => { const key = $("cm-card").dataset.key; const c = key && C.areaCity(key); if (c) { dailyDate = null; customMap = null; playCity(c); } });
 
 function playDaily() {
   const dc = C.dailyChallengeFor();
@@ -1063,6 +1121,22 @@ function draw(now: number) {
       ctx.fill();
     }
   }
+  // 0.37: zoomed-in weapon indicators on armed civilians (muzzle flashes & tracers are drawn in drawShots)
+  if (s >= 4.5) {
+    ctx.lineWidth = Math.max(1, s * 0.08);
+    for (let k = 0; k < sim.civN; k++) {
+      if ((sim.state[k] !== CIV && sim.state[k] !== SAFE_CIV) || !sim.civWep[k] || !sim.civAmmo[k]) continue;
+      const ax = sim.ax[k], ay = sim.ay[k];
+      if (ax < x0 || ay < y0 || ax > x1 || ay > y1) continue;
+      const cx2 = cam.x + ax * s, cy2 = cam.y + ay * s;
+      const wep = C.CIV_WEAPONS[sim.civWep[k] as C.CivWeaponId];
+      const firing = sim.time - sim.civShotT[k] < 0.25;
+      ctx.strokeStyle = firing ? "#fff4c2" : sim.civMilitia[k] ? "#aed581" : wep.color;
+      ctx.beginPath();
+      ctx.arc(cx2, cy2, dot * 0.7 + 1, 0, 6.2832);
+      ctx.stroke();
+    }
+  }
 
   // Explosions: a ring that grows and fades over a second.
   for (const b of sim.blasts) {
@@ -1272,7 +1346,7 @@ function draw(now: number) {
     const ok = !sim.canPlace(kind, hx, hy);
     drawPlacementGrid(hx, hy, spec.foot, ok, s);
     const lvl = sim.map.height[sim.idx(hx, hy)];
-    const range = (spec.range + spec.roofBonus * lvl) * (sim.hasActiveSupport("radio", hx, hy) ? C.RADIO_RANGE_MUL : 1);
+    const range = (spec.range + spec.roofBonus * Math.min(lvl, C.ROOF_BONUS_MAX_LV)) * (sim.hasActiveSupport("radio", hx, hy) ? C.RADIO_RANGE_MUL : 1);
     const cost = sim.unitCost(kind, hx, hy);
     ctx.strokeStyle = ok ? spec.color : "#ff4444"; ctx.setLineDash([4, 4]);
     ctx.beginPath(); ctx.arc(cam.x + (hx + 0.5) * s, cam.y + (hy + 0.5) * s, range * s, 0, 7); ctx.stroke();
@@ -1714,7 +1788,7 @@ function updateInfoPanel() {
     if (u.supplied) buffs.push("Drone Resupply (Supply Depot)");
     const cellIdx = sim.idx(u.x | 0, u.y | 0);
     const flr = sim.map.height[cellIdx];
-    if (spec.roofBonus && flr > 0) buffs.push(`+${Math.round(spec.roofBonus * flr * C.CELL_M)}m Elevation (${flr} floors)`);
+    if (spec.roofBonus && flr > 0) buffs.push(`+${Math.round(spec.roofBonus * Math.min(flr, C.ROOF_BONUS_MAX_LV) * C.CELL_M)}m Elevation (${flr} floors)`);
     const spUrl = SPRITE_URL[u.kind];
     setInfoPanel(
       `<div class="ip-top">${spUrl ? `<img class="ip-portrait" src="${spUrl}" alt="" />` : ""}<div class="ip-meta"><div class="ip-head"><span class="ip-title">${spec.name}</span><span class="ip-cost">${status}</span></div>` +
@@ -1766,7 +1840,7 @@ function updateInfoPanel() {
     return;
   }
 
-  // Inspect active Mass Transit Train, collapsed building rubble, damaged structures, Highways, or Mass Transit infrastructure under cursor
+  // Inspect active Mass Transit Train, armed civilian (when zoomed in), collapsed building rubble, damaged structures, Highways, or Mass Transit infrastructure under cursor
   const mt = sim.trains.find(t => Math.abs(t.x - hx) < 3.5 && Math.abs(t.y - hy) < 3.5);
   if (mt) {
     setInfoPanel(
@@ -1776,6 +1850,40 @@ function updateInfoPanel() {
       "#38bdf8"
     );
     return;
+  }
+
+  if (cam.scale >= 3.5) {
+    const ac = sim.armedCivAt(hx, hy, 2.0);
+    if (ac >= 0) {
+      const wep = C.CIV_WEAPONS[sim.civWep[ac] as C.CivWeaponId];
+      const militia = sim.civMilitia[ac] === 1;
+      const lead = sim.famLead[ac], fSize = lead >= 0 ? sim.famSize[ac] : 1;
+      let famAlive = 1;
+      if (lead >= 0) {
+        famAlive = 0;
+        for (let m = lead; m < lead + fSize; m++) if (sim.state[m] === CIV || sim.state[m] === SAFE_CIV) famAlive++;
+      }
+      const fearPct = Math.round(sim.fear[ac] * 100);
+      const effAcc = Math.round(wep.accuracy * (1 - C.CIV_FEAR_AIM_PENALTY * sim.fear[ac]) * 100);
+      const maxAmmo = wep.mag * wep.mags[1];
+      const ammoPct = maxAmmo > 0 ? Math.min(100, Math.round((sim.civAmmo[ac] / maxAmmo) * 100)) : 0;
+      const status = sim.state[ac] === SAFE_CIV ? "IN SAFE ZONE" : sim.civAmmo[ac] === 0 ? "OUT OF AMMO" : sim.time - sim.civShotT[ac] < 0.6 ? "FIRING" : "EVACUATING";
+      setInfoPanel(
+        `<div class="ip-head"><span class="ip-title">${militia ? "Militia Family Member" : "Armed Civilian"}</span><span class="ip-cost">${status}</span></div>` +
+        `<div class="ip-role" style="color:${militia ? "#aed581" : wep.color}">${wep.name} · ${fSize > 1 ? `Household (${famAlive}/${fSize} alive)` : "Solo Civilian"} · Civ Kills: ${sim.civKills.toLocaleString()}</div>` +
+        `<div class="ip-desc">Armed citizen defending their household on the way to the Safe Zone. Pauses briefly to fire on close infected; panic reduces accuracy and gunfire noise draws nearby infected.</div>` +
+        `<div class="ip-grid">` +
+          `<div><span>Weapon</span><b>${wep.name}</b></div>` +
+          `<div><span>Range / Dmg</span><b>${Math.round(wep.range * C.CELL_M)} m · ${wep.damage} dmg</b></div>` +
+          `<div><span>Fire Rate</span><b>${wep.rate}/s</b></div>` +
+          `<div><span>Aim / Fear</span><b>${effAcc}% acc · ${fearPct}% fear</b></div>` +
+          `<div style="grid-column:1/3"><span>Ammunition</span><b>${sim.civAmmo[ac]} rds remaining</b></div>` +
+        `</div>` +
+        `<div class="ip-bar"><i style="width:${ammoPct}%;background:${militia ? "#aed581" : wep.color}"></i></div>`,
+        militia ? "#aed581" : wep.color
+      );
+      return;
+    }
   }
 
   const cx = hx | 0, cy = hy | 0;
@@ -1846,10 +1954,10 @@ function updateInfoPanel() {
 
 // ---------- Sound events: read what changed in the sim since last frame ----------
 const lastShot = new WeakMap<object, number>();
-let soundSim: Sim | null = null, lastBlastT = -1, ambT = 0, lastCollapsed = 0, lastFires = 0;
+let soundSim: Sim | null = null, lastBlastT = -1, lastCivShotT = -1, ambT = 0, lastCollapsed = 0, lastFires = 0;
 const heardTransports = new WeakSet<object>(), ackedTransports = new WeakSet<object>();
 function soundEvents() {
-  if (sim !== soundSim) { soundSim = sim; lastBlastT = -1; lastCollapsed = sim.buildingsCollapsed; lastFires = sim.fires.length; }
+  if (sim !== soundSim) { soundSim = sim; lastBlastT = -1; lastCivShotT = -1; lastCollapsed = sim.buildingsCollapsed; lastFires = sim.fires.length; }
   const W = canvas.width, s = cam.scale;
   const where = (x: number, y: number): [number, number] => {
     const px = cam.x + x * s, py = cam.y + y * s;
@@ -1862,6 +1970,11 @@ function soundEvents() {
     lastShot.set(u, u.shotT);
     const [pan, near] = where(u.x + 0.5, u.y + 0.5);
     snd.shot(u.kind, pan, near, zoomGain("shot", 0, s));
+  }
+  if (!quiet && s >= 3.5 && sim.lastCivShotT > lastCivShotT + 0.08) {
+    lastCivShotT = sim.lastCivShotT;
+    const [pan, near] = where(sim.lastCivShotX, sim.lastCivShotY);
+    if (near > 0.15) snd.shot("militia", pan, near * 0.7, zoomGain("shot", 0, s) * 0.75);
   }
   for (const b of sim.blasts) if (b.t > lastBlastT) {
     const [pan, near] = where(b.x, b.y);
@@ -2453,6 +2566,9 @@ async function loadBattle(n: number) {
   let snap: Snap.Snapshot;
   try { snap = await Snap.unpack(gz); } catch (err) { say("That battle file is damaged.", 4000); log("error", "battle-load-failed", { slot: n, error: String(err) }); return; }
   const p = snap.page as Record<string, any>;
+  loadSeq++; // 0.36: drop any area load still pending
+  const areaKey = typeof p.cityId === "string" && p.cityId.includes("/") ? p.cityId : null;
+  if (areaKey) { try { await loadRealArea(areaKey); } catch { /* the snapshot carries its own map; Retry needs the area */ } } // review #2: Retry/Restart build a new Sim from it
   openPicker(null); clearTicker();
   mode = "game"; showHeatmap = false;
   city = typeof p.cityId === "string" ? C.cityById(p.cityId) ?? null : null; // 0.35: daily cities too

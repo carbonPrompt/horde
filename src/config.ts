@@ -1,5 +1,8 @@
 // All balance numbers in one place. Distances are in cells; one cell is CELL_M meters.
-import type { CityRecipe } from "./cities/recipe";
+import type { CityRecipe, Stand } from "./cities/recipe";
+import { CATALOGUE } from "./realcity/catalogue";
+import { REAL_DATA } from "./realcity/data";
+import { REAL_CITY_MAPS } from "./realcities";
 import { CAMPAIGN_RECIPES } from "./cities/campaign";
 export let CELL_M = 2;
 export let MAP_W = 480; // cells (960 m)
@@ -134,6 +137,18 @@ export let NOISE_HALF = 6; // s: half-life of noise that draws infected (gunfire
 export let NOISE_MIN = 0.12; // infected follow noise above this level
 export let NOISE_STRAGGLER = 7; // one infected in this many ignores noise and keeps after the people
 export let FAMILY_PCT = 70; // share of people walking with family or friends (Moussaid 2010: about 70%)
+// 0.37: Population groups, accurate start grouping, and armed civilians.
+export let HOUSEHOLD_SHARE = 0.78; // share of people spawning in building-front households (the rest in venue/station/park crowds)
+export let VENUE_CROWD_MIN = 8, VENUE_CROWD_MAX = 28; // crowd cluster size at parks, transit stations and plazas
+export let GROUP_WAIT_MUL = 0.78; // ahead group members slow to this fraction when a family member falls behind
+export let GROUP_COHESION_FEAR = 0.92; // fear threshold up to which households keep steering toward each other
+export let CIV_ARMED_BASE = 0.08; // US baseline armed share on the street before city factor and household clustering
+export let CIV_HOUSEHOLD_GUN_BONUS = 0.38; // chance another adult in an armed household also carries
+export let MILITIA_FAMILY_PCT = 4; // % of armed households (size >= 2) that are a heavily armed prepper/militia family
+export let CIV_SHOOT_SLOW = 0.25; // speed multiplier while an armed civilian pauses to aim and fire
+export let CIV_SHOOT_PAUSE_S = 0.35; // seconds an armed civilian slows after firing a shot
+export let CIV_FEAR_AIM_PENALTY = 0.45; // how much terror (fear = 1) degrades an armed civilian's accuracy
+export let CIV_FF_CHANCE = 0.08; // chance a panicked missed shot (fear > 0.6) hits a nearby civilian in the line of fire
 export let INF_SPEED = 1.9;
 export let SHAMBLER_MUL = 0.45; // 0.30: shamblers move at this x INF_SPEED (about 1.7 m/s)
 export let RUNNER_MUL = 1.35; // 0.30: runners at this x INF_SPEED (about 5 m/s, a sprint)
@@ -182,6 +197,7 @@ export let VEH_NUDGE = 2; // 0.33: people a tank/APC may nudge into at its leadi
 export let VEH_SLOW = 0.55; // 0.33: people next to a moving tank/APC slow to this share of their pace and edge around it
 // 0.33: line of sight. Buildings block direct fire unless the shooter sees over them (heights in meters).
 export let LEVEL_M = 3.5; // one building level
+export let ROOF_BONUS_MAX_LV = 14; // 0.36: real cities keep real heights; the roof range bonus stops at today's tallest
 export let EYE_M = 2; // a ground unit's gun height (tanks, ships and rooftop units set their own)
 export let TARGET_M = 1; // aim point on an infected
 // 0.33: infected don't know the map. When a bridge goes, they keep heading where they were going; the ones that reach
@@ -374,10 +390,69 @@ export let SWIMMER_BASE_FRAC = 0.08;
 export let SWIMMER_WAVE_GROWTH = 0.015;
 export let SWIMMER_MAX_FRAC = 0.25;
 
-export const VERSION = "0.35.1";
+// 0.37: Civilian weapons and country/city firearm ownership profiles.
+export type CivWeaponId = 0 | 1 | 2 | 3 | 4; // 0 none, 1 pistol, 2 shotgun, 3 semi-auto rifle, 4 automatic rifle
+export interface CivWeaponSpec {
+  id: CivWeaponId;
+  key: "none" | "pistol" | "shotgun" | "rifle" | "auto";
+  name: string;
+  range: number; // cells (1 cell = 2 m)
+  damage: number;
+  rate: number; // shots/s
+  mag: number; // rounds per magazine / load
+  mags: [number, number]; // [min, max] magazines carried
+  accuracy: number; // calm hit probability (0..1)
+  color: string;
+}
+export const CIV_WEAPONS: Record<CivWeaponId, CivWeaponSpec> = {
+  0: { id: 0, key: "none",    name: "Unarmed",          range: 0,    damage: 0,   rate: 0,    mag: 0,  mags: [0, 0], accuracy: 0,    color: "#f5f1e6" },
+  1: { id: 1, key: "pistol",  name: "9mm Pistol",       range: 8,    damage: 45,  rate: 1.8,  mag: 15, mags: [1, 3], accuracy: 0.68, color: "#ffd54f" },
+  2: { id: 2, key: "shotgun", name: "12-Gauge Shotgun", range: 6.5,  damage: 115, rate: 0.85, mag: 8,  mags: [1, 3], accuracy: 0.80, color: "#ffb74d" },
+  3: { id: 3, key: "rifle",   name: "Semi-Auto Rifle",  range: 13,   damage: 80,  rate: 2.2,  mag: 30, mags: [1, 3], accuracy: 0.76, color: "#ff8a65" },
+  4: { id: 4, key: "auto",    name: "Automatic Rifle",  range: 12,   damage: 75,  rate: 5.5,  mag: 30, mags: [2, 3], accuracy: 0.58, color: "#ff5252" },
+};
+
+export interface CityGunProfile {
+  country: "US" | "FR";
+  avgHousehold: number; // census mean household size (~2.5 US, ~1.9 Paris/France)
+  armedRate: number; // base adult armed share in this country
+  cityFactor: number; // local urban/rural multiplier (Castle Rock > 1, NYC/Paris well below 1)
+  mix: [number, number, number, number]; // relative weights for [pistol, shotgun, rifle, auto]
+  militiaFactor: number; // multiplier on MILITIA_FAMILY_PCT
+}
+
+const US_MIX: [number, number, number, number] = [0.58, 0.20, 0.20, 0.02];
+const US_TOWN_MIX: [number, number, number, number] = [0.46, 0.24, 0.27, 0.03];
+const FR_MIX: [number, number, number, number] = [0.28, 0.52, 0.19, 0.01];
+
+export const CITY_GUN_PROFILES: Record<string, CityGunProfile> = {
+  "nyc":         { country: "US", avgHousehold: 2.4, armedRate: 0.08, cityFactor: 0.22, mix: [0.74, 0.16, 0.09, 0.01], militiaFactor: 0.2 },
+  "sf":          { country: "US", avgHousehold: 2.3, armedRate: 0.08, cityFactor: 0.42, mix: [0.68, 0.18, 0.13, 0.01], militiaFactor: 0.4 },
+  "la":          { country: "US", avgHousehold: 2.7, armedRate: 0.08, cityFactor: 0.50, mix: US_MIX, militiaFactor: 0.5 },
+  "chicago":     { country: "US", avgHousehold: 2.4, armedRate: 0.08, cityFactor: 0.52, mix: [0.68, 0.18, 0.13, 0.01], militiaFactor: 0.5 },
+  "boston":      { country: "US", avgHousehold: 2.3, armedRate: 0.08, cityFactor: 0.38, mix: [0.68, 0.20, 0.11, 0.01], militiaFactor: 0.35 },
+  "dc":          { country: "US", avgHousehold: 2.2, armedRate: 0.08, cityFactor: 0.35, mix: [0.72, 0.17, 0.10, 0.01], militiaFactor: 0.3 },
+  "seattle":     { country: "US", avgHousehold: 2.2, armedRate: 0.08, cityFactor: 0.78, mix: US_MIX, militiaFactor: 0.8 },
+  "portland":    { country: "US", avgHousehold: 2.3, armedRate: 0.08, cityFactor: 0.85, mix: US_MIX, militiaFactor: 0.9 },
+  "miami":       { country: "US", avgHousehold: 2.6, armedRate: 0.08, cityFactor: 0.95, mix: US_MIX, militiaFactor: 1.0 },
+  "denver":      { country: "US", avgHousehold: 2.3, armedRate: 0.08, cityFactor: 0.95, mix: US_MIX, militiaFactor: 1.0 },
+  "pittsburgh":  { country: "US", avgHousehold: 2.2, armedRate: 0.08, cityFactor: 1.05, mix: US_TOWN_MIX, militiaFactor: 1.1 },
+  "omaha":       { country: "US", avgHousehold: 2.5, armedRate: 0.08, cityFactor: 1.20, mix: US_TOWN_MIX, militiaFactor: 1.25 },
+  "castle-rock": { country: "US", avgHousehold: 2.8, armedRate: 0.08, cityFactor: 1.55, mix: US_TOWN_MIX, militiaFactor: 1.6 },
+  "paris":       { country: "FR", avgHousehold: 1.9, armedRate: 0.022, cityFactor: 0.55, mix: FR_MIX, militiaFactor: 0.1 },
+};
+
+export function cityGunProfile(cityId?: string): CityGunProfile {
+  const baseId = cityId ? cityId.split("/")[0] : "";
+  const p = CITY_GUN_PROFILES[baseId];
+  if (p) return { ...p, armedRate: p.country === "US" ? CIV_ARMED_BASE : p.armedRate };
+  return { country: "US", avgHousehold: 2.5, armedRate: CIV_ARMED_BASE, cityFactor: 1.0, mix: US_MIX, militiaFactor: 1.0 };
+}
+
+export const VERSION = "0.37.0";
 
 /** The campaign: fixed cities that unlock in order (a medal on one opens the next). */
-export interface CityDef { id: string; name: string; seed: number; budget: number; waveMul: number; sites: number; speedMul: number; blurb: string; real?: boolean; trial?: string; recipe?: CityRecipe; clearXp?: number; intro?: string[] } // 0.35: recipe = designed campaign map; clearXp = one-time bonus for the first medal; intro = lines shown the first time // trial: hardware this city lends you before you unlock it
+export interface CityDef { id: string; name: string; seed: number; budget: number; waveMul: number; sites: number; speedMul: number; blurb: string; real?: boolean; trial?: string; recipe?: CityRecipe; clearXp?: number; intro?: string[]; areas?: AreaDef[]; realArea?: string } // 0.36: areas = a real city's battle areas; realArea = this def is one area ("<city>/<area>") // 0.35: recipe = designed campaign map; clearXp = one-time bonus for the first medal; intro = lines shown the first time // trial: hardware this city lends you before you unlock it
 // 0.35: the designed campaign (src/cities/campaign.ts). Each city teaches one thing; `trial` lends the unit it
 // teaches; `clearXp` is paid once, for the first medal (see campaignPace for how it is sized).
 const R = CAMPAIGN_RECIPES;
@@ -401,20 +476,32 @@ export const DAILY_GENERATED: CityDef[] = [
   { id: "daily-big", name: "Cinder Hill", seed: 666, budget: 18_000_000, waveMul: 1.8, sites: 7, speedMul: 1.15, blurb: "A generated city." },
 ];
 
-/** Real-world OpenStreetMap cities, baked into the bundle for instant offline play. */
-export const REAL_CITIES: CityDef[] = [
-  { id: "castle-rock", trial: "reaper", name: "Castle Rock, CO", seed: 80104, budget: 20_000_000, waveMul: 0.85, sites: 3, speedMul: 0.95, real: true, blurb: "Downtown Castle Rock along Plum Creek and Wilcox Street. Open avenues, low roofs." },
-  { id: "denver", trial: "a10", name: "Denver, CO", seed: 80202, budget: 60_000_000, waveMul: 1.3, sites: 4, speedMul: 1.0, real: true, blurb: "Confluence Park and Lower Downtown where Cherry Creek meets the South Platte River." },
-  { id: "portland", trial: "cluster", name: "Portland, OR", seed: 97204, budget: 50_000_000, waveMul: 1.3, sites: 4, speedMul: 1.0, real: true, blurb: "Tight downtown blocks split down the middle by the wide Willamette River." },
-  { id: "boston", trial: "tomahawk", name: "Boston, MA", seed: 2108, budget: 90_000_000, waveMul: 1.7, sites: 4, speedMul: 1.05, real: true, blurb: "Beacon Hill, Boston Common and the Charles River Esplanade." },
-  { id: "chicago", trial: "command", name: "Chicago, IL", seed: 60601, budget: 150_000_000, waveMul: 2.2, sites: 5, speedMul: 1.05, real: true, blurb: "The Loop and the Chicago River Y-branch. Deep canyon streets and high-rise sniper perches." },
-  { id: "pittsburgh", trial: "moab", name: "Pittsburgh, PA", seed: 15222, budget: 70_000_000, waveMul: 1.6, sites: 5, speedMul: 1.08, real: true, blurb: "The Golden Triangle at Point State Park. Three rivers and a web of steel bridges." },
-  { id: "paris", trial: "police", name: "Paris, France", seed: 75004, budget: 180_000_000, waveMul: 2.6, sites: 6, speedMul: 1.1, real: true, blurb: "Ile de la Cite and the Seine. Fortify the island or hold the Left and Right Banks." },
-  { id: "manhattan", trial: "nuke", name: "Manhattan, NY", seed: 10038, budget: 250_000_000, waveMul: 3.0, sites: 6, speedMul: 1.12, real: true, blurb: "Lower Manhattan by the Brooklyn Bridge. Skyscrapers, dense crowds and relentless waves." },
-];
+const keySeed = (k: string) => { let h = 2166136261; for (let i = 0; i < k.length; i++) h = Math.imul(h ^ k.charCodeAt(i), 16777619); return (h >>> 0) || 1; };
+/** 0.36: one battle area of a real city. `key` = "<city>/<area>", used for bests, plans and the Sim. */
+export interface AreaDef { id: string; key: string; name: string; seed: number; budget: number; waveMul: number; sites: number; speedMul: number; trial?: string; stands: Stand[] }
+/** Real cities (src/realcity/catalogue.ts), each with the battle areas baked into src/realcity/data. A city with no
+ *  baked data yet falls back to its old single map (src/realcities.ts) when it has one. */
+export const REAL_CITIES: CityDef[] = CATALOGUE.map(c => {
+  const baked = REAL_DATA[c.id];
+  const areas: AreaDef[] = baked ? c.areas.filter(a => baked.areas[a.id]).map(a => ({
+    id: a.id, key: `${c.id}/${a.id}`, name: a.name, seed: keySeed(`${c.id}/${a.id}`),
+    budget: a.budget ?? c.budget, waveMul: a.waveMul ?? c.waveMul, sites: a.sites ?? c.sites, speedMul: c.speedMul, trial: c.trial, stands: baked.areas[a.id].stands,
+  })) : [];
+  return { id: c.id, trial: c.trial, name: c.name, seed: c.seed, budget: c.budget, waveMul: c.waveMul, sites: c.sites, speedMul: c.speedMul, real: true, blurb: c.blurb, areas };
+}).filter(c => c.areas.length || REAL_CITY_MAPS[c.id]); // 0.36 ships what is baked; the rest show once baked
+export function areaByKey(key: string): { city: CityDef; area: AreaDef } | undefined {
+  const [cid] = key.split("/"), city = REAL_CITIES.find(c => c.id === cid), area = city?.areas?.find(a => a.key === key);
+  return city && area ? { city, area } : undefined;
+}
+/** A playable CityDef for one area (what playCity, bests and plans use). */
+export function areaCity(key: string): CityDef | undefined {
+  const f = areaByKey(key); if (!f) return undefined;
+  const { city, area } = f;
+  return { id: area.key, name: `${area.name}, ${city.name}`, seed: area.seed, budget: area.budget, waveMul: area.waveMul, sites: area.sites, speedMul: area.speedMul, trial: area.trial, real: true, realArea: area.key, blurb: city.blurb };
+}
 export const ALL_CITIES: CityDef[] = [...CITIES, ...REAL_CITIES];
 /** 0.35: any city a battle can be on, by id (campaign, real, generated daily). */
-export function cityById(id: string): CityDef | undefined { return [...ALL_CITIES, ...DAILY_GENERATED].find(c => c.id === id); }
+export function cityById(id: string): CityDef | undefined { return id.includes("/") ? areaCity(id) : [...ALL_CITIES, ...DAILY_GENERATED].find(c => c.id === id); }
 
 /** Battle mutators: optional rule modifiers for custom runs and Daily Challenges. */
 export type MutatorId = "titan_strain" | "swimmer_surge" | "blitz_hordes" | "supply_shortage" | "fragile_walls" | "blood_money";
@@ -469,7 +556,8 @@ export function dailyChallengeFor(dateStr = todayDateStr()): { date: string; cit
     return (h >>> 0) / 4294967296;
   };
   const pool = [...REAL_CITIES, ...DAILY_GENERATED]; // 0.35: campaign cities are designed maps, not in the daily
-  const city = pool[Math.floor(next() * pool.length)];
+  const pick = pool[Math.floor(next() * pool.length)];
+  const city = pick.areas?.length ? areaCity(pick.areas[Math.floor(next() * pick.areas.length)].key)! : pick; // 0.36: a real city's area
   const m1 = Math.floor(next() * MUTATOR_IDS.length);
   let m2 = Math.floor(next() * (MUTATOR_IDS.length - 1));
   if (m2 >= m1) m2++;
@@ -805,10 +893,10 @@ export const TUNABLE: Record<string, [() => number, (v: number) => void]> = {
   SETTLE_DENS: [() => SETTLE_DENS, v => { SETTLE_DENS = v; }],
   WAIT_RHO: [() => WAIT_RHO, v => { WAIT_RHO = v; }],
   EVAC_GATHER_D: [() => EVAC_GATHER_D, v => { EVAC_GATHER_D = v; }],
-  EVAC_SEED_D: [() => EVAC_SEED_D, v => { EVAC_SEED_D = v; }],
   EVAC_LOAD_CELLS: [() => EVAC_LOAD_CELLS, v => { EVAC_LOAD_CELLS = v; }],
   EVAC_LOAD_R: [() => EVAC_LOAD_R, v => { EVAC_LOAD_R = v; }],
   EVAC_LOAD_MAX: [() => EVAC_LOAD_MAX, v => { EVAC_LOAD_MAX = v; }],
+  EVAC_SEED_D: [() => EVAC_SEED_D, v => { EVAC_SEED_D = v; }],
   AGENT_RESERVE: [() => AGENT_RESERVE, v => { AGENT_RESERVE = v; }],
   CIV_SPEED: [() => CIV_SPEED, v => { CIV_SPEED = v; }],
   CIV_SPRINT: [() => CIV_SPRINT, v => { CIV_SPRINT = v; }],
@@ -851,6 +939,18 @@ export const TUNABLE: Record<string, [() => number, (v: number) => void]> = {
   NOISE_MIN: [() => NOISE_MIN, v => { NOISE_MIN = v; }],
   NOISE_STRAGGLER: [() => NOISE_STRAGGLER, v => { NOISE_STRAGGLER = v; }],
   FAMILY_PCT: [() => FAMILY_PCT, v => { FAMILY_PCT = v; }],
+  HOUSEHOLD_SHARE: [() => HOUSEHOLD_SHARE, v => { HOUSEHOLD_SHARE = v; }],
+  VENUE_CROWD_MIN: [() => VENUE_CROWD_MIN, v => { VENUE_CROWD_MIN = v; }],
+  VENUE_CROWD_MAX: [() => VENUE_CROWD_MAX, v => { VENUE_CROWD_MAX = v; }],
+  GROUP_WAIT_MUL: [() => GROUP_WAIT_MUL, v => { GROUP_WAIT_MUL = v; }],
+  GROUP_COHESION_FEAR: [() => GROUP_COHESION_FEAR, v => { GROUP_COHESION_FEAR = v; }],
+  CIV_ARMED_BASE: [() => CIV_ARMED_BASE, v => { CIV_ARMED_BASE = v; }],
+  CIV_HOUSEHOLD_GUN_BONUS: [() => CIV_HOUSEHOLD_GUN_BONUS, v => { CIV_HOUSEHOLD_GUN_BONUS = v; }],
+  MILITIA_FAMILY_PCT: [() => MILITIA_FAMILY_PCT, v => { MILITIA_FAMILY_PCT = v; }],
+  CIV_SHOOT_SLOW: [() => CIV_SHOOT_SLOW, v => { CIV_SHOOT_SLOW = v; }],
+  CIV_SHOOT_PAUSE_S: [() => CIV_SHOOT_PAUSE_S, v => { CIV_SHOOT_PAUSE_S = v; }],
+  CIV_FEAR_AIM_PENALTY: [() => CIV_FEAR_AIM_PENALTY, v => { CIV_FEAR_AIM_PENALTY = v; }],
+  CIV_FF_CHANCE: [() => CIV_FF_CHANCE, v => { CIV_FF_CHANCE = v; }],
   INF_SPEED: [() => INF_SPEED, v => { INF_SPEED = v; }],
   SHAMBLER_MUL: [() => SHAMBLER_MUL, v => { SHAMBLER_MUL = v; }],
   RUNNER_MUL: [() => RUNNER_MUL, v => { RUNNER_MUL = v; }],
@@ -892,6 +992,7 @@ export const TUNABLE: Record<string, [() => number, (v: number) => void]> = {
   VEH_NUDGE: [() => VEH_NUDGE, v => { VEH_NUDGE = v; }],
   VEH_SLOW: [() => VEH_SLOW, v => { VEH_SLOW = v; }],
   LEVEL_M: [() => LEVEL_M, v => { LEVEL_M = v; }],
+  ROOF_BONUS_MAX_LV: [() => ROOF_BONUS_MAX_LV, v => { ROOF_BONUS_MAX_LV = v; }],
   EYE_M: [() => EYE_M, v => { EYE_M = v; }],
   TARGET_M: [() => TARGET_M, v => { TARGET_M = v; }],
   INF_KNOW_D: [() => INF_KNOW_D, v => { INF_KNOW_D = v; }],

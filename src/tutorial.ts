@@ -5,9 +5,9 @@ import type { Rect, Stand } from "./cities/recipe";
 export interface TutState { zoneCells: number; zoneOverlap: number; gates: number; garrisons: number; snipers: number; evacs: number; phase: "plan" | "battle" | "over"; lifts: number }
 export type TutStep = { id: string; text: string; highlight?: { kind: "rect" | "tool"; rect?: Rect; tool?: string }; done: (s: TutState) => boolean };
 
-/** The steps, pointing at the tutorial's stand point (its park). */
+/** The steps, pointing at the tutorial's stand point (its park plus the ring of building blocks around it). */
 export function tutorialSteps(target: Stand): TutStep[] {
-  const park: Rect = { x: Math.round(target.x - target.r * 0.9), y: Math.round(target.y - target.r * 0.7), w: Math.round(target.r * 1.8), h: Math.round(target.r * 1.4) };
+  const park: Rect = { x: Math.round(target.x - target.r * 1.7), y: Math.round(target.y - target.r * 1.3), w: Math.round(target.r * 3.4), h: Math.round(target.r * 2.6) };
   return [
     { id: "pan", text: "Drag to look around. Scroll to zoom. Press Next when you're ready.", done: () => false },
     { id: "zone", text: "Draw your safe zone over the highlighted park: pick Safe Zone, then click its corners. Take in the rooftops around the park too. Support buildings only go on roofs inside your zone, and Evac Points need a roof, street or park inside it.", highlight: { kind: "rect", rect: park }, done: s => s.zoneOverlap >= 0.6 },

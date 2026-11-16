@@ -4,18 +4,9 @@ import { buildCity } from "../src/cities/build";
 import { checkCity } from "../src/cities/check";
 import { CAMPAIGN_RECIPES } from "../src/cities/campaign";
 import { BRIDGE, BUILDING, INFRA_HIGHWAY, INFRA_RAIL, INFRA_STATION, PARK, ROAD, WATER } from "../src/map";
-import { deflateSync } from "node:zlib";
+import { png } from "./capture/png";
 import { mkdirSync, writeFileSync } from "node:fs";
 
-function png(w: number, h: number, rgb: Uint8Array): Buffer {
-  const crcT = new Int32Array(256).map((_, n) => { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; return c; });
-  const crc = (b: Buffer) => { let c = -1; for (const x of b) c = crcT[(c ^ x) & 255] ^ (c >>> 8); return (c ^ -1) >>> 0; };
-  const chunk = (t: string, d: Buffer) => { const l = Buffer.alloc(4); l.writeUInt32BE(d.length); const td = Buffer.concat([Buffer.from(t), d]); const c = Buffer.alloc(4); c.writeUInt32BE(crc(td)); return Buffer.concat([l, td, c]); };
-  const raw = Buffer.alloc((w * 3 + 1) * h);
-  for (let y = 0; y < h; y++) { raw[y * (w * 3 + 1)] = 0; rgb.subarray(y * w * 3, (y + 1) * w * 3).forEach((v, i) => { raw[y * (w * 3 + 1) + 1 + i] = v; }); }
-  const ih = Buffer.alloc(13); ih.writeUInt32BE(w, 0); ih.writeUInt32BE(h, 4); ih[8] = 8; ih[9] = 2;
-  return Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk("IHDR", ih), chunk("IDAT", deflateSync(raw)), chunk("IEND", Buffer.alloc(0))]);
-}
 
 const ids = process.argv[2] === "all" || !process.argv[2] ? Object.keys(CAMPAIGN_RECIPES) : [process.argv[2]];
 const out = process.argv[3] ?? "citypng";

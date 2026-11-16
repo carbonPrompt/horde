@@ -15,10 +15,30 @@ test("tutorial steps advance in order", () => {
   expect(currentStep(steps, done, 1)).toBe(steps.length - 1);
 });
 
-test("the zone step highlights the tutorial park", () => {
+test("the zone step highlights the tutorial park and the surrounding building blocks", () => {
+  const { buildCity } = require("../src/cities/build");
+  const { BUILDING, PARK } = require("../src/map");
   const z = tutorialSteps(target).find(s => s.id === "zone")!;
   const r = z.highlight!.rect!;
   expect(target.x >= r.x && target.x < r.x + r.w && target.y >= r.y && target.y < r.y + r.h).toBe(true);
+  // 0.37: grown out one full building block on every side so rooftops around the park are inside the yellow box
+  const m = buildCity(C.CITIES[0].recipe!);
+  let parkCells = 0, bTop = 0, bBot = 0, bLeft = 0, bRight = 0;
+  for (let y = r.y; y < r.y + r.h; y++) for (let x = r.x; x < r.x + r.w; x++) {
+    const t = m.tile[y * m.w + x];
+    if (t === PARK) parkCells++;
+    else if (t === BUILDING) {
+      if (y < target.y - 18) bTop++;
+      if (y > target.y + 18) bBot++;
+      if (x < target.x - 23) bLeft++;
+      if (x > target.x + 23) bRight++;
+    }
+  }
+  expect(parkCells).toBeGreaterThan(1000);
+  expect(bTop).toBeGreaterThan(150);
+  expect(bBot).toBeGreaterThan(150);
+  expect(bLeft).toBeGreaterThan(150);
+  expect(bRight).toBeGreaterThan(150);
 });
 
 test("no em dash in the tutorial or the city intros", () => {

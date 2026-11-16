@@ -277,3 +277,28 @@ test("save clean keeps updater settings and the game version only when well form
   expect(bad.settings.autoUpdate).toBeUndefined();
   expect(bad.settings.updatePin).toBeUndefined();
 });
+
+// ---- 0.36 City Map screen
+import { areaAt, cityMapModel, areaCardInfo } from "../src/citymapui";
+
+test("areaAt hits the centre of a turned quad and misses outside it", () => {
+  const q: [number, number][] = [[10, 0], [30, 20], [20, 30], [0, 10]]; // a diamond-ish turned box
+  expect(areaAt([q], 15, 15)).toBe(0);
+  expect(areaAt([q], 2, 2)).toBe(-1);
+  expect(areaAt([[[100, 100], [110, 100], [110, 110], [100, 110]], q], 105, 105)).toBe(0);
+});
+
+test("the Castle Rock City Map lists 6 areas with boxes on the overview", () => {
+  const m = cityMapModel("castle-rock")!;
+  expect(m.areas.length).toBe(6);
+  for (const a of m.areas) { expect(a.quad.length).toBe(4); for (const [x, y] of a.quad) { expect(x).toBeGreaterThan(0); expect(y).toBeGreaterThan(0); expect(x).toBeLessThan(m.overview.w); expect(y).toBeLessThan(m.overview.h); } }
+  expect(cityMapModel("nowhere")).toBeNull();
+});
+
+test("picking an area gives its card", () => {
+  const m = cityMapModel("castle-rock")!, k = m.areas[2].key;
+  const card = areaCardInfo(k, { [k]: { pct: 44, medal: "Silver" } }, "medium");
+  expect(card.title).toBe(m.areas[2].name);
+  expect(card.best).toContain("Silver");
+  expect(areaCardInfo(k, {}, "medium").best).toBe("Not played");
+});

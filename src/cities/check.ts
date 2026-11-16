@@ -2,7 +2,7 @@
 // ways in on two sides, and stand points with open ground, rooftops and a street wide enough for big units.
 import { BRIDGE, BUILDING, CityMap, PARK, ROAD, WATER, walkable } from "../map";
 import { Sim } from "../sim";
-import type { CityRecipe } from "./recipe";
+import type { CityRecipe, Stand } from "./recipe";
 
 export interface StandReport { name: string; ok: boolean; open: number; roofs: number; wideStreet: boolean; why: string[] }
 export interface CityReport { waterFrac: number; diagonalRuns: number; landComponents: number; entryEdges: number; entries: number; stands: StandReport[] }
@@ -28,7 +28,7 @@ export function diagonalRuns(m: CityMap): number {
 }
 
 /** Land components (4-way through walkable cells); returns the label grid (-1 = none) and the main label. */
-function components(m: CityMap) {
+export function components(m: CityMap) {
   const { w, h, tile } = m, lab = new Int32Array(w * h).fill(-1), sizes: number[] = [], q = new Int32Array(w * h);
   for (let s = 0; s < w * h; s++) {
     if (lab[s] !== -1 || !walkable(tile[s])) continue;
@@ -47,7 +47,7 @@ function components(m: CityMap) {
 }
 
 /** Cells that start a WIDE x WIDE_LEN all-road band, horizontally or vertically (prefix sums). */
-function wideCells(m: CityMap): Uint8Array {
+export function wideCells(m: CityMap): Uint8Array {
   const { w, h, tile } = m, P = new Int32Array((w + 1) * (h + 1));
   for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) P[(y + 1) * (w + 1) + x + 1] = (roadish(tile[y * w + x]) ? 1 : 0) + P[y * (w + 1) + x + 1] + P[(y + 1) * (w + 1) + x] - P[y * (w + 1) + x];
   const sum = (x: number, y: number, rw: number, rh: number) => x + rw > w || y + rh > h ? -1 : P[(y + rh) * (w + 1) + x + rw] - P[y * (w + 1) + x + rw] - P[(y + rh) * (w + 1) + x] + P[y * (w + 1) + x];
@@ -64,25 +64,29 @@ export function checkCity(m: CityMap, r: CityRecipe): CityReport {
   const comp = components(m), wide = wideCells(m);
   const s = new Sim(r.seed, { customMap: m } as any);
   s.startBattle();
-  const stands = r.stands.map(st => {
-    let open = 0, roofs = 0, wideStreet = false, ci = -1, cd = 1e9;
-    const R = st.r, R2 = (st.r + 12) ** 2;
-    for (let y = Math.max(0, st.y - R - 12); y <= Math.min(h - 1, st.y + R + 12); y++) for (let x = Math.max(0, st.x - R - 12); x <= Math.min(w - 1, st.x + R + 12); x++) {
-      const i = y * w + x, d2 = (x - st.x) ** 2 + (y - st.y) ** 2;
-      if (d2 <= R * R) {
-        if (tile[i] === PARK || tile[i] === ROAD) open++;
-        if (wide[i]) wideStreet = true;
-        if (walkable(tile[i]) && d2 < cd) { cd = d2; ci = i; }
-      }
-      if (d2 <= R2 && tile[i] === BUILDING && height[i] >= 3) roofs++;
-    }
-    const why: string[] = [];
-    if (open < STAND_OPEN) why.push("open");
-    if (roofs < STAND_ROOFS) why.push("roofs");
-    if (!wideStreet) why.push("wide street");
-    if (ci < 0 || comp.lab[ci] !== comp.main) why.push("not on the main land");
-    return { name: st.name, ok: why.length === 0, open, roofs, wideStreet, why };
-  });
+  const stands = r.stands.map(st => measureStand(m, comp, wide, st));
   const land = s.entries.filter(e => e.kind !== "river");
   return { waterFrac: water / (w * h), diagonalRuns: diagonalRuns(m), landComponents: comp.count, entryEdges: new Set(land.map(e => e.edge)).size, entries: land.length, stands };
 }
+
+/** One stand point against the rules: open ground, rooftops, a wide street, on the main land. */
+export function measureStand(m: CityMap, comp: ReturnType<typeof components>, wide: Uint8Array, st: Stand): StandReport {
+  const { w, h, tile, height } = m;
+  let open = 0, roofs = 0, wideStreet = false, ci = -1, cd = 1e9;
+  const R = st.r, R2 = (st.r + 12) ** 2;
+  for (let y = Math.max(0, st.y - R - 12); y <= Math.min(h - 1, st.y + R + 12); y++) for (let x = Math.max(0, st.x - R - 12); x <= Math.min(w - 1, st.x + R + 12); x++) {
+    const i = y * w + x, d2 = (x - st.x) ** 2 + (y - st.y) ** 2;
+    if (d2 <= R * R) {
+      if (tile[i] === PARK || tile[i] === ROAD) open++;
+      if (wide[i]) wideStreet = true;
+      if (walkable(tile[i]) && d2 < cd) { cd = d2; ci = i; }
+    }
+    if (d2 <= R2 && tile[i] === BUILDING && height[i] >= 3) roofs++;
+  }
+  const why: string[] = [];
+  if (open < STAND_OPEN) why.push("open");
+  if (roofs < STAND_ROOFS) why.push("roofs");
+  if (!wideStreet) why.push("wide street");
+  if (ci < 0 || comp.lab[ci] !== comp.main) why.push("not on the main land");
+  return { name: st.name, ok: why.length === 0, open, roofs, wideStreet, why };
+  }

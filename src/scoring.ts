@@ -59,3 +59,13 @@ export function difficultyFor(daily: boolean, chosen: C.Difficulty | undefined):
   return !daily && chosen && C.DIFFICULTY_IDS.includes(chosen) ? chosen : "medium";
 }
 
+
+/** 0.36: a real city's best result over its areas at one difficulty (highest medal, then score); null if none. */
+export function bestOfAreas(best: Record<string, { pct: number; medal?: string | null; mayhem?: number }>, keys: string[], d: C.Difficulty) {
+  let top: { pct: number; medal?: string | null; mayhem?: number } | null = null;
+  for (const k of keys) {
+    const b = best[bestKey(k, d)]; if (!b) continue;
+    if (!top || medalRank(b.medal) > medalRank(top.medal) || (medalRank(b.medal) === medalRank(top.medal) && b.pct > top.pct)) top = b;
+  }
+  return top;
+}

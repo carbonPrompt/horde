@@ -317,8 +317,10 @@ test("support buildings: budget discount, radio range, command rate, supply ammo
 }, 60000);
 
 test("real OpenStreetMap cities decode cleanly at 560x420 with buildings, highways, mass transit rail/stations, parks, water and bridges", () => {
-  const { REAL_CITIES, REAL_MAP_W, REAL_MAP_H } = require("../src/config");
+  const { REAL_CITIES: ALL_REAL, REAL_MAP_W, REAL_MAP_H } = require("../src/config");
   const { INFRA_HIGHWAY, INFRA_RAIL, INFRA_STATION } = require("../src/map");
+  const { REAL_CITY_MAPS } = require("../src/realcities");
+  const REAL_CITIES = ALL_REAL.filter((c: any) => REAL_CITY_MAPS[c.id]); // 0.36: the pre-0.36 maps, kept as fallback until every city is baked
   expect(REAL_CITIES.length).toBe(8);
   for (const rc of REAL_CITIES) {
     const s = new Sim(rc.seed, { realCityId: rc.id, budget: rc.budget, civilians: 2000 });
@@ -507,6 +509,7 @@ test("terrain & building destruction, air/helo/APC deployment vehicles, supply d
 
 test("APC autocannon: a second gun with a small blast, on its own timer", () => {
   const s = new Sim(42, { budget: 60_000_000 });
+  s.civWep.fill(0); s.civAmmo.fill(0); // 0.37: armed civilians at the gate thin the outbreak before it reaches the APC; this tests the gun
   s.setZone(zoneAroundCenter(s));
   const gate = s.inZone.findIndex(z => z === 3);
   const gx = gate % s.w, gy = (gate / s.w) | 0;
@@ -1588,3 +1591,111 @@ test("an Evac Point can go on a street or park inside the zone, never water, and
   expect(s.liftsFlown).toBeGreaterThan(0);
   expect(s.evacuated).toBeGreaterThan(0);
 }, 120000);
+
+// ---- 0.37: Population groups, accurate start grouping, and armed civilians
+test("0.37: households spawn clustered together near buildings and venue crowds gather at parks/stations", () => {
+  const s = new Sim(42, { civilians: 6000 });
+  let groups = 0, split = 0, nearBldOrPark = 0;
+  for (let k = 0; k < s.civN;) {
+    const sz = s.famSize[k] || 1;
+    if (sz > 1) {
+      groups++;
+      for (let j = 1; j < sz; j++) {
+        const d = Math.hypot(s.ax[k + j] - s.ax[k], s.ay[k + j] - s.ay[k]);
+        if (d > 2.0) split++;
+      }
+    }
+    const cx = s.ax[k] | 0, cy = s.ay[k] | 0, ci = s.idx(cx, cy);
+    const isPark = s.map.tile[ci] === 2;
+    let adjBld = false;
+    for (let dy = -2; dy <= 2 && !adjBld; dy++) for (let dx = -2; dx <= 2 && !adjBld; dx++) {
+      const nx = cx + dx, ny = cy + dy;
+      if (nx >= 0 && ny >= 0 && nx < s.w && ny < s.h && s.map.tile[s.idx(nx, ny)] === BUILDING) adjBld = true;
+    }
+    if (isPark || adjBld) nearBldOrPark += sz;
+    k += sz;
+  }
+  expect(groups).toBeGreaterThan(1000);
+  expect(split).toBe(0); // no household is ever split across the map at start
+  expect(nearBldOrPark / s.civN).toBeGreaterThan(0.85);
+});
+
+test("0.37: armed population scales by country and city factor, clusters in households, and rolls militia families", () => {
+  const countArmed = (opts: Record<string, unknown>) => {
+    const s = new Sim(42, { civilians: 10000, ...opts } as any);
+    let armed = 0, pistol = 0, shotgun = 0, rifle = 0, auto = 0, militia = 0, multiGunHouseholds = 0;
+    for (let k = 0; k < s.civN; k++) {
+      const w = s.civWep[k];
+      if (w > 0) {
+        armed++;
+        if (w === 1) pistol++; else if (w === 2) shotgun++; else if (w === 3) rifle++; else if (w === 4) auto++;
+        expect(s.civAmmo[k]).toBeGreaterThan(0);
+      }
+      if (s.civMilitia[k]) militia++;
+    }
+    for (let k = 0; k < s.civN;) {
+      const sz = s.famSize[k] || 1;
+      if (sz >= 2) {
+        let g = 0;
+        for (let j = 0; j < sz; j++) if (s.civWep[k + j] > 0) g++;
+        if (g >= 2) multiGunHouseholds++;
+      }
+      k += sz;
+    }
+    return { armed, pistol, shotgun, rifle, auto, militia, multiGunHouseholds };
+  };
+  const cr = countArmed({ realCityId: "castle-rock" });
+  const us = countArmed({});
+  const nyc = countArmed({ realCityId: "nyc" });
+  const paris = countArmed({ realCityId: "paris" });
+  expect(cr.armed).toBeGreaterThan(us.armed * 1.25);
+  expect(us.armed).toBeGreaterThan(nyc.armed * 2.5);
+  expect(nyc.armed).toBeGreaterThan(paris.armed);
+  expect(paris.armed).toBeGreaterThan(20);
+  expect(paris.shotgun + paris.rifle).toBeGreaterThan(paris.pistol); // France: hunting shotguns/rifles outweigh handguns
+  expect(us.pistol).toBeGreaterThan(us.rifle); // US urban: handguns are the most common carry/home firearm
+  expect(cr.militia).toBeGreaterThan(0);
+  expect(us.multiGunHouseholds).toBeGreaterThan(20);
+});
+
+test("0.37: armed civilians shoot close infected, consume ammo, make gunfire noise, and lose their weapon if bitten", () => {
+  const s = new Sim(42, { civilians: 500 });
+  s.setZone(zoneAroundCenter(s));
+  s.dev.waves = false;
+  s.startBattle();
+  s.outbreak = true;
+  s.time = C.WARNING_S + 1;
+  // Find an open street cell outside the zone and place a rifle-armed civilian there
+  let rx = -1, ry = -1;
+  for (let y = 20; y < s.h - 20 && rx < 0; y++) for (let x = 20; x < s.w - 20 && rx < 0; x++) {
+    const i = s.idx(x, y);
+    if (!s.inZone[i] && s.map.tile[i] === 0 && s.map.tile[s.idx(x + 3, y)] === 0 && s.sightClear(x + 0.5, y + 0.5, C.EYE_M, x + 3.5, y + 0.5)) { rx = x; ry = y; }
+  }
+  expect(rx).toBeGreaterThan(0);
+  const civ = 0;
+  s.state[civ] = 0; s.ax[civ] = rx + 0.5; s.ay[civ] = ry + 0.5;
+  s.civWep[civ] = 3; // Semi-Auto Rifle (80 dmg)
+  s.civAmmo[civ] = 10;
+  s.civCd[civ] = 0;
+  s.fear[civ] = 0;
+  // Move other civilians away so our test is isolated
+  for (let k = 1; k < s.civN; k++) { s.state[k] = 3; s.ax[k] = s.w / 2; s.ay[k] = s.h / 4; }
+  // Spawn a weak infected 3 cells away in clear sight
+  s.devClearInfected();
+  s.spawnInfected(rx + 2.5, ry + 0.5, 60, false);
+  const k0 = s.kills;
+  for (let i = 0; i < 40; i++) s.step();
+  expect(s.civAmmo[civ]).toBeLessThan(10);
+  expect(s.civKills).toBeGreaterThanOrEqual(1);
+  expect(s.kills).toBeGreaterThan(k0);
+  expect(s.armedCivAt(s.ax[civ], s.ay[civ], 2.5)).toBe(civ);
+  // Bitten armed civilian loses their weapon immediately upon turning
+  s.civAmmo[civ] = 8;
+  s.civCd[civ] = 99; // hold fire so the infected bites them
+  s.downT[civ] = 60; // knocked down: a healthy civilian outruns a lone infected, and bites are a few % per check
+  s.spawnInfected(s.ax[civ] + 0.1, s.ay[civ] + 0.1, 500, false);
+  for (let i = 0; i < 600 && s.state[civ] === 0; i++) s.step();
+  expect(s.state[civ]).toBe(INF);
+  expect(s.civWep[civ]).toBe(0);
+  expect(s.civAmmo[civ]).toBe(0);
+});

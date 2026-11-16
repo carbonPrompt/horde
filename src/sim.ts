@@ -6,6 +6,9 @@ import { heat, rollGap, rollSize, routesFor } from "./storyteller";
 import { BRIDGE, BUILDING, CityMap, ROAD, INFRA_HIGHWAY, INFRA_RAIL, INFRA_STATION, PARK, WATER, extractRailLines, generateCity, rng, walkable } from "./map";
 import { decodeCityMap } from "./osm";
 import { REAL_CITY_MAPS } from "./realcities";
+import { realAreaMap } from "./realcity/load";
+/** 0.36: levels that count for the roof range bonus (real towers stay tall but don't outrange the map). */
+export const roofLv = (lv: number) => Math.min(lv, C.ROOF_BONUS_MAX_LV);
 
 export const CIV = 0, INF = 1, DEAD = 2, SAFE_CIV = 3; // SAFE_CIV: civilian inside the safe zone
 
@@ -127,6 +130,7 @@ export interface SimOpts {
   speedMul?: number;
   civilians?: number;
   realCityId?: string;
+  realArea?: string; // 0.36: "<city>/<area>"; loadRealArea(key) must have run first
   customMap?: CityMap;
   /** 0.35: a designed campaign city (built by buildCity). */
   recipe?: CityRecipe;
@@ -198,6 +202,10 @@ export class Sim {
   act: Uint8Array; actT: Float32Array; // panic acts: 1 run the wrong way, 2 freeze; seconds left
   downT: Float32Array; crushT: Float32Array; // knocked down (s left); time spent in a crush
   pspd: Float32Array; famLead: Int32Array; famSize: Uint8Array;
+  // 0.37: armed population and household group origins
+  cityId = "generated";
+  civWep: Uint8Array; civAmmo: Uint8Array; civMilitia: Uint8Array; civCd: Float32Array; civShotT: Float32Array;
+  civKills = 0; civFriendlyFire = 0; lastCivShotT = -1; lastCivShotX = 0; lastCivShotY = 0;
   // 0.30: the crowd waiting at the Evac Points takes room: the waiting area grows with how many are waiting
   // (at about WAIT_RHO people/m2) instead of everyone piling into the cells around the pad
   gatherD = C.EVAC_GATHER_D; private waitN = 0; private waitCount = 0; private padRing = new Uint16Array(0);
@@ -403,7 +411,11 @@ export class Sim {
     if (this.mutators.has("supply_shortage")) { this.budget = Math.round(this.budget * 1.3); }
     if (this.mutators.has("blood_money")) { this.budget = Math.round(this.budget * 0.75); this.incomeMul *= 2; this.killBountyMul *= 2; }
     const rle = opts.realCityId && REAL_CITY_MAPS[opts.realCityId];
-    this.map = opts.customMap ? opts.customMap : rle ? decodeCityMap(rle, seed) : opts.recipe ? buildCity(opts.recipe) : generateCity(seed);
+    const area = opts.realArea ? realAreaMap(opts.realArea) : undefined;
+    if (opts.realArea && !area) throw new Error(`real area ${opts.realArea} not loaded (await loadRealArea first)`);
+    this.cityId = opts.realArea ? opts.realArea.split("/")[0] : opts.realCityId ?? opts.recipe?.id ?? "generated";
+    this.map = area ? { ...area, seed, tile: area.tile.slice(), height: area.height.slice() }
+      : opts.customMap ? opts.customMap : rle ? decodeCityMap(rle, seed) : opts.recipe ? buildCity(opts.recipe) : generateCity(seed);
     this.w = this.map.w; this.h = this.map.h;
     const cells = this.w * this.h;
     this.killGrid = new Uint16Array(cells);
@@ -444,6 +456,8 @@ export class Sim {
     this.act = new Uint8Array(this.n); this.actT = new Float32Array(this.n);
     this.downT = new Float32Array(this.n); this.crushT = new Float32Array(this.n);
     this.pspd = new Float32Array(this.n); this.famLead = new Int32Array(this.n).fill(-1); this.famSize = new Uint8Array(this.n);
+    this.civWep = new Uint8Array(this.n); this.civAmmo = new Uint8Array(this.n); this.civMilitia = new Uint8Array(this.n);
+    this.civCd = new Float32Array(this.n); this.civShotT = new Float32Array(this.n).fill(-10);
     this.cellHead = new Int32Array(cells).fill(-1); this.cellNext = new Int32Array(this.n).fill(-1); this.cellGen = new Uint32Array(cells);
     const nb = this.bw * this.bh;
     this.fearB = new Float32Array(nb); this.noiseB = new Float32Array(nb);
@@ -601,33 +615,123 @@ export class Sim {
     return best;
   }
 
+  /** Nearest live armed civilian within r cells of (x, y), or -1. */
+  armedCivAt(x: number, y: number, r = 2.2): number {
+    const b0x = Math.max(0, ((x - r) / BUCKET) | 0), b1x = Math.min(this.bw - 1, ((x + r) / BUCKET) | 0);
+    const b0y = Math.max(0, ((y - r) / BUCKET) | 0), b1y = Math.min(this.bh - 1, ((y + r) / BUCKET) | 0);
+    let best = -1, bd = r * r;
+    for (let by = b0y; by <= b1y; by++) for (let bx = b0x; bx <= b1x; bx++)
+      for (let k = this.headC[by * this.bw + bx]; k !== -1; k = this.next[k]) {
+        if ((this.state[k] !== CIV && this.state[k] !== SAFE_CIV) || !this.civWep[k]) continue;
+        const dx = this.ax[k] - x, dy = this.ay[k] - y, d2 = dx * dx + dy * dy;
+        if (d2 < bd) { bd = d2; best = k; }
+      }
+    return best;
+  }
+
   private placeCivilians(seed: number) {
     const r = rng(seed ^ 0x5bd1e995);
-    const spots: number[] = [];
-    for (let i = 0; i < this.w * this.h; i++) if (walkable(this.map.tile[i])) spots.push(i);
+    const w = this.w, h = this.h, tile = this.map.tile, ht = this.map.height;
+    const spots: number[] = [], homeSpots: number[] = [], venueSpots: number[] = [];
+    for (let i = 0; i < w * h; i++) {
+      const t = tile[i];
+      if (!walkable(t)) continue;
+      spots.push(i);
+      const x = i % w, y = (i / w) | 0;
+      if (t === PARK || ((t === ROAD || t === BRIDGE) && ht[i] === INFRA_STATION)) venueSpots.push(i);
+      let adjBld = false;
+      if ((x > 0 && tile[i - 1] === BUILDING) || (x < w - 1 && tile[i + 1] === BUILDING) || (y > 0 && tile[i - w] === BUILDING) || (y < h - 1 && tile[i + w] === BUILDING)) adjBld = true;
+      if (adjBld) homeSpots.push(i);
+    }
+    const homes = homeSpots.length ? homeSpots : spots;
+    const venues = venueSpots.length ? venueSpots : homes;
     for (let k = 0; k < this.civN; k++) {
       const c = spots[Math.floor(r() * spots.length)];
-      this.ax[k] = (c % this.w) + r(); this.ay[k] = ((c / this.w) | 0) + r();
+      this.ax[k] = (c % w) + r(); this.ay[k] = ((c / w) | 0) + r();
       this.state[k] = CIV;
       const a = r() * Math.PI * 2;
       this.hx[k] = Math.cos(a); this.hy[k] = Math.sin(a);
     }
-    // 0.30: walking pace (about normal around 1, Weidmann's spread) and families: most people walk in groups of 2 to 4
-    // (Moussaid 2010), placed together and sharing one pace. Own rng so the city's layout stays the same.
+    // 0.30/0.37: walking pace, accurate start grouping (households at building doorsteps + venue crowds at parks/stations),
+    // census household sizes, and country/city armed population with household gun clustering and rare militia families.
     const fr = rng((seed ^ 0x9e3779b9) >>> 0);
+    const gr = rng((seed ^ 0x7f4a7c15) >>> 0);
+    const prof = C.cityGunProfile(this.cityId);
+    const famScale = Math.max(0.6, Math.min(1.4, (prof.avgHousehold - 1.2) / 1.3));
+    const pickWep = (mix: [number, number, number, number]): C.CivWeaponId => {
+      const tot = mix[0] + mix[1] + mix[2] + mix[3], u = gr() * tot;
+      return u < mix[0] ? 1 : u < mix[0] + mix[1] ? 2 : u < mix[0] + mix[1] + mix[2] ? 3 : 4;
+    };
+    const arm = (m: number, wid: C.CivWeaponId, fullMags = false) => {
+      const spec = C.CIV_WEAPONS[wid];
+      const mags = fullMags ? spec.mags[1] : spec.mags[0] + Math.floor(gr() * (spec.mags[1] - spec.mags[0] + 1));
+      this.civWep[m] = wid;
+      this.civAmmo[m] = Math.min(255, spec.mag * mags);
+    };
+    let venueLeft = 0, venueAnchor = -1;
     for (let k = 0; k < this.civN;) {
       const pace = Math.max(0.7, Math.min(1.35, 1 + C.WALK_SPREAD * ((fr() + fr() + fr()) - 1.5) * 2));
       let size = 1;
-      if (fr() * 100 < C.FAMILY_PCT) { const q = fr(); size = q < 0.55 ? 2 : q < 0.85 ? 3 : 4; }
+      if (fr() * 100 < C.FAMILY_PCT) {
+        const q = fr() / famScale;
+        size = q < 0.48 ? 2 : q < 0.78 ? 3 : q < 0.94 ? 4 : 5;
+      }
       size = Math.min(size, this.civN - k);
+      // Choose origin cell: either continuing a venue crowd at a park/station or starting a household at a building front
+      let anchorCell: number;
+      if (venueLeft > 0 && venueAnchor >= 0) {
+        venueLeft -= size;
+        const vx = venueAnchor % w, vy = (venueAnchor / w) | 0;
+        let picked = venueAnchor;
+        for (let tr = 0; tr < 4; tr++) {
+          const nx = vx + Math.round((fr() - 0.5) * 6), ny = vy + Math.round((fr() - 0.5) * 6);
+          if (nx > 0 && ny > 0 && nx < w && ny < h && walkable(tile[ny * w + nx])) { picked = ny * w + nx; break; }
+        }
+        anchorCell = picked;
+      } else if (fr() > C.HOUSEHOLD_SHARE) {
+        venueAnchor = venues[Math.floor(fr() * venues.length)];
+        venueLeft = C.VENUE_CROWD_MIN + Math.floor(fr() * (C.VENUE_CROWD_MAX - C.VENUE_CROWD_MIN + 1)) - size;
+        anchorCell = venueAnchor;
+      } else {
+        anchorCell = homes[Math.floor(fr() * homes.length)];
+      }
+      const ax0 = (anchorCell % w) + 0.15 + fr() * 0.7, ay0 = ((anchorCell / w) | 0) + 0.15 + fr() * 0.7;
+      this.ax[k] = Math.fround(ax0); this.ay[k] = Math.fround(ay0);
       for (let j = 0; j < size; j++) {
         const m = k + j;
         this.pspd[m] = pace;
         if (size > 1) {
           this.famLead[m] = k; this.famSize[m] = size;
-          if (j > 0) { // stand next to the first of the group, if there's room
-            const x = this.ax[k] + (fr() - 0.5) * 1.2, y = this.ay[k] + (fr() - 0.5) * 1.2;
-            if (x > 0 && y > 0 && x < this.w && y < this.h && walkable(this.map.tile[this.idx(x | 0, y | 0)])) { this.ax[m] = Math.fround(x); this.ay[m] = Math.fround(y); }
+          if (j > 0) {
+            let placed = false;
+            for (let tr = 0; tr < 4; tr++) {
+              const x = ax0 + (fr() - 0.5) * 1.3, y = ay0 + (fr() - 0.5) * 1.3;
+              if (x > 0 && y > 0 && x < w && y < h && walkable(tile[this.idx(x | 0, y | 0)])) {
+                this.ax[m] = Math.fround(x); this.ay[m] = Math.fround(y); placed = true; break;
+              }
+            }
+            if (!placed) {
+              this.ax[m] = Math.fround((anchorCell % w) + 0.1 + fr() * 0.8);
+              this.ay[m] = Math.fround(((anchorCell / w) | 0) + 0.1 + fr() * 0.8);
+            }
+          }
+        }
+      }
+      // 0.37: Roll household firearm ownership (country rate x city factor, clustered in households + rare militia family)
+      const pInd = Math.min(0.65, prof.armedRate * prof.cityFactor);
+      const pHouse = 1 - Math.pow(1 - pInd, Math.max(1, size * 0.8));
+      if (pInd > 0 && gr() < pHouse) {
+        if (size >= 2 && gr() * 100 < C.MILITIA_FAMILY_PCT * prof.militiaFactor) {
+          const adults = Math.max(2, size - (size >= 4 ? 1 : 0));
+          for (let j = 0; j < size; j++) {
+            this.civMilitia[k + j] = 1;
+            if (j < adults) arm(k + j, pickWep([0.10, 0.28, 0.50, 0.12]), true);
+          }
+        } else {
+          arm(k, pickWep(prof.mix), false);
+          for (let j = 1; j < size; j++) {
+            const pExtra = C.CIV_HOUSEHOLD_GUN_BONUS * Math.min(1.3, prof.cityFactor) * (j === 1 ? 1 : 0.45);
+            if (gr() < pExtra) arm(k + j, pickWep(prof.mix), false);
           }
         }
       }
@@ -1041,7 +1145,7 @@ export class Sim {
     const cost = this.unitCost(kind, x, y);
     const lvl = this.map.height[this.idx(x, y)];
     const u: Unit = {
-      kind, x, y, range: spec.range + spec.roofBonus * lvl, ammo: spec.ammo,
+      kind, x, y, range: spec.range + spec.roofBonus * roofLv(lvl), ammo: spec.ammo,
       cooldown: 0, kills: 0, shotX: 0, shotY: 0, shotT: -1, paid: cost,
     };
     if (spec.mobile) { u.post = [x, y]; u.hp = spec.mobile.hp; u.ai = "hunt"; u.thinkT = 0; }
@@ -1716,7 +1820,7 @@ export class Sim {
       const lvl = spec.roofBonus ? this.map.height[this.idx(u.x | 0, u.y | 0)] : 0;
       u.rangeBoosted = this.hasActiveSupport("radio", u.x, u.y);
       const rm = (u.rangeBoosted ? C.RADIO_RANGE_MUL : 1) * (spec.on === "building" ? roofMul : 1);
-      u.range = (spec.range + spec.roofBonus * lvl) * rm;
+      u.range = (spec.range + spec.roofBonus * roofLv(lvl)) * rm;
       u.rateMul = this.hasActiveSupport("command", u.x, u.y) ? C.COMMAND_RATE_MUL : 1;
       u.supplied = this.hasActiveSupport("supply", u.x, u.y);
     }
@@ -1830,7 +1934,17 @@ export class Sim {
     }
     // keep the main routes: the busiest roads in, not every alley that touches the edge
     out.sort((a, b) => b.weight - a.weight);
-    this.entries = out.filter(e => e.kind !== "river").slice(0, 8).concat(out.filter(e => e.kind === "river").slice(0, 2));
+    const land = out.filter(e => e.kind !== "river"), keep = land.slice(0, 8);
+    // 0.36: every edge with a way in keeps its best one (a busy edge used to take all 8 slots: Castle Rock's Rock Park)
+    for (let edge = 0; edge < 4; edge++) {
+      if (keep.some(e => e.edge === edge)) continue;
+      const best = land.find(e => e.edge === edge); if (!best) continue;
+      const counts = [0, 0, 0, 0]; for (const e of keep) counts[e.edge]++;
+      let drop = -1; for (let i = keep.length - 1; i >= 0; i--) if (counts[keep[i].edge] > 1) { drop = i; break; }
+      if (keep.length < 8) keep.push(best); else if (drop >= 0) keep[drop] = best;
+    }
+    keep.sort((a, b) => b.weight - a.weight);
+    this.entries = keep.concat(out.filter(e => e.kind === "river").slice(0, 2));
   }
 
   /** Choose where the next horde comes in (more routes at once as heat climbs). */
@@ -1856,6 +1970,7 @@ export class Sim {
       this.freeSlot = this.freeSlot + 1 >= this.n ? this.civN : this.freeSlot + 1;
       if (this.state[k] !== DEAD) continue;
       this.ax[k] = x; this.ay[k] = y; this.state[k] = INF; this.hp[k] = hp; this.chase[k] = 0;
+      this.civWep[k] = 0; this.civAmmo[k] = 0; this.civMilitia[k] = 0; this.civCd[k] = 0;
       this.zMem[k] = 0; { const a = k * 2.39996; this.hx[k] = Math.cos(a); this.hy[k] = Math.sin(a); } // 0.33: walks the routes it knows; some heading to keep
       this.mutant[k] = isSwimmer ? 1 : 0;
       this.infectedEver++;
@@ -2178,7 +2293,9 @@ export class Sim {
             if (this.hasActiveSupport("militia", this.ax[v], this.ay[v])) p *= C.MILITIA_BITE_MUL;
           }
           if (r() < p) {
-            this.state[v] = INF; this.mutant[v] = 0; this.hp[v] = C.INF_HP * infHpScale * this.infHpMul; this.chase[v] = 0; this.infectedEver++;
+            this.state[v] = INF; this.mutant[v] = 0; this.hp[v] = C.INF_HP * infHpScale * this.infHpMul; this.chase[v] = 0;
+            this.civWep[v] = 0; this.civAmmo[v] = 0; this.civMilitia[v] = 0; this.civCd[v] = 0;
+            this.infectedEver++;
             this.scare(this.ax[v], this.ay[v], 8, 0.95); // 0.30: watching someone get bitten
           }
         }
@@ -2575,14 +2692,58 @@ export class Sim {
         }
       }
     }
-    // --- family: drift back toward the group (until terror takes over)
+    // --- family: drift back toward the group (until terror takes over), wait slightly when someone falls behind, and cover the group
     const lead = this.famLead[k];
-    if (lead >= 0 && f < 0.85) {
-      let sx = 0, sy = 0, n = 0;
-      for (let m = lead, e = lead + this.famSize[k]; m < e; m++) if (m !== k && this.state[m] === CIV) { sx += this.ax[m]; sy += this.ay[m]; n++; }
+    let famWait = false;
+    if (lead >= 0 && f < C.GROUP_COHESION_FEAR) {
+      let sx = 0, sy = 0, n = 0, maxBehind = 0;
+      const myDist = !safe && this.zoneClosed ? this.civField[ci] : 65535;
+      for (let m = lead, e = lead + this.famSize[k]; m < e; m++) if (m !== k && this.state[m] === CIV) {
+        sx += this.ax[m]; sy += this.ay[m]; n++;
+        if (myDist < 65535) {
+          const mDist = this.civField[this.idx(this.ax[m] | 0, this.ay[m] | 0)];
+          if (mDist < 65535 && mDist - myDist > maxBehind) maxBehind = mDist - myDist;
+        }
+      }
       if (n) {
         const ddx = (sx / n - x) * M, ddy = (sy / n - y) * M, d = hyp(ddx, ddy);
-        if (d > 1 && d < 40) { const p = Math.min(2, 0.8 * (d - 1)); fx += (ddx / d) * p; fy += (ddy / d) * p; }
+        if (d > 1 && d < 45) {
+          const pull = this.civWep[k] > 0 && this.civAmmo[k] > 0 ? 1.15 : 0.9;
+          const p = Math.min(2.4, pull * (d - 1));
+          fx += (ddx / d) * p; fy += (ddy / d) * p;
+        }
+        if (maxBehind >= 2 * FIELD_STEP && maxBehind <= 25 * FIELD_STEP && this.zStim[k] < 0.5) famWait = true;
+      }
+    }
+    // --- 0.37: armed civilian self-defense on the street (finite ammo, panic degrades aim, gunfire draws infected)
+    if (this.outbreak && this.civWep[k] > 0 && this.civAmmo[k] > 0 && (!safe || this.breaches > 0)) {
+      this.civCd[k] -= dt;
+      if (this.civCd[k] <= 0 && (this.zStim[k] > 0 || (k + this.tick) % 4 === 0)) {
+        const wep = C.CIV_WEAPONS[this.civWep[k] as C.CivWeaponId];
+        const t = this.nearestSeen(x, y, wep.range, true, C.EYE_M);
+        if (t < 0) this.civCd[k] = 0.15;
+        else {
+          this.civAmmo[k]--;
+          this.civCd[k] = (1 / wep.rate) * (0.85 + r() * 0.3);
+          this.civShotT[k] = this.time; this.lastCivShotT = this.time; this.lastCivShotX = x; this.lastCivShotY = y;
+          const tx = this.ax[t], ty = this.ay[t], dist = hyp(tx - x, ty - y) || 1;
+          const hitP = wep.accuracy * (1 - C.CIV_FEAR_AIM_PENALTY * f);
+          if (r() < hitP) {
+            if (this.shots.length < 4000) this.shots.push({ x0: x, y0: y, x1: tx, y1: ty, t: this.time, land: this.time + Math.max(0.04, dist * C.CELL_M / 900), cls: SHOT_SMALL, kind: "militia" });
+            this.hp[t] -= wep.damage;
+            if (this.hp[t] <= 0) { this.state[t] = DEAD; this.civKills++; this.recordKill(t); }
+          } else {
+            const baseAng = Math.atan2(ty - y, tx - x), errAng = (r() < 0.5 ? -1 : 1) * (0.12 + 0.28 * f);
+            const mDist = dist * (0.85 + r() * 0.35), mx = x + Math.cos(baseAng + errAng) * mDist, my = y + Math.sin(baseAng + errAng) * mDist;
+            if (this.shots.length < 4000) this.shots.push({ x0: x, y0: y, x1: mx, y1: my, t: this.time, land: this.time + Math.max(0.04, mDist * C.CELL_M / 900), cls: SHOT_SMALL, kind: "militia" });
+            if (f > 0.6 && this.dev.friendlyFire && r() < C.CIV_FF_CHANCE) {
+              const v = this.nearest(mx, my, 0.9, CIV);
+              if (v >= 0 && v !== k && (this.famLead[v] < 0 || this.famLead[v] !== this.famLead[k])) {
+                this.state[v] = DEAD; this.civWep[v] = 0; this.civAmmo[v] = 0; this.civFriendlyFire++; this.scare(this.ax[v], this.ay[v], 5, 0.85);
+              }
+            }
+          }
+        }
       }
     }
     // --- where they want to go
@@ -2631,6 +2792,8 @@ export class Sim {
     if (this.act[k] === 2) v0 = 0;
     if (wander) v0 *= safe ? 0.25 : 0.5; // the waiting crowd mostly stands and shuffles
     if (byVeh) v0 *= C.VEH_SLOW; // 0.33: right beside a tank: they edge around it, not sprint
+    if (famWait) v0 *= C.GROUP_WAIT_MUL; // 0.37: wait slightly for a family member who fell behind
+    if (this.time - this.civShotT[k] < C.CIV_SHOOT_PAUSE_S) v0 *= C.CIV_SHOOT_SLOW; // 0.37: pause briefly to aim and fire
     const dl = hyp(dx, dy) || 1;
     // --- steer: relax toward the wanted velocity, add the pushes (m/s2 -> cells/s2)
     const fl = hyp(fx, fy); if (fl > 12) { fx *= 12 / fl; fy *= 12 / fl; }

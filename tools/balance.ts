@@ -1,11 +1,12 @@
 // Plays a "sensible player" plan headless on a few cities and prints % saved. `bun tools/balance.ts`
 import { Sim } from "../src/sim";
 import * as C from "../src/config";
+import { loadRealArea } from "../src/realcity/load";
 // `bun tools/balance.ts campaign` plays every campaign city with its own budget and horde size.
 const runs: [string, number, import("../src/sim").SimOpts][] = process.argv[2] === "campaign"
   ? C.CITIES.map(c => [c.name, c.seed, { budget: c.budget, waveMul: c.waveMul, sites: c.sites, speedMul: c.speedMul, recipe: c.recipe }])
-  : process.argv[2] === "real"
-  ? C.REAL_CITIES.map(c => [c.name, c.seed, { budget: c.budget, waveMul: c.waveMul, sites: c.sites, speedMul: c.speedMul, realCityId: c.id }])
+  : process.argv[2] === "real" // 0.36: every baked battle area (REAL_ONLY=<city> for one city)
+  ? C.REAL_CITIES.filter(c => !process.env.REAL_ONLY || c.id === process.env.REAL_ONLY).flatMap(c => (c.areas ?? []).filter(a => !process.env.REAL_AREA || a.id === process.env.REAL_AREA).map(a => [a.key, a.seed, { budget: a.budget, waveMul: a.waveMul, sites: a.sites, speedMul: a.speedMul, realArea: a.key, stand: a.stands[0] }] as [string, number, any]))
   : (process.argv[2] ?? "7,42,1234").split(",").map(n => [`seed ${n}`, Number(n), {}]);
 const spend = process.argv.includes("--spend");
 const useSupport = process.argv.includes("--support");
@@ -14,8 +15,9 @@ const diffEnv = process.env.DIFF as C.Difficulty | undefined;
 const difficulty: C.Difficulty = diffEnv && C.DIFFICULTY[diffEnv] ? diffEnv : "medium";
 const res: string[] = [];
 for (const [name, seed, opts] of runs) {
+  if ((opts as any).realArea) await loadRealArea((opts as any).realArea);
   const s = new Sim(seed, { ...opts, difficulty });
-  const st0 = opts.recipe?.stands[0]; // 0.35: designed cities: the bot defends the first stand point
+  const st0 = opts.recipe?.stands[0] ?? (opts as any).stand; // 0.35: designed cities (0.36: and real areas): the bot defends the first stand point
   const cx = st0 ? st0.x : s.w / 2, cy = st0 ? st0.y : s.h / 3;
   const err = s.setZone([[cx - 40, cy - 28], [cx + 40, cy - 28], [cx + 46, cy + 24], [cx - 36, cy + 30]]);
   if (err) { console.log(seed, err); continue; }
@@ -66,6 +68,10 @@ for (const [name, seed, opts] of runs) {
     const [, x, y] = inner[Math.min(inner.length - 1, tries * 7)];
     for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) if (!s.placeSupport("evac", x + dx, y + dy)) { p++; break; }
   }
+  // 0.35.1: pads may go on streets and parks too; a zone with no roofs (a park stand) still gets its pads
+  const zoneCells: number[] = []; for (let i = 0; i < s.inZone.length; i++) if (s.inZone[i] === 1) zoneCells.push(i);
+  for (let k = 0; k < zoneCells.length && s.supports.filter(b => b.kind === "evac").length < pads; k += 37)
+    s.placeSupport("evac", zoneCells[k] % s.w, (zoneCells[k] / s.w) | 0);
   s.startBattle();
   let peakInf = 0, peakSafe = 0; const firstBreach = { t: -1 };
   let closed = false;

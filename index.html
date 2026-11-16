@@ -191,7 +191,7 @@
   body.attract #app { display: block; }
   body.attract header, body.attract nav, body.attract footer, body.attract #msg { display: none !important; }
   body.attract main { height: 100%; width: 100%; }
-  body.attract canvas { cursor: default; }
+  body.attract canvas:not(#cm-canvas) { cursor: default; }
   #screens {
     position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
     background: radial-gradient(ellipse at center, rgba(11, 14, 20, 0.35), rgba(8, 10, 15, 0.92));
@@ -226,6 +226,11 @@
   }
   #s-title .ver { color: var(--dim); margin-top: 20px; font-size: 12px; letter-spacing: 1px; }
 
+  #cm-canvas { position: static; inset: auto; width: 100%; height: min(56vh, 620px); display: block; background: #101216; border-radius: 8px; touch-action: none; cursor: pointer; }
+  .cm-card { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 10px 0; padding: 10px 14px; border-radius: 8px; background: rgba(255,255,255,0.06); }
+  .cm-card b { font-size: 17px; color: #fff; }
+  .cm-credit { color: var(--dim); font-size: 11.5px; margin-top: 8px; }
+  .city.sel { outline: 2px solid #fff; }
   .cities { display: grid; grid-template-columns: repeat(auto-fill, minmax(205px, 1fr)); gap: 12px; }
   .city {
     display: flex; flex-direction: column; align-items: stretch; text-align: left;
@@ -606,6 +611,18 @@
       <button id="osm-load">Load OSM Map</button>
     </div>
     <div class="cities" id="realcitylist"></div>
+    <div class="row"><button data-back>Back</button></div>
+  </div>
+  <div class="screen" id="s-citymap" hidden>
+    <h2 id="cm-title">CITY</h2>
+    <div class="subhead">Pick where to fight: tap a box on the map or a name below.</div>
+    <canvas id="cm-canvas"></canvas>
+    <div class="cm-card" id="cm-card" hidden>
+      <div><b id="cm-area"></b> <span id="cm-best"></span></div>
+      <button id="cm-play">Play</button>
+    </div>
+    <div class="cities" id="cm-list"></div>
+    <div class="cm-credit">Map data &copy; OpenStreetMap contributors (ODbL)</div>
     <div class="row"><button data-back>Back</button></div>
   </div>
   <div class="screen" id="s-record" hidden>
