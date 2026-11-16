@@ -52,7 +52,7 @@ test("a full battle runs to an end with sane numbers", () => {
   expect(s.sites.length).toBe(4);
   const t0 = performance.now();
   let ticks = 0;
-  while (s.phase === "battle" && !s.roundDone && ticks < 20 * 480 + 20) { s.step(); ticks++; }
+  while (s.phase === "battle" && !s.roundDone && ticks < 20 * 720 + 20) { s.step(); ticks++; } // 0.38: wider spread, longer rounds
   expect(s.roundDone).toBe(true); // 0.20: the city empties (round over), the fight would go on...
   s.withdraw(); // ...until the player pulls out
   const ms = performance.now() - t0;
@@ -61,7 +61,7 @@ test("a full battle runs to an end with sane numbers", () => {
   expect(s.phase).toBe("over");
   expect(c.civ + c.safe + c.inf).toBeLessThanOrEqual(s.n);
   for (let k = 0; k < s.n; k++) { expect(Number.isFinite(s.ax[k])).toBe(true); }
-}, 300000); // 0.30: walking crowds mean a bigger outbreak and longer battles
+}, 600000); // 0.30: walking crowds mean a bigger outbreak and longer battles
 
 test("changing the plan moves the outbreak", () => {
   const a = new Sim(7), b = new Sim(7);
@@ -1179,6 +1179,7 @@ test("outbreak spread: extra rolled outbreaks inside the difficulty's window", (
   const s = new Sim(42, { budget: 80_000_000, difficulty: "medium" });
   s.setZone(zoneAroundCenter(s, 34));
   s.dev.bites = false;
+  s.dev.waves = false; // 0.38: the window runs past the first horde now
   s.startBattle();
   const d = C.DIFFICULTY.medium;
   expect(s.spreadSites.length).toBeGreaterThanOrEqual(d.spreadMin);
@@ -1698,4 +1699,141 @@ test("0.37: armed civilians shoot close infected, consume ammo, make gunfire noi
   expect(s.state[civ]).toBe(INF);
   expect(s.civWep[civ]).toBe(0);
   expect(s.civAmmo[civ]).toBe(0);
+});
+
+// ---- 0.38: no-fire band, wall guards, demolition, hidden carriers, rooftop mortars, wider spread
+test("0.38: precise strikes are refused near the zone; the nuke and MOAB are allowed and report the zone share", () => {
+  const s = new Sim(42, { civilians: 500 });
+  s.setZone(zoneAroundCenter(s));
+  s.dev.waves = false;
+  s.startBattle();
+  const cx = s.w / 2, cy = s.h / 4;
+  for (const k of ["airstrike", "firebomb", "cluster", "barrage", "tomahawk", "moab", "nuke"] as const) s.charges[k] = 1;
+  expect(s.useAbility("airstrike", cx, cy, cx + 6, cy)).toContain("Too close");
+  expect(s.useAbility("firebomb", cx + 30 + 4, cy)).toContain("Too close"); // just outside the wall
+  expect(s.useAbility("tomahawk", cx + 30 + 12, cy)).toContain("Too close"); // 24 m out: inside the 30 m big-bomb band
+  expect(s.charges.airstrike + s.charges.firebomb + s.charges.tomahawk).toBe(3); // refused strikes cost nothing
+  // far away is fine
+  expect(s.useAbility("barrage", 40, s.h - 40)).toBeNull();
+  // the outside controller's weapons go anywhere
+  expect(s.zoneHitShare("moab", cx, cy)).toBeGreaterThan(0.1);
+  expect(s.useAbility("moab", cx, cy)).toBeNull();
+  expect(s.zoneHitShare("nuke", 40, s.h - 40)).toBe(0);
+  // a manned roof far from the zone is protected too
+  let rx = -1, ry = -1;
+  for (let y = s.h - 120; y < s.h - 20 && rx < 0; y++) for (let x = 20; x < s.w - 20 && rx < 0; x++) if (s.map.tile[s.idx(x, y)] === BUILDING && !s.canPlace("garrison", x, y) && s.distToZone(x, y) > 40) { rx = x; ry = y; }
+  expect(rx).toBeGreaterThan(0);
+  expect(s.inNoFire(rx, ry)).toBe(false);
+  s.dev.instantDeploy = true;
+  expect(s.place("garrison", rx, ry)).toBeNull();
+  expect(s.inNoFire(rx, ry)).toBe(true);
+  expect(s.inNoFire(rx + 9, ry)).toBe(true); // 18 m from the roof edge or nearer
+});
+
+test("0.38: artillery never aims into the no-fire band", () => {
+  const s = new Sim(42, { budget: 80_000_000 });
+  s.setZone(zoneAroundCenter(s));
+  const cx = s.w / 2, cy = s.h / 4;
+  let placed = 0;
+  for (let y = cy - 20; y < cy + 20 && placed < 3; y += 3) for (let x = cx - 20; x < cx + 20 && placed < 3; x += 3) if (!s.canPlace("mortar", x, y) && !s.place("mortar", x, y)) placed++;
+  expect(placed).toBeGreaterThan(0);
+  s.startBattle();
+  const shells: [number, number][] = [];
+  for (let i = 0; i < 20 * 150; i++) { s.step(); for (const m of (s as any).impacts) shells.push([m.x, m.y]); }
+  expect(shells.length).toBeGreaterThan(0);
+  const near = shells.filter(([x, y]) => s.inNoFire(x, y)).length;
+  expect(near).toBe(0);
+}, 200000);
+
+test("0.38: armed guards on the wall shoot infected outside it, and die with their wall", () => {
+  const s = new Sim(42, { civilians: 500 });
+  s.setZone(zoneAroundCenter(s));
+  for (let i = 0; i < s.inZone.length; i++) if (s.inZone[i] === 3) { s.inZone[i] = 2; s.wallHp[i] = s.wallMaxHp(); }
+  s.dev.waves = false;
+  s.startBattle();
+  s.outbreak = true; s.time = C.WARNING_S + 1;
+  expect(s.guardPosts.length).toBeGreaterThan(4);
+  const post = s.guardPosts[0], px = post.i % s.w, py = (post.i / s.w) | 0;
+  // infected right outside the post
+  let ox = -1, oy = -1;
+  for (let r = 2; r < 6 && ox < 0; r++) for (const [dx, dy] of [[r, 0], [-r, 0], [0, r], [0, -r]]) {
+    const x = px + dx, y = py + dy;
+    if (ox < 0 && x > 0 && y > 0 && x < s.w && y < s.h && !s.inZone[s.idx(x, y)] && s.map.tile[s.idx(x, y)] !== BUILDING && s.map.tile[s.idx(x, y)] !== WATER) { ox = x; oy = y; }
+  }
+  expect(ox).toBeGreaterThan(0);
+  s.devClearInfected();
+  for (let j = 0; j < 6; j++) s.spawnInfected(ox + 0.5, oy + 0.5, 100, false);
+  for (let i = 0; i < 20 * 8; i++) s.step();
+  expect(s.guardKills).toBeGreaterThan(0);
+  // the wall falls: its guards go with it, for good
+  s.wallHp[post.i] = 0; s.inZone[post.i] = 2;
+  for (let i = 0; i < 4; i++) s.step();
+  expect(post.dead).toBe(1);
+  s.wallHp[post.i] = s.wallMaxHp(); // repaired
+  for (let i = 0; i < 4; i++) s.step();
+  expect(post.dead).toBe(1);
+});
+
+test("0.38: zone price includes the guards (slightly up)", () => {
+  expect(Sim.zonePrice(4000, 0)).toBe(Math.round((C.ZONE_BASE_COST + Math.round(4000 * C.ZONE_COST_PER_CELL)) * C.ZONE_GUARD_COST_MUL));
+  expect(C.ZONE_GUARD_COST_MUL).toBeLessThan(1.1);
+});
+
+test("0.38: a demolished building becomes rubble that spills into the street; zone buildings and manned roofs are refused", () => {
+  const s = new Sim(42, { civilians: 500, budget: 60_000_000 });
+  s.setZone(zoneAroundCenter(s));
+  const cx = s.w / 2, cy = s.h / 4;
+  // inside the zone: refused
+  let zx = -1, zy = -1;
+  for (let y = cy - 10; y < cy + 10 && zx < 0; y++) for (let x = cx - 10; x < cx + 10 && zx < 0; x++) if (s.map.tile[s.idx(x, y)] === BUILDING) { zx = x; zy = y; }
+  expect(s.toggleDemo(zx, zy)).toContain("safe zone");
+  // outside: planted, paid
+  let bx = -1, by = -1;
+  for (let y = cy + 45; y < cy + 90 && bx < 0; y++) for (let x = cx - 20; x < cx + 20 && bx < 0; x++) if (s.map.tile[s.idx(x, y)] === BUILDING && s.demoCells(s.idx(x, y)).length < 200) { bx = x; by = y; }
+  expect(bx).toBeGreaterThan(0);
+  const before = s.remaining();
+  expect(s.toggleDemo(bx, by)).toBeNull();
+  expect(before - s.remaining()).toBe(C.DEMO_COST);
+  const foot = s.demoCells(s.idx(bx, by));
+  expect(s.blowBuilding(bx, by)).toContain("during the battle");
+  s.dev.waves = false;
+  s.startBattle();
+  expect(s.blowBuilding(bx, by)).toBeNull();
+  for (const i of foot) { expect(s.map.tile[i]).not.toBe(BUILDING); expect(s.rubble[i]).toBe(1); }
+  let spill = 0;
+  for (let i = 0; i < s.rubble.length; i++) if (s.rubble[i] && !foot.includes(i)) spill++;
+  expect(spill).toBeGreaterThan(0);
+  expect(s.roughMul(foot[0])).toBeLessThan(1); // slows everyone
+  expect(s.blowBuilding(bx, by)).not.toBeNull(); // gone
+});
+
+test("0.38: hidden carriers turn during the first two minutes outside the zone, never inside it", () => {
+  const s = new Sim(42, { civilians: 4000 });
+  s.setZone(zoneAroundCenter(s));
+  s.dev.waves = false;
+  s.startBattle();
+  expect(s.carriers.length).toBe(Math.round(4000 * C.CARRIER_PCT / 100));
+  for (const c of s.carriers) { expect(c.t).toBeGreaterThan(C.WARNING_S); expect(c.t).toBeLessThanOrEqual(C.WARNING_S + 2 + C.CARRIER_WINDOW_S); }
+  const safe = s.carriers[0].k;
+  s.state[safe] = SAFE_CIV; // this one made it in
+  while (s.time < C.WARNING_S + C.CARRIER_WINDOW_S + 3) s.step();
+  expect(s.carriersTurned).toBeGreaterThan(0);
+  expect(s.state[safe]).not.toBe(INF);
+}, 200000);
+
+test("0.38: the Mortar can set up on a rooftop (blocks no street); other ground units can't", () => {
+  const s = new Sim(42, { civilians: 500, budget: 60_000_000 });
+  let bx = -1, by = -1;
+  for (let y = 40; y < s.h - 40 && bx < 0; y++) for (let x = 40; x < s.w - 40 && bx < 0; x++) if (s.map.tile[s.idx(x, y)] === BUILDING && !s.canPlace("mortar", x, y)) { bx = x; by = y; }
+  expect(bx).toBeGreaterThan(0);
+  expect(s.canPlace("turret", bx, by)).toContain("streets or parks");
+  expect(s.place("mortar", bx, by)).toBeNull();
+  expect(s.onRoof(s.units[0])).toBe(true);
+});
+
+test("0.38: wider outbreak spread rolls per difficulty", () => {
+  expect([C.DIFFICULTY.easy.spreadMin, C.DIFFICULTY.easy.spreadMax, C.DIFFICULTY.easy.spreadS]).toEqual([2, 3, 40]);
+  expect([C.DIFFICULTY.medium.spreadMin, C.DIFFICULTY.medium.spreadMax, C.DIFFICULTY.medium.spreadS]).toEqual([4, 6, 60]);
+  expect([C.DIFFICULTY.hard.spreadMin, C.DIFFICULTY.hard.spreadMax, C.DIFFICULTY.hard.spreadS]).toEqual([5, 9, 80]);
+  expect([C.DIFFICULTY.insane.spreadMin, C.DIFFICULTY.insane.spreadMax, C.DIFFICULTY.insane.spreadS]).toEqual([8, 12, 100]);
 });

@@ -259,7 +259,7 @@ export class Sim {
     let sig = 0;
     for (const u of this.units) {
       const spec = C.UNITS[u.kind];
-      if (spec.on !== "ground" || u.extractT !== undefined || (u.hp !== undefined && u.hp <= 0)) continue;
+      if (spec.on !== "ground" || this.onRoof(u) || u.extractT !== undefined || (u.hp !== undefined && u.hp <= 0)) continue;
       const [x0, y0, x1, y1] = this.footRect(spec.foot, Math.floor(u.x), Math.floor(u.y));
       if (spec.crushSlow !== undefined) {
         const mx = u.x - (u.lastX ?? u.x), my = u.y - (u.lastY ?? u.y), ml = hyp(mx, my);
@@ -277,7 +277,7 @@ export class Sim {
       this.occStatic.fill(0);
       for (const u of this.units) {
         const spec = C.UNITS[u.kind];
-        if (spec.on !== "ground" || spec.mobile || u.extractT !== undefined || (u.hp !== undefined && u.hp <= 0)) continue;
+        if (spec.on !== "ground" || this.onRoof(u) || spec.mobile || u.extractT !== undefined || (u.hp !== undefined && u.hp <= 0)) continue;
         const [x0, y0, x1, y1] = this.footRect(spec.foot, Math.floor(u.x), Math.floor(u.y));
         for (let y = Math.max(0, y0); y <= Math.min(this.h - 1, y1); y++) for (let x = Math.max(0, x0); x <= Math.min(this.w - 1, x1); x++) this.occStatic[y * this.w + x] = 1;
       }
@@ -357,6 +357,14 @@ export class Sim {
   nukesUsed = 0;
   bridges: number[][] = []; // cells of each bridge
   c4 = new Set<number>(); // bridge ids with a charge planted
+  demo = new Set<number>(); // 0.38: building demolition charges, by the cell they were planted on
+  demoBlown = new Set<number>();
+  guardPosts: { i: number; cd: number; dead: number }[] = []; // 0.38: armed guards on the wall walk
+  private guardKey = -1;
+  guardKills = 0; guardsLost = 0;
+  carriers: { k: number; t: number }[] = []; // 0.38: hidden carriers and when they turn
+  private carrierNext = 0;
+  carriersTurned = 0;
   blown = new Set<number>();
   mapVersion = 0; // bumps when the map itself changes (a bridge falls or buildings/terrain take damage)
   pending: Pending[] = [];
@@ -744,7 +752,8 @@ export class Sim {
 
   /** Cost of a zone of `cells` cells when it is the `index`-th zone (0 = the first, cheap one). */
   static zonePrice(cells: number, index: number) {
-    return index === 0 ? C.ZONE_BASE_COST + Math.round(cells * C.ZONE_COST_PER_CELL) : C.EXTRA_ZONE_BASE + Math.round(cells * C.EXTRA_ZONE_PER_CELL);
+    const p = index === 0 ? C.ZONE_BASE_COST + Math.round(cells * C.ZONE_COST_PER_CELL) : C.EXTRA_ZONE_BASE + Math.round(cells * C.EXTRA_ZONE_PER_CELL);
+    return Math.round(p * C.ZONE_GUARD_COST_MUL); // 0.38: the walls come manned
   }
   zoneCost() {
     let c = 0;
@@ -764,7 +773,7 @@ export class Sim {
     for (const u of this.units) s += u.paid ?? C.UNITS[u.kind].cost;
     for (const b of this.supports) s += b.paid;
     for (const k in this.bought) s += this.bought[k as C.AbilityKind] * C.ABILITIES[k as C.AbilityKind].cost;
-    return s + this.c4.size * C.C4_COST;
+    return s + this.c4.size * C.C4_COST + this.demo.size * C.DEMO_COST;
   }
   remaining() { return this.dev.unlimitedMoney ? 1e12 : Math.floor(this.budget + this.earned - this.spent()); }
   private pay(cost: number) { if (this.phase !== "plan") this.battleSpend += cost; }
@@ -985,7 +994,7 @@ export class Sim {
     const spec = C.UNITS[kind];
     const t = this.tileAt(x, y);
     if (spec.on === "building" && t !== BUILDING) return `${spec.name}s go on buildings.`;
-    if (spec.on === "ground" && !walkable(t)) return `${spec.name}s go on streets or parks.`;
+    if (spec.on === "ground" && !walkable(t) && !(spec.roof && t === BUILDING)) return `${spec.name}s go on streets or parks${spec.roof ? " or rooftops" : ""}.`;
     if (spec.on === "water" && t !== WATER) return `${spec.name}s go on the river.`;
     if (spec.on === "zone" && this.inZone[this.idx(x, y)] !== 1) return `${spec.name}s take off from inside a safe zone.`;
     if (spec.on === "any") return "That unit can't be built.";
@@ -994,6 +1003,9 @@ export class Sim {
     if (this.remaining() < this.unitCost(kind, x, y)) return "Not enough budget.";
     return null;
   }
+
+  /** 0.38: a ground unit set up on a rooftop (the Mortar can be): it blocks no street and nothing claws at it. */
+  onRoof(u: { x: number; y: number }) { return this.map.tile[this.idx(Math.floor(u.x), Math.floor(u.y))] === BUILDING; }
 
   /** 0.23: true while a saved plan loads; old plans may overlap under the new footprints and keep the old 2-cell rule. */
   ignoreFootprint = false;
@@ -1281,6 +1293,153 @@ export class Sim {
     this.pay(C.C4_COST);
     return null;
   }
+  // ---------- 0.38: building demolition ----------
+  /** The building cells (connected roof cells, capped) that a charge at cell i brings down. */
+  demoCells(i0: number): number[] {
+    const w = this.w, h = this.h, tile = this.map.tile;
+    if (tile[i0] !== BUILDING) return [];
+    const seen = new Set([i0]), st = [i0], out: number[] = [];
+    while (st.length && out.length < C.DEMO_MAX_CELLS) {
+      const i = st.pop()!; out.push(i);
+      const x = i % w, y = (i / w) | 0;
+      for (const j of [x > 0 ? i - 1 : -1, x < w - 1 ? i + 1 : -1, y > 0 ? i - w : -1, y < h - 1 ? i + w : -1])
+        if (j >= 0 && tile[j] === BUILDING && !seen.has(j)) { seen.add(j); st.push(j); }
+    }
+    return out;
+  }
+  /** The planted charge whose building covers cell i, or -1. */
+  demoAt(x: number, y: number): number {
+    const i = this.idx(x, y);
+    for (const c of this.demo) if (!this.demoBlown.has(c) && (c === i || this.demoCells(c).includes(i))) return c;
+    return -1;
+  }
+  private demoProblem(cells: number[]): string | null {
+    if (!cells.length) return "Demolition charges go on buildings (or bridges).";
+    const set = new Set(cells);
+    if (cells.some(i => this.inZone[i])) return "That building is part of your safe zone. Bringing it down would open the perimeter.";
+    for (const u of this.units) if ((u.hp === undefined || u.hp > 0) && set.has(this.idx(u.x | 0, u.y | 0))) return "Your unit is on that roof. Move it first.";
+    for (const b of this.supports) if (set.has(this.idx(b.x, b.y))) return "A support building is on that roof.";
+    return null;
+  }
+  /** Plant (or, while planning, remove) a demolition charge on the building at x,y. */
+  toggleDemo(x: number, y: number): string | null {
+    if (this.phase === "over") return "The battle is over.";
+    const at = this.demoAt(x, y);
+    if (at >= 0) { if (this.phase !== "plan") return "Already charged."; this.demo.delete(at); return null; }
+    const i = this.idx(x, y);
+    const p = this.demoProblem(this.demoCells(i));
+    if (p) return p;
+    if (this.remaining() < C.DEMO_COST) return "Not enough money.";
+    this.demo.add(i);
+    this.pay(C.DEMO_COST);
+    return null;
+  }
+  /** Blow the charged building at x,y: a controlled demolition into its footprint, with rubble spilling into the
+   *  streets beside it. Infected inside the fall die. */
+  blowBuilding(x: number, y: number): string | null {
+    if (this.phase !== "battle") return "Buildings can only be brought down during the battle.";
+    const c = this.demoAt(x, y);
+    if (c < 0) return "No charge on that building. Plant charges while planning.";
+    const cells = this.demoCells(c);
+    const p = this.demoProblem(cells);
+    if (p) return p;
+    this.demoBlown.add(c);
+    const w = this.w, h = this.h, foot = new Set(cells);
+    let sx = 0, sy = 0;
+    for (const i of cells) {
+      this.map.tile[i] = 0; this.map.height[i] = 0; this.rubble[i] = 1; this.damage[i] = 255;
+      sx += i % w; sy += (i / w) | 0;
+    }
+    this.buildingsCollapsed += cells.length;
+    // spill: every street cell next to the footprint, and about half of the ring beyond it
+    const rr = rng((c * 2654435761) >>> 0);
+    for (const i of cells) {
+      const x = i % w, y = (i / w) | 0;
+      for (let dy = -C.DEMO_SPILL; dy <= C.DEMO_SPILL; dy++) for (let dx = -C.DEMO_SPILL; dx <= C.DEMO_SPILL; dx++) {
+        const nx = x + dx, ny = y + dy;
+        if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
+        const j = ny * w + nx, t = this.map.tile[j];
+        if (foot.has(j) || this.rubble[j] || this.inZone[j] || t === WATER || t === BRIDGE || t === BUILDING) continue;
+        const d = Math.max(Math.abs(dx), Math.abs(dy));
+        if (d === 1 || rr() < 0.5 / d) { this.rubble[j] = 1; if (this.rough[j] < 200) this.rough[j] = 200; }
+      }
+    }
+    for (let k = 0; k < this.n; k++) {
+      const st = this.state[k];
+      if (st === DEAD || !foot.has(this.idx(this.ax[k] | 0, this.ay[k] | 0))) continue;
+      if (st === INF) { this.state[k] = DEAD; this.recordKill(k); }
+    }
+    const cx = sx / cells.length, cy = sy / cells.length, rad = Math.max(3, Math.sqrt(cells.length) * 0.7);
+    this.blasts.push({ x: cx, y: cy, r: rad, t: this.time, color: "#bcaaa4" });
+    this.scare(cx, cy, rad + 10, 0.8); this.noise(cx, cy, rad + 30, 1.2);
+    this.mapVersion++; this.fieldDirty = true;
+    return null;
+  }
+
+  // ---------- 0.38: armed wall guards ----------
+  /** Posts along the standing walls (every GUARD_SPACING cells) and gates (one per opening). Kept per cell, so a post
+   *  that died stays dead when the zone grows. */
+  private placeGuards() {
+    const key = this.zoneCells * 31 + this.zones.length;
+    if (key === this.guardKey) return;
+    this.guardKey = key;
+    const w = this.w, keep = new Map(this.guardPosts.map(p => [p.i, p]));
+    const posts: number[] = [];
+    const near = (i: number, sp: number) => {
+      const x = i % w, y = (i / w) | 0;
+      for (const p of posts) { const dx = (p % w) - x, dy = ((p / w) | 0) - y; if (dx * dx + dy * dy < sp * sp) return true; }
+      return false;
+    };
+    for (let i = 0; i < this.inZone.length; i++) if (this.inZone[i] === 3 && this.wallHp[i] > 0 && !near(i, C.GUARD_GATE_SPACING)) posts.push(i);
+    for (let i = 0; i < this.inZone.length; i++) if (this.inZone[i] === 2 && this.wallHp[i] > 0 && !near(i, C.GUARD_SPACING)) posts.push(i);
+    this.guardPosts = posts.map(i => keep.get(i) ?? { i, cd: 0, dead: 0 });
+    for (const p of keep.values()) if (p.dead && !posts.includes(p.i)) this.guardPosts.push(p);
+  }
+  /** Nearest infected outside the zone that a guard on the wall at (x, y) can see, within r. */
+  private guardTarget(x: number, y: number, r: number) {
+    const b0x = Math.max(0, ((x - r) / BUCKET) | 0), b1x = Math.min(this.bw - 1, ((x + r) / BUCKET) | 0);
+    const b0y = Math.max(0, ((y - r) / BUCKET) | 0), b1y = Math.min(this.bh - 1, ((y + r) / BUCKET) | 0);
+    let best = -1, bd = r * r, checks = 0;
+    for (let by = b0y; by <= b1y; by++) for (let bx = b0x; bx <= b1x; bx++)
+      for (let k = this.head[by * this.bw + bx]; k !== -1; k = this.next[k]) {
+        if (this.state[k] !== INF) continue;
+        const dx = this.ax[k] - x, dy = this.ay[k] - y, d2 = dx * dx + dy * dy;
+        if (d2 >= bd || this.inZone[this.idx(this.ax[k] | 0, this.ay[k] | 0)]) continue;
+        if (checks++ > 12) continue;
+        if (!this.sightClear(x, y, C.GUARD_EYE_M, this.ax[k], this.ay[k])) continue;
+        bd = d2; best = k;
+      }
+    return best;
+  }
+  private stepGuards(dt: number) {
+    this.placeGuards();
+    if (!this.outbreak) return;
+    const roofMul = this.mutators.has("fragile_walls") ? 1.3 : 1, wMax = this.wallMaxHp(), gMax = this.gateMaxHp();
+    for (const p of this.guardPosts) {
+      if (p.dead) continue;
+      const z = this.inZone[p.i], hp = this.wallHp[p.i];
+      if ((z !== 2 && z !== 3) || hp <= 0) { p.dead = 1; this.guardsLost++; continue; } // the wall fell: so did they
+      p.cd -= dt;
+      if (p.cd > 0) continue;
+      const x = (p.i % this.w) + 0.5, y = ((p.i / this.w) | 0) + 0.5;
+      const rate = C.GUARD_RATE * Math.min(1, hp / (z === 2 ? wMax : gMax)) * (this.hasActiveSupport("command", x, y) ? C.COMMAND_RATE_MUL : 1);
+      if (rate < 0.05) { p.cd = 1; continue; }
+      const range = C.GUARD_RANGE * (this.hasActiveSupport("radio", x, y) ? C.RADIO_RANGE_MUL : 1) * roofMul;
+      const t = this.guardTarget(x, y, range);
+      if (t < 0) { p.cd = 0.3; continue; }
+      p.cd = 1 / rate;
+      const tx = this.ax[t], ty = this.ay[t];
+      if (this.shots.length < 4000) this.shots.push({ x0: x, y0: y, x1: tx, y1: ty, t: this.time, land: this.time + Math.max(0.03, hyp(tx - x, ty - y) * C.CELL_M / 900), cls: SHOT_SMALL, kind: "garrison" });
+      const r = rng((this.tick * 2246822519 + p.i * 3266489917) >>> 0);
+      if (r() < C.GUARD_ACC) {
+        this.hp[t] -= C.GUARD_DAMAGE;
+        if (this.hp[t] <= 0) { this.state[t] = DEAD; this.recordKill(t); this.guardKills++; }
+      }
+    }
+  }
+  /** Live guard posts (for the renderer and stats). */
+  guardsAlive() { let n = 0; for (const p of this.guardPosts) if (!p.dead) n++; return n; }
+
   /** Blow the charged bridge at x,y: it becomes river and whoever is on it falls. */
   blowBridge(x: number, y: number): string | null {
     if (this.phase !== "battle") return "Bridges can only be blown during the battle.";
@@ -1327,6 +1486,8 @@ export class Sim {
       if (l < 4) return "Drag the run out a bit longer.";
       if (l > C.AIRSTRIKE_LEN) { x2 = x + (dx / l) * C.AIRSTRIKE_LEN; y2 = y + (dy / l) * C.AIRSTRIKE_LEN; }
     }
+    const nf = this.strikeRefusal(k, x, y, x2, y2);
+    if (nf) return nf;
     this.charges[k]--; this.abilitiesUsed++;
     const delay = C.ABILITIES[k].delay;
     this.pending.push({ kind: k, at: this.time + delay, x, y, x2, y2 });
@@ -1535,7 +1696,7 @@ export class Sim {
           const n = this.countInf(x, y, C.GUNSHIP_HOW_SPLASH, 40);
           if (n > bn) { bn = n; best = this.nearest(x, y, C.GUNSHIP_HOW_SPLASH, INF, 255, 40); }
         }
-        if (best >= 0 && this.clearOfZone(this.ax[best], this.ay[best], C.GUNSHIP_HOW_SPLASH)) {
+        if (best >= 0 && this.clearOfZone(this.ax[best], this.ay[best], C.GUNSHIP_HOW_SPLASH) && !this.strikeBlocked(this.ax[best], this.ay[best], C.GUNSHIP_HOW_SPLASH)) {
           const sx = this.ax[best], sy = this.ay[best];
           const gx = o.x + Math.cos(o.angle) * C.GUNSHIP_RADIUS * 1.15, gy = o.y + Math.sin(o.angle) * C.GUNSHIP_RADIUS * 1.15;
           if (this.shots.length < 4000) this.shots.push({ x0: gx, y0: gy, x1: sx, y1: sy, t: this.time - 0.35, land: this.time, cls: SHOT_CANNON, kind: "ac130" }); // the 105 mm round
@@ -1868,6 +2029,18 @@ export class Sim {
     }
     this.spreadSites = spread.sort((a, b) => a.t - b.t);
     this.spreadNext = 0;
+    // 0.38: hidden carriers, bitten before the warning; they turn at random in the first CARRIER_WINDOW_S
+    const nCar = Math.round(this.civN * C.CARRIER_PCT / 100), picked = new Set<number>();
+    this.carriers = [];
+    for (let g = 0; this.carriers.length < nCar && g < nCar * 20; g++) {
+      const k = Math.floor(r() * this.civN);
+      if (picked.has(k)) continue;
+      picked.add(k);
+      this.carriers.push({ k, t: C.WARNING_S + 2 + r() * C.CARRIER_WINDOW_S });
+    }
+    this.carriers.sort((a, b) => a.t - b.t);
+    this.carrierNext = 0;
+    this.placeGuards();
     this.findEntries();
     this.planWave(r);
     this.lockedSpend = this.spent();
@@ -2154,6 +2327,10 @@ export class Sim {
   /** Advance one tick. dt may be larger than C.DT at high game speeds (fewer, longer ticks). */
   step(dt: number = C.DT) {
     if (this.phase !== "battle") return;
+    this.inStep = true;
+    try { this.stepInner(dt); } finally { this.inStep = false; }
+  }
+  private stepInner(dt: number) {
     if (this.fieldDirty) this.buildFields();
     this.rebuildBuckets();
     this.time += dt; this.tick++;
@@ -2169,6 +2346,14 @@ export class Sim {
     while (this.outbreak && this.spreadNext < this.spreadSites.length && this.time >= this.spreadSites[this.spreadNext].t) {
       const p = this.spreadSites[this.spreadNext++];
       for (let j = 0; j < C.INFECTED_PER_SITE; j++) this.spawnInfected(p.x + r() * 2, p.y + r() * 2, C.INF_HP * this.infHpMul, false);
+    }
+    while (this.outbreak && this.carrierNext < this.carriers.length && this.time >= this.carriers[this.carrierNext].t) {
+      const v = this.carriers[this.carrierNext++].k;
+      if (this.state[v] !== CIV || !this.dev.bites) continue; // made it into a zone, got out, or already gone
+      this.state[v] = INF; this.mutant[v] = 0; this.hp[v] = C.INF_HP * infHpScale * this.infHpMul; this.chase[v] = 0;
+      this.civWep[v] = 0; this.civAmmo[v] = 0; this.civMilitia[v] = 0; this.civCd[v] = 0;
+      this.infectedEver++; this.carriersTurned++;
+      this.scare(this.ax[v], this.ay[v], 8, 0.95);
     }
     if (this.time >= this.nextWaveT) {
       const h = this.heatNow();
@@ -2345,6 +2530,7 @@ export class Sim {
     if (this.tick % 20 === 0) { this.refreshAuras(); this.hasPads = this.supports.some(b => b.kind === "evac"); if (this.hasPads) this.buildPadField(); }
     this.stepSupports(dt);
     this.fireUnits(dt);
+    if ((this.tick & 1) === 0) this.stepGuards(dt * 2);
     this.scanEvents();
     this.units = this.units.filter(u => {
       if (u.hp === undefined || u.hp > 0) return true;
@@ -3177,7 +3363,9 @@ export class Sim {
         this.impacts = this.impacts.filter(m => m.t > this.time);
         for (const m of due) {
           this.areaDamage(m.x, m.y, m.r, m.dmg, false, m.u, m.maxHits);
-          this.damageTerrain(m.x, m.y, m.r, m.sDmg);
+          // 0.38: direct-fire shells (tank, APC, Apache, Reaper) still fire near the zone but don't crater or wreck
+          // buildings inside the no-fire band; artillery never aims into it (farTarget)
+          if (C.UNITS[m.u.kind].minRange || !this.inNoFire(m.x, m.y)) this.damageTerrain(m.x, m.y, m.r, m.sDmg);
           this.blasts.push({ x: m.x, y: m.y, r: m.r, t: this.time, color: m.color });
         }
       }
@@ -3193,7 +3381,7 @@ export class Sim {
       }
       if (u.deployT && u.deployT > 0) { u.deployT -= dt; if (u.deployT <= 0) { u.deployT = 0; this.refreshAuras(); } else continue; }
       // 0.24: infected pressing on a street emplacement claw at it like a wall (it keeps shooting)
-      if (!spec.mobile && spec.hp && u.hp !== undefined && u.hp > 0 && (this.tick + u.x) % 4 === 0 && this.dev.unitDamage) {
+      if (!spec.mobile && spec.hp && u.hp !== undefined && u.hp > 0 && (this.tick + u.x) % 4 === 0 && this.dev.unitDamage && !this.onRoof(u)) {
         const [x0, y0, x1, y1] = this.footRect(spec.foot, u.x, u.y);
         u.hp -= this.countInf((x0 + x1 + 1) / 2, (y0 + y1 + 1) / 2, spec.foot * 0.7 + 1.2, 16) * C.MOBILE_HURT_DPS * dt * 4; // footprint plus the ring of cells around it
       }
@@ -3494,9 +3682,104 @@ export class Sim {
       const sc = mode === "wall" ? n * 30 / (10 + this.infField[this.idx(this.ax[pick] | 0, this.ay[pick] | 0)] / FIELD_STEP)
         : mode === "civ" ? n + 3 * ch : n;
       // never shell a spot where the blast would reach the inside of the zone
-      if (sc > bestN && pick >= 0 && this.clearOfZone(this.ax[pick], this.ay[pick], C.UNITS[u.kind].splash ?? 0)) { bestN = sc; best = pick; }
+      if (sc > bestN && pick >= 0 && this.clearOfZone(this.ax[pick], this.ay[pick], C.UNITS[u.kind].splash ?? 0) && !this.strikeBlocked(this.ax[pick], this.ay[pick], C.UNITS[u.kind].splash ?? 0)) { bestN = sc; best = pick; } // 0.38: and outside the no-fire band
     }
     return best;
+  }
+
+  // ---------- 0.38: no-fire band ----------
+  /** Cells from the nearest protected cell (the zone, a building touching it, a building with a rooftop unit or
+   *  support), 255 beyond NOFIRE_SCAN_M. Worked out lazily and cached until the zone, the map or a roof changes. */
+  private protDist = new Uint8Array(0);
+  private protKey = "";
+  private protTick = -1;
+  private inStep = false;
+  protectDist(): Uint8Array {
+    // inside a tick the answer can't change between calls; outside one (UI, paused) check the key every time
+    if (this.inStep && this.protTick === this.tick && this.protDist.length) return this.protDist;
+    this.protTick = this.inStep ? this.tick : -1;
+    let key = `${this.zoneCells}|${this.zones.length}|${this.buildingsCollapsed}|${this.demoBlown.size}|`; // not mapVersion: that bumps on every scratch
+    for (const u of this.units) if ((u.hp === undefined || u.hp > 0) && u.extractT === undefined && this.onRoof(u)) key += `${u.x | 0},${u.y | 0};`;
+    for (const b of this.supports) key += `${b.x},${b.y};`;
+    if (key === this.protKey && this.protDist.length) return this.protDist;
+    this.protKey = key;
+    const w = this.w, h = this.h, n = w * h, tile = this.map.tile;
+    const d = this.protDist.length === n ? this.protDist : (this.protDist = new Uint8Array(n));
+    d.fill(255);
+    const q = new Int32Array(n); let qh = 0, qt = 0;
+    const seed = (i: number) => { if (d[i] !== 0) { d[i] = 0; q[qt++] = i; } };
+    // a whole building (connected roof cells, capped) from one of its cells
+    const building = (i0: number) => {
+      if (tile[i0] !== BUILDING || d[i0] === 0) return;
+      const st = [i0]; seed(i0); let cnt = 0;
+      while (st.length && cnt++ < C.DEMO_MAX_CELLS) {
+        const i = st.pop()!, x = i % w, y = (i / w) | 0;
+        for (const j of [x > 0 ? i - 1 : -1, x < w - 1 ? i + 1 : -1, y > 0 ? i - w : -1, y < h - 1 ? i + w : -1])
+          if (j >= 0 && tile[j] === BUILDING && d[j] !== 0) { seed(j); st.push(j); }
+      }
+    };
+    for (let i = 0; i < n; i++) if (this.inZone[i]) seed(i);
+    if (this.zones.length) for (let i = 0; i < n; i++) {
+      if (!this.inZone[i]) continue;
+      const x = i % w, y = (i / w) | 0;
+      for (const j of [x > 0 ? i - 1 : -1, x < w - 1 ? i + 1 : -1, y > 0 ? i - w : -1, y < h - 1 ? i + w : -1])
+        if (j >= 0 && !this.inZone[j] && tile[j] === BUILDING) building(j);
+    }
+    for (const u of this.units) if ((u.hp === undefined || u.hp > 0) && u.extractT === undefined && this.onRoof(u)) building(this.idx(u.x | 0, u.y | 0));
+    for (const b of this.supports) if (tile[this.idx(b.x, b.y)] === BUILDING) building(this.idx(b.x, b.y));
+    const lim = Math.min(254, Math.ceil(C.NOFIRE_SCAN_M / C.CELL_M));
+    while (qh < qt) {
+      const i = q[qh++], nd = d[i] + 1;
+      if (nd > lim) continue;
+      const x = i % w, y = (i / w) | 0;
+      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+        const nx = x + dx, ny = y + dy;
+        if ((dx | dy) === 0 || nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
+        const j = ny * w + nx;
+        if (d[j] > nd) { d[j] = nd; q[qt++] = j; }
+      }
+    }
+    return d;
+  }
+  /** Band width in cells for a weapon: big air bombs get the wider one. */
+  static noFireCells(big = false) { return Math.ceil((big ? C.NOFIRE_BIG_M : C.NOFIRE_M) / C.CELL_M); }
+  /** True when a crater weapon may not land at (x, y). */
+  inNoFire(x: number, y: number, big = false) {
+    if (x < 0 || y < 0 || x >= this.w || y >= this.h) return false;
+    return this.protectDist()[this.idx(x | 0, y | 0)] <= Sim.noFireCells(big);
+  }
+  /** True when any part of a blast of radius r at (x, y) falls in the band. */
+  strikeBlocked(x: number, y: number, r: number, big = false) {
+    if (this.inNoFire(x, y, big)) return true;
+    for (let a = 0; a < 8; a++) if (this.inNoFire(x + Math.cos(a * 0.785) * r, y + Math.sin(a * 0.785) * r, big)) return true;
+    return false;
+  }
+  /** Why a called-in strike can't go at (x, y) [to (x2, y2)], or null. The nuke and MOAB are never refused here. */
+  strikeRefusal(k: C.AbilityKind, x: number, y: number, x2 = x, y2 = y): string | null {
+    const msg = "Too close to your people. Strikes can't land within %m m of the safe zone, a manned roof or a building beside the zone.";
+    const say = (big: boolean) => msg.replace("%m", String(big ? C.NOFIRE_BIG_M : C.NOFIRE_M));
+    if (k === "airstrike") {
+      const l = hyp(x2 - x, y2 - y), n = Math.max(2, Math.round(l / 5));
+      for (let i = 0; i <= n; i++) { const f = i / n; if (this.strikeBlocked(x + (x2 - x) * f, y + (y2 - y) * f, C.AIRSTRIKE_RADIUS, true)) return say(true); }
+      return null;
+    }
+    if (k === "tomahawk") return this.strikeBlocked(x, y, C.TOMAHAWK_RADIUS, true) ? say(true) : null;
+    if (k === "firebomb") return this.strikeBlocked(x, y, (this.tileAt(x | 0, y | 0) === PARK ? C.FIRE_RADIUS_PARK : C.FIRE_RADIUS) * 0.85) ? say(false) : null;
+    if (k === "cluster") return this.strikeBlocked(x, y, C.CLUSTER_RADIUS) ? say(false) : null;
+    if (k === "barrage") return this.strikeBlocked(x, y, C.BARRAGE_RADIUS + C.BARRAGE_SPLASH) ? say(false) : null;
+    return null;
+  }
+  /** 0.38: share of the safe zone's cells a nuke or MOAB at (x, y) would reach (0 = clear). For the warning. */
+  zoneHitShare(k: C.AbilityKind, x: number, y: number) {
+    const r = k === "nuke" ? C.NUKE_RADIUS : k === "moab" ? C.MOAB_RADIUS : 0;
+    if (!r || !this.zoneCells) return 0;
+    let hit = 0, all = 0;
+    const x0 = Math.max(0, Math.floor(x - r)), x1 = Math.min(this.w - 1, Math.ceil(x + r));
+    const y0 = Math.max(0, Math.floor(y - r)), y1 = Math.min(this.h - 1, Math.ceil(y + r));
+    for (let i = 0; i < this.inZone.length; i++) if (this.inZone[i]) all++;
+    for (let yy = y0; yy <= y1; yy++) for (let xx = x0; xx <= x1; xx++)
+      if (this.inZone[yy * this.w + xx] && hyp(xx + 0.5 - x, yy + 0.5 - y) <= r) hit++;
+    return all ? hit / all : 0;
   }
 
   /** True when a blast of radius r at (x,y) would not reach inside the zone. */

@@ -57,10 +57,10 @@ export interface DifficultyDef {
   runnerPct: number; // 0.30: share of infected that sprint (the rest shamble)
 }
 export const DIFFICULTY: Record<Difficulty, DifficultyDef> = {
-  easy:   { name: "Easy",   gapMin: 30, gapMax: 45, gapFloor: 14, sizeMul: 0.6, rampPerMin: 0.15, emptyHeat: 1,   gapHeat: 0.3, toughMul: 0.6, sitesMul: 0.5, xpMul: 0.75, spreadMin: 1, spreadMax: 2, spreadS: 15, runnerPct: 5 },
-  medium: { name: "Medium", gapMin: 20, gapMax: 35, gapFloor: 10, sizeMul: 1,   rampPerMin: 0.25, emptyHeat: 1.5, gapHeat: 0.4, toughMul: 1,   sitesMul: 1,   xpMul: 1, spreadMin: 2, spreadMax: 4, spreadS: 20, runnerPct: 15 },
-  hard:   { name: "Hard",   gapMin: 15, gapMax: 26, gapFloor: 7,  sizeMul: 1.4, rampPerMin: 0.4,  emptyHeat: 2,   gapHeat: 0.5, toughMul: 1.3, sitesMul: 1.5, xpMul: 1.25, spreadMin: 3, spreadMax: 6, spreadS: 25, runnerPct: 30 },
-  insane: { name: "Insane", gapMin: 10, gapMax: 18, gapFloor: 5,  sizeMul: 2,   rampPerMin: 0.6,  emptyHeat: 3,   gapHeat: 0.6, toughMul: 1.7, sitesMul: 2,   xpMul: 1.5, spreadMin: 5, spreadMax: 8, spreadS: 30, runnerPct: 50 },
+  easy:   { name: "Easy",   gapMin: 30, gapMax: 45, gapFloor: 14, sizeMul: 0.6, rampPerMin: 0.15, emptyHeat: 1,   gapHeat: 0.3, toughMul: 0.6, sitesMul: 0.5, xpMul: 0.75, spreadMin: 2, spreadMax: 3, spreadS: 40, runnerPct: 5 },
+  medium: { name: "Medium", gapMin: 20, gapMax: 35, gapFloor: 10, sizeMul: 1,   rampPerMin: 0.25, emptyHeat: 1.5, gapHeat: 0.4, toughMul: 1,   sitesMul: 1,   xpMul: 1, spreadMin: 4, spreadMax: 6, spreadS: 60, runnerPct: 15 },
+  hard:   { name: "Hard",   gapMin: 15, gapMax: 26, gapFloor: 7,  sizeMul: 1.4, rampPerMin: 0.4,  emptyHeat: 2,   gapHeat: 0.5, toughMul: 1.3, sitesMul: 1.5, xpMul: 1.25, spreadMin: 5, spreadMax: 9, spreadS: 80, runnerPct: 30 },
+  insane: { name: "Insane", gapMin: 10, gapMax: 18, gapFloor: 5,  sizeMul: 2,   rampPerMin: 0.6,  emptyHeat: 3,   gapHeat: 0.6, toughMul: 1.7, sitesMul: 2,   xpMul: 1.5, spreadMin: 8, spreadMax: 12, spreadS: 100, runnerPct: 50 },
 };
 
 // 0.20 round score and Keep fighting. Tuned often: keep them here.
@@ -220,6 +220,7 @@ export interface UnitSpec {
   cost: number;
   deploy: number; // seconds to set up when bought mid-battle (stronger units take longer)
   on: "building" | "ground" | "water" | "zone" | "any"; // zone: any cell inside a safe zone (air units take off from there)
+  roof?: boolean; // 0.38: a ground unit that can also set up on a rooftop (the Mortar)
   /** Mobile units think for themselves: speed in cells/s, hit points, how far they roam from where you put them. */
   crushSlow?: number; // 0.25: drives over infected and crushes them; speed kept while crushing (1 = no slowdown)
   clawMul?: number; // 0.25: share of claw damage that gets through its armor
@@ -255,7 +256,7 @@ export const UNITS: Record<UnitKind, UnitSpec> = {
     rate: 16, damage: 60, ammo: 1800, reloadsInZone: false, color: "#ff8a65",
   },
   mortar: {
-    name: "Mortar", hp: 800, foot: 2, cost: 1_500_000, deploy: 10, on: "ground", range: 48, roofBonus: 0,
+    name: "Mortar", hp: 800, foot: 2, cost: 1_500_000, deploy: 10, on: "ground", roof: true, range: 48, roofBonus: 0,
     rate: 0.25, damage: 400, ammo: 60, reloadsInZone: true, color: "#c792ea", splash: 2.2, minRange: 8, maxHits: 12,
   },
   howitzer: {
@@ -449,7 +450,7 @@ export function cityGunProfile(cityId?: string): CityGunProfile {
   return { country: "US", avgHousehold: 2.5, armedRate: CIV_ARMED_BASE, cityFactor: 1.0, mix: US_MIX, militiaFactor: 1.0 };
 }
 
-export const VERSION = "0.37.0";
+export const VERSION = "0.38.0";
 
 /** The campaign: fixed cities that unlock in order (a medal on one opens the next). */
 export interface CityDef { id: string; name: string; seed: number; budget: number; waveMul: number; sites: number; speedMul: number; blurb: string; real?: boolean; trial?: string; recipe?: CityRecipe; clearXp?: number; intro?: string[]; areas?: AreaDef[]; realArea?: string } // 0.36: areas = a real city's battle areas; realArea = this def is one area ("<city>/<area>") // 0.35: recipe = designed campaign map; clearXp = one-time bonus for the first medal; intro = lines shown the first time // trial: hardware this city lends you before you unlock it
@@ -619,6 +620,33 @@ export let APC_RELOAD_S = 6;
 export let DEPOTS = 5, DEPOT_RADIUS = 11;
 
 /** Terrain & structural damage from heavy ordnance and explosions. */
+// 0.38: no-fire band. Artillery, mortars and called-in strikes that crater can't land this close to the safe zone,
+// a building holding a rooftop unit or support, or a building touching the zone (protects rooftop positions and the
+// zone's own buildings). The nuke and the MOAB are the outside controller's call: allowed anywhere, with a warning.
+export let NOFIRE_M = 20; // m: artillery units, mortars, barrage, firebomb, cluster, AC-130 105 mm
+export let NOFIRE_BIG_M = 30; // m: airstrike bomb runs and Tomahawks (bigger blasts)
+export let NOFIRE_SCAN_M = 32; // m: how far out the band's distance field is worked out (>= the largest band)
+/** 0.38: armed guards on the wall walk. Not units: part of every standing wall and gate. Posts sit about every
+ *  GUARD_SPACING cells along the perimeter, one at each gate; they fire outward only, slower as their wall cell loses
+ *  HP, and a post dies for good when its wall or gate cell is destroyed. */
+export let GUARD_SPACING = 12; // cells (24 m) between posts on a wall
+export let GUARD_GATE_SPACING = 5; // cells: one post per gate opening
+export let GUARD_RANGE = 12; // cells (24 m) out from the wall
+export let GUARD_RATE = 1.2; // shots/s per post at full wall HP
+export let GUARD_DAMAGE = 100; // 5.56 mm, like a Garrison rifle
+export let GUARD_ACC = 0.55; // hit chance per shot
+export let GUARD_EYE_M = 4; // eye height on the wall walk (sees down the wall face, over the crowd)
+export let ZONE_GUARD_COST_MUL = 1.04; // the zone (walls and gates) costs 4% more for its guards
+/** 0.38: building demolition. Charges planted on a building while planning (or in battle), blown in battle. A
+ *  controlled demolition: the building drops into its footprint as rubble and spills a little into the streets
+ *  beside it. Rubble slows everyone; it clears a sight line or chokes a road. */
+export let DEMO_COST = 300_000;
+export let DEMO_MAX_CELLS = 500; // the most building cells one charge brings down (a block, not a district)
+export let DEMO_SPILL = 2; // cells of rubble pushed into the street around the footprint
+/** 0.38: hidden carriers. A few people were bitten before the warning; they turn at random during the first
+ *  CARRIER_WINDOW_S seconds of the outbreak, wherever they are, unless they already made it into a safe zone. */
+export let CARRIER_PCT = 0.3; // % of civilians
+export let CARRIER_WINDOW_S = 120;
 export let STRUCT_DMG_MORTAR = 45;
 export let STRUCT_DMG_BATTLESHIP = 85;
 export let STRUCT_DMG_HOWITZER = 110;
@@ -857,6 +885,22 @@ export const TUNABLE: Record<string, [() => number, (v: number) => void]> = {
   TRAIN_CAPACITY: [() => TRAIN_CAPACITY, v => { TRAIN_CAPACITY = v; }],
   TRAIN_BONUS_PER_CIV: [() => TRAIN_BONUS_PER_CIV, v => { TRAIN_BONUS_PER_CIV = v; }],
   CIVILIANS: [() => CIVILIANS, v => { CIVILIANS = v; }],
+  NOFIRE_M: [() => NOFIRE_M, v => { NOFIRE_M = v; }],
+  NOFIRE_BIG_M: [() => NOFIRE_BIG_M, v => { NOFIRE_BIG_M = v; }],
+  GUARD_SPACING: [() => GUARD_SPACING, v => { GUARD_SPACING = v; }],
+  GUARD_RANGE: [() => GUARD_RANGE, v => { GUARD_RANGE = v; }],
+  GUARD_RATE: [() => GUARD_RATE, v => { GUARD_RATE = v; }],
+  GUARD_DAMAGE: [() => GUARD_DAMAGE, v => { GUARD_DAMAGE = v; }],
+  GUARD_ACC: [() => GUARD_ACC, v => { GUARD_ACC = v; }],
+  ZONE_GUARD_COST_MUL: [() => ZONE_GUARD_COST_MUL, v => { ZONE_GUARD_COST_MUL = v; }],
+  DEMO_COST: [() => DEMO_COST, v => { DEMO_COST = v; }],
+  DEMO_SPILL: [() => DEMO_SPILL, v => { DEMO_SPILL = v; }],
+  CARRIER_PCT: [() => CARRIER_PCT, v => { CARRIER_PCT = v; }],
+  CARRIER_WINDOW_S: [() => CARRIER_WINDOW_S, v => { CARRIER_WINDOW_S = v; }],
+  NOFIRE_SCAN_M: [() => NOFIRE_SCAN_M, v => { NOFIRE_SCAN_M = v; }],
+  GUARD_GATE_SPACING: [() => GUARD_GATE_SPACING, v => { GUARD_GATE_SPACING = v; }],
+  GUARD_EYE_M: [() => GUARD_EYE_M, v => { GUARD_EYE_M = v; }],
+  DEMO_MAX_CELLS: [() => DEMO_MAX_CELLS, v => { DEMO_MAX_CELLS = v; }],
   OUTBREAK_SITES: [() => OUTBREAK_SITES, v => { OUTBREAK_SITES = v; }],
   INFECTED_PER_SITE: [() => INFECTED_PER_SITE, v => { INFECTED_PER_SITE = v; }],
   OUTBREAK_MIN_ZONE_DIST: [() => OUTBREAK_MIN_ZONE_DIST, v => { OUTBREAK_MIN_ZONE_DIST = v; }],

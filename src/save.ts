@@ -2,7 +2,7 @@
 // storage can be blocked or empty, and the game must still run.
 import type * as C from "./config";
 
-export interface Plan { poly: [number, number][]; zones?: [number, number][][]; walls: number[]; units: [C.UnitKind, number, number, C.TargetMode?][]; supports?: [C.SupportKind, number, number][]; abilities?: Partial<Record<C.AbilityKind, number>>; c4?: number[] }
+export interface Plan { poly: [number, number][]; zones?: [number, number][][]; walls: number[]; units: [C.UnitKind, number, number, C.TargetMode?][]; supports?: [C.SupportKind, number, number][]; abilities?: Partial<Record<C.AbilityKind, number>>; c4?: number[]; demo?: number[] }
 export interface Settings { fullscreen: boolean; edgeScroll: boolean; showRanges: boolean; devMode?: boolean; crowd?: number; vol?: { master: number; sfx: number; music: number }; quickbar?: (string | null)[]; difficulty?: C.Difficulty;
   autoUpdate?: boolean; checkUpdates?: boolean; updatePin?: string; speed?: number } // 0.26 updater: install by itself / look on start / stay on a picked older version
 export interface Best { pct: number; medal: string | null; mayhem?: number } // pct: round score 0..100 since 0.20 ("% evacuated" before)

@@ -200,7 +200,7 @@ function exportPlan(): Plan {
     poly: sim.zones[0] ?? [], zones: sim.zones.map(z => z.slice()), walls,
     units: sim.units.filter(u => u.kind !== "para" && u.kind !== "police" && u.kind !== "militia").map(u => [u.kind, u.x, u.y, u.mode ?? "near"]),
     supports: sim.supports.map(b => [b.kind, b.x, b.y]),
-    abilities: { ...sim.bought }, c4: [...sim.c4],
+    abilities: { ...sim.bought }, c4: [...sim.c4], demo: [...sim.demo],
   };
 }
 function planSummary() {
@@ -226,6 +226,7 @@ function importPlanInner(p: Plan) {
   for (const [k, x, y, m] of p.units) { if (!sim.place(k, x, y) && m) sim.units[sim.units.length - 1].mode = m; }
   for (const k of ABILITY_KINDS) for (let n = p.abilities?.[k] ?? 0; n > 0; n--) sim.buyAbility(k);
   for (const b of p.c4 ?? []) if (sim.bridges[b] && sim.remaining() >= C.C4_COST) sim.c4.add(b);
+  for (const i of p.demo ?? []) sim.toggleDemo(i % sim.w, (i / sim.w) | 0); // 0.38
 }
 function newSim(keepPlan: boolean, newSeed = false) {
   openPicker(null); clearTicker();
@@ -624,7 +625,7 @@ function setTool(t: Tool) {
     supply: C.SUPPORTS.supply.hint, command: C.SUPPORTS.command.hint,
     para: C.ABILITIES.para.hint, airstrike: C.ABILITIES.airstrike.hint, firebomb: C.ABILITIES.firebomb.hint,
     supply_drop: C.ABILITIES.supply_drop.hint,
-    c4: "Planning: click a bridge to plant a charge ($500), click again to remove it. Battle: click a charged bridge to blow it.",
+    c4: "Click a bridge or a building to plant a charge, click again to remove it. Battle: click a charged one to blow it. A building drops into rubble that slows everyone: block a road or clear a sight line.",
   };
   $("hint").textContent = hints[t]; $("hint").title = hints[t]; // one line in the footer; the full text on hover
 }
@@ -703,6 +704,15 @@ function click(cx: number, cy: number) {
     }
     case "c4": {
       const b = sim.bridgeAt(x, y);
+      if (b < 0 && sim.map.tile[sim.idx(x, y)] === BUILDING) { // 0.38: building demolition
+        const d = sim.demoAt(x, y);
+        const e = planning || d < 0 ? sim.toggleDemo(x, y) : sim.blowBuilding(x, y);
+        if (e) say(e);
+        else if (planning) say(d >= 0 ? "Charge removed." : "Demolition charge planted. Blow it during the battle.", 2500);
+        else if (d < 0) say("Charge planted. Click the building again to bring it down.", 3000);
+        else { say("Building down!"); log("info", "building-blown", { x, y, t: +sim.time.toFixed(1) }); }
+        break;
+      }
       const e = planning || (b >= 0 && !sim.c4.has(b)) ? sim.toggleC4(x, y) : sim.blowBridge(x, y);
       if (!e && !planning && b >= 0 && !sim.blown.has(b)) { say("Charge planted. Click the bridge again to blow it.", 3000); refreshUi(); break; }
       if (e) say(e); else if (!planning) { say("Bridge down!"); log("info", "bridge-blown", { x, y, t: +sim.time.toFixed(1) }); }
@@ -710,7 +720,13 @@ function click(cx: number, cy: number) {
     }
     case "airstrike": case "firebomb": case "para": case "supply_drop": case "barrage": case "moab": case "nuke": case "a10": case "cluster": case "tomahawk": case "gunship": {
       if (planning) { say("Buy abilities with their buttons now; aim them during the battle."); break; }
-      if (tool === "nuke" && (!nukeArm || Math.hypot(nukeArm[0] - cx, nukeArm[1] - cy) > 4)) { nukeArm = [cx, cy]; say("Nuclear strike: everything within 160 m dies, people in your zone too. Click the same spot again to confirm.", 6000); break; }
+      const zs = tool === "nuke" || tool === "moab" ? sim.zoneHitShare(tool, cx, cy) : 0; // 0.38: the outside controller can hit the zone, with a warning
+      if ((tool === "nuke" || (tool === "moab" && zs > 0)) && (!nukeArm || Math.hypot(nukeArm[0] - cx, nukeArm[1] - cy) > 4)) {
+        nukeArm = [cx, cy];
+        const hit = zs > 0 ? ` It reaches ${Math.max(1, Math.round(zs * 100))}% of your safe zone: walls, buildings and people inside will be hit.` : "";
+        say(tool === "nuke" ? `Nuclear strike: everything within 160 m dies, people in your zone too.${hit} Click the same spot again to confirm.` : `MOAB warning:${hit} Click the same spot again to confirm.`, 7000);
+        break;
+      }
       nukeArm = null;
       if (!sim.charges[tool]) { // 0.22: the tool stays armed; each click buys the next one, like placing units
         const be = sim.buyAbility(tool);
@@ -1097,6 +1113,17 @@ function draw(now: number) {
     ctx.strokeRect(cam.x + x0 * s, cam.y + y0 * s, (x1 - x0 + 1) * s, (y1 - y0 + 1) * s); ctx.setLineDash([]);
     if (s > 1.2) label("C4", cam.x + (x1 + 1) * s + 4, cam.y + ((y0 + y1) / 2) * s);
   }
+  // 0.38: building demolition charges
+  for (const c of sim.demo) {
+    if (sim.demoBlown.has(c)) continue;
+    let x0 = 1e9, y0 = 1e9, x1 = -1, y1 = -1;
+    for (const i of sim.demoCells(c)) { const x = i % sim.w, y = (i / sim.w) | 0; x0 = Math.min(x0, x); y0 = Math.min(y0, y); x1 = Math.max(x1, x); y1 = Math.max(y1, y); }
+    if (x1 < 0) continue;
+    ctx.strokeStyle = sim.phase === "battle" ? `rgba(255,214,0,${0.6 + 0.4 * Math.sin(now / 200)})` : "#ffd600";
+    ctx.lineWidth = 2; ctx.setLineDash([5, 3]);
+    ctx.strokeRect(cam.x + x0 * s, cam.y + y0 * s, (x1 - x0 + 1) * s, (y1 - y0 + 1) * s); ctx.setLineDash([]);
+    if (s > 1.2) label("DEMO", cam.x + (x1 + 1) * s + 4, cam.y + ((y0 + y1) / 2) * s);
+  }
   // 0.35: tutorial highlight on the map
   const th = tut && tut.on ? tut.steps[tut.i].highlight : undefined;
   if (th?.rect) {
@@ -1119,22 +1146,6 @@ function draw(now: number) {
         else ctx.rect(cam.x + ax * s - sz / 2, cam.y + ay * s - sz / 2, sz, sz);
       }
       ctx.fill();
-    }
-  }
-  // 0.37: zoomed-in weapon indicators on armed civilians (muzzle flashes & tracers are drawn in drawShots)
-  if (s >= 4.5) {
-    ctx.lineWidth = Math.max(1, s * 0.08);
-    for (let k = 0; k < sim.civN; k++) {
-      if ((sim.state[k] !== CIV && sim.state[k] !== SAFE_CIV) || !sim.civWep[k] || !sim.civAmmo[k]) continue;
-      const ax = sim.ax[k], ay = sim.ay[k];
-      if (ax < x0 || ay < y0 || ax > x1 || ay > y1) continue;
-      const cx2 = cam.x + ax * s, cy2 = cam.y + ay * s;
-      const wep = C.CIV_WEAPONS[sim.civWep[k] as C.CivWeaponId];
-      const firing = sim.time - sim.civShotT[k] < 0.25;
-      ctx.strokeStyle = firing ? "#fff4c2" : sim.civMilitia[k] ? "#aed581" : wep.color;
-      ctx.beginPath();
-      ctx.arc(cx2, cy2, dot * 0.7 + 1, 0, 6.2832);
-      ctx.stroke();
     }
   }
 
@@ -1203,7 +1214,7 @@ function draw(now: number) {
     ctx.beginPath(); ctx.moveTo(ux, uy); ctx.lineTo(px, py); ctx.stroke(); ctx.setLineDash([]);
     if (u === orderSel) { ctx.beginPath(); ctx.arc(ux, uy, Math.max(8, s * 2), 0, 7); ctx.stroke(); }
   }
-  if (nukeArm && tool === "nuke") { ctx.strokeStyle = "rgba(118,255,3,0.8)"; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(cam.x + nukeArm[0] * s, cam.y + nukeArm[1] * s, C.NUKE_RADIUS * s, 0, 7); ctx.stroke(); }
+  if (nukeArm && (tool === "nuke" || tool === "moab")) { ctx.strokeStyle = "rgba(118,255,3,0.8)"; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(cam.x + nukeArm[0] * s, cam.y + nukeArm[1] * s, (tool === "nuke" ? C.NUKE_RADIUS : C.MOAB_RADIUS) * s, 0, 7); ctx.stroke(); }
 
   // Arrow at the screen edge pointing to where the newest horde entered.
   // Horde routes: where the next one comes in (amber, counting down) and where the last one came in (red).
@@ -1367,12 +1378,24 @@ function draw(now: number) {
 
   // Aiming an ability.
   if (hover && sim.phase === "battle" && isAbility(tool)) {
-    const [hx, hy] = hover, col = C.ABILITIES[tool].color;
-    ctx.strokeStyle = col; ctx.lineWidth = 2; ctx.setLineDash([6, 4]);
+    const [hx, hy] = hover;
+    // 0.38: the no-fire band turns a precise strike red; the nuke and MOAB warn when they would reach the zone
+    let ex = hx, ey = hy;
     if ((tool === "airstrike" || tool === "a10") && strikeStart) {
-      let [ex, ey] = [hx, hy];
       const dx = ex - strikeStart[0], dy = ey - strikeStart[1], l = Math.hypot(dx, dy);
       if (l > C.AIRSTRIKE_LEN) { ex = strikeStart[0] + dx / l * C.AIRSTRIKE_LEN; ey = strikeStart[1] + dy / l * C.AIRSTRIKE_LEN; }
+    }
+    const refused = strikeStart ? sim.strikeRefusal(tool, strikeStart[0], strikeStart[1], ex, ey) : sim.strikeRefusal(tool, hx, hy);
+    const zoneShare = tool === "nuke" || tool === "moab" ? sim.zoneHitShare(tool, hx, hy) : 0;
+    const col = refused || zoneShare > 0 ? "#ff4444" : C.ABILITIES[tool].color;
+    ctx.strokeStyle = col; ctx.lineWidth = 2; ctx.setLineDash([6, 4]);
+    if (refused) label(`NO-FIRE: within ${tool === "airstrike" || tool === "tomahawk" ? C.NOFIRE_BIG_M : C.NOFIRE_M} m of your people`, cam.x + hx * s + 12, cam.y + hy * s + 18);
+    if (zoneShare > 0) {
+      const R = tool === "nuke" ? C.NUKE_RADIUS : C.MOAB_RADIUS;
+      ctx.fillStyle = "rgba(255,60,60,0.14)"; ctx.beginPath(); ctx.arc(cam.x + hx * s, cam.y + hy * s, R * s, 0, 7); ctx.fill();
+      label(`WARNING: ${tool === "nuke" ? "NUKE" : "MOAB"} reaches ${Math.max(1, Math.round(zoneShare * 100))}% of your safe zone`, cam.x + hx * s + 12, cam.y + hy * s + 18);
+    }
+    if ((tool === "airstrike" || tool === "a10") && strikeStart) {
       ctx.globalAlpha = 0.3; ctx.lineWidth = C.AIRSTRIKE_RADIUS * 2 * s; ctx.setLineDash([]); ctx.lineCap = "round";
       ctx.beginPath(); ctx.moveTo(cam.x + strikeStart[0] * s, cam.y + strikeStart[1] * s); ctx.lineTo(cam.x + ex * s, cam.y + ey * s); ctx.stroke();
       ctx.globalAlpha = 1; ctx.lineCap = "butt";
@@ -1648,7 +1671,7 @@ function toolInfoHtml(t: string): { html: string; accent: string } | null {
     const dps = Math.round(spec.damage * spec.rate);
     const activeCount = sim.units.filter(u => u.kind === k).length;
     const classKills = sim.units.filter(u => u.kind === k).reduce((a, u) => a + u.kills, 0);
-    const placeStr = spec.on === "building" ? "Building Rooftop" : spec.on === "water" ? "River / Canal" : "Street / Park";
+    const placeStr = spec.on === "building" ? "Building Rooftop" : spec.on === "water" ? "River / Canal" : spec.roof ? "Street / Park / Rooftop" : "Street / Park";
     const rangeStr = `${spec.minRange ? `${spec.minRange * C.CELL_M}-` : ""}${spec.range * C.CELL_M} m${spec.roofBonus ? ` (+${spec.roofBonus * C.CELL_M}m/flr)` : ""}`;
     const ammoStr = spec.ammo === Infinity ? "Unlimited" : `${spec.ammo.toLocaleString()} rds${spec.reloadsInZone ? " (∞ in Zone)" : ""}`;
     const spUrl = SPRITE_URL[k];
@@ -1736,7 +1759,7 @@ function toolInfoHtml(t: string): { html: string; accent: string } | null {
     const meta: Record<string, [string, string, string, string, SpriteKey]> = {
       zone: ["Safe Zone Perimeter", `${C.money(C.ZONE_BASE_COST)} base`, "Engineering · Quarantine Perimeter", "Click polygon corners around city blocks, then click the first corner (or press Enter) to close. Road crossings become guarded Gates; interior buildings can host Support Facilities.", "zone"],
       gate: ["Gate / Wall Toggle [G]", `${sim.gateMaxHp()} / ${sim.wallMaxHp()} HP`, "Fortification · Access Control", "Gates (blue, 3,000 HP) let fleeing civilians enter while blocking infected. Walls (white, 8,000 HP) block everyone and withstand 2.6x more punishment. Close gates once civilians are inside.", "gate"],
-      c4: ["Bridge Demolition Charge", `${C.money(C.C4_COST)}`, "Combat Engineering · River Denial", "Plant C4 charges on river bridges during planning or battle, then detonate during battle to drop the span into the river. Blocks standard infected (Swimmer mutants can still swim across).", "c4"],
+      c4: ["Bridge Demolition Charge", `${C.money(C.C4_COST)}`, "Combat Engineering · River Denial", "Plant charges on river bridges or buildings during planning or battle, then detonate during battle. A bridge drops into the river (Swimmer mutants still swim across). A building comes down in a controlled demolition: rubble fills its footprint and spills into the street, slowing everyone. Block a road or clear a sight line. Not on safe zone buildings or roofs you hold.", "c4"],
       depot: ["Fuel Depot Detonation", `${sim.depots.filter(d => !d.used).length} remaining`, "Environmental Hazard · Massive Blast", "Pre-existing industrial fuel tanks (orange triangles). Click during battle for a 22 m explosion (5,000 dmg) that levels adjacent buildings into rubble and ignites fires.", "depot"],
       remove: ["Remove / Helicopter Extraction", "100% Refund", "Logistics · Redeployment", "In Planning, removes a unit or support building immediately for a full refund. In Battle, dispatches an extraction helicopter (1.5x deploy time) to pull the unit out and refund its cost.", "remove"],
       order: ["Strike Order", "Free", "Command & Control", "Click an APC, police or militia squad, paratroopers or a boat, then click a destination. The unit moves out, clears infected around that spot and holds it: guard an evac route or a road a horde comes in on.", "order"],
