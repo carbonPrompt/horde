@@ -12,6 +12,12 @@ export function roundParts(i: { pct: number; emptiedAfterS: number | null; intac
   const kills = i.kills + i.infAlive > 0 ? (100 * i.kills) / (i.kills + i.infAlive) : 0;
   return { saved: clamp(i.pct, 0, 100), speed, city: clamp(i.intact, 0, 100), kills };
 }
+/** 0.42: share saved, 0..100. Refusers count as a small loss: one still at home at the round's end as REFUSED_W
+ *  of a person, one who died at home as REFUSER_LOST_W; everyone else counts in full. */
+export function savedPct(saved: number, civN: number, refusedAlive: number, refusedLost: number): number {
+  const d = civN - refusedAlive * (1 - C.REFUSED_W) - refusedLost * (1 - C.REFUSER_LOST_W);
+  return d > 0 ? clamp((100 * saved) / d, 0, 100) : 0;
+}
 /** Weighted 0..100 (weights normalized by their sum, so they need not add up to 1). */
 export function roundScore(p: RoundParts): number {
   const w = [C.SCORE_W_SAVED, C.SCORE_W_SPEED, C.SCORE_W_CITY, C.SCORE_W_KILLS];

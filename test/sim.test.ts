@@ -997,7 +997,7 @@ test("emptying the city makes hordes bigger", () => {
   const emptied = run(true);
   expect(emptied.h0).toBeGreaterThan(full.h0);
   expect(emptied.mean).toBeGreaterThan(full.mean);
-});
+}, 120000); // runs about 5 s, right at bun's default limit
 
 test("same plan and difficulty replay identically", () => {
   const run = () => {

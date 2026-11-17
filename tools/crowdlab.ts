@@ -182,14 +182,17 @@ function perf() {
     const rc = process.env.CL_CITY ? C.CITIES.find(c => c.id === process.env.CL_CITY)?.recipe : undefined;
     const s = new Sim(7, { civilians: n, budget: 500_000_000, recipe: rc } as any);
     s.dev.waves = false;
+    if (process.env.CL_DAYLIFE) s.setStartTime(+process.env.CL_DAYLIFE); // 0.40: CL_DAYLIFE=<minutes>: daily life at that clock time
     const cx = rc ? rc.stands[0].x : s.w / 2, cy = rc ? rc.stands[0].y : s.h / 2;
     let err: string | null = "x";
     for (let r = 20; r < 60 && err; r += 4) err = s.setZone([[cx - r, cy - r], [cx + r, cy - r], [cx + r, cy + r], [cx - r, cy + r]]);
     s.startBattle();
+    const tw = performance.now();
     for (let t = 0; t < 40; t++) s.step();
+    const warm = (performance.now() - tw) / 40;
     const t0 = performance.now();
     for (let t = 0; t < 100; t++) s.step();
-    console.log(`perf ${n}: ${((performance.now() - t0) / 100).toFixed(2)} ms/tick${err ? " (no zone)" : ""}`);
+    console.log(`perf ${n}: ${((performance.now() - t0) / 100).toFixed(2)} ms/tick${err ? " (no zone)" : ""} (first 40 ticks ${warm.toFixed(2)})`);
   }
 }
 

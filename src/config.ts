@@ -97,6 +97,35 @@ export let AGENT_RESERVE = 25000; // slots for infected beyond the civilians
 
 export let CIV_SPEED = 0.67; // cells per second: 0.30: a real walk, 1.34 m/s (was 2.8, a sprint)
 export let CIV_SPRINT = 2.5; // 0.30: cells per second for a panicked person running flat out (5 m/s)
+export let CLOCK_MUL = 30; // 0.39: the clock runs this many times real life at normal speed
+export let PEOPLE_EV_CAP = 1_500_000; // 0.39: story log events kept for the whole round (recording stops past this)
+export let DISTRICT_CELLS = 64; // 0.40: walking to your own door: one flow field per district this size (cells)
+export let DISTRICT_FIELDS_MAX = 96; // 0.40: district fields kept at once (least recently used go; 1 byte per map cell each)
+
+export let HOME_FIELDS_MAX = 8192; // 0.40: doorstep fields kept at once (625 bytes each)
+export let DEPART_SPREAD_S = 20; // 0.40: people on a family errand set off over this many seconds after the alert (finishing up, grabbing keys)
+export let GATHER_WAIT_S = 300; // 0.40: longest a family waits at home or in the zone while someone is still on the way (battle seconds)
+export let ABANDON_FEAR = 0.85; // 0.40: this scared, anyone on a family errand drops it and runs
+export let HOME_REACHED_CELLS = 3; // 0.40: this close to the doorstep counts as home
+// 0.42: refusers (design: 2 to 4% of households, more among the elderly, small score cost, some bluff, units talk them out)
+export let REFUSE_P = 0.02; // chance a household refuses to leave
+export let REFUSE_P_ELDER = 0.07; // ... when anyone in it is 65 or older
+export let REFUSE_BLUFF_P = 0.5; // share of refusing households that are bluffing (they break once infected come close)
+export let REFUSE_BREAK_PER_S = 0.1; // resolve lost per second at full infected stimulus (bluffers start at 0.15 to 0.4, die-hards 2 to 3)
+export let TEEN_SOLO_P = 0.15; // 0.42: chance a teen heads for the zone alone instead of with the family
+export let GUARD_FAMILY_R = 3; // 0.42: cells: an armed adult shoots first at infected this close to their family
+// 0.43: loved ones turning (design: rare enough to read as a story beat)
+export let GRIEF_SIGHT_R = 12; // cells: a family member this close, with a clear view, sees someone turn
+export let GRIEF_P = 0.3; // chance a witness reacts; of those: freeze, go back, refuse
+export let GRIEF_FREEZE_SHARE = 0.6;
+export let GRIEF_GO_BACK_SHARE = 0.25; // (the rest refuse to leave)
+export let GRIEF_FREEZE_S_MIN = 3, GRIEF_FREEZE_S_MAX = 8; // seconds frozen in shock
+export let GO_BACK_S = 10; // seconds someone walks back toward the one who turned before running for it
+export let PERSUADE_R = 4; // cells: a unit this close talks a refuser out...
+export let PERSUADE_S = 20; // ...after this many seconds of game time
+export let REFUSED_W = 0.1; // a refuser still at home at the round's end counts as this much of a loss
+export let REFUSER_LOST_W = 0.25; // a refuser who died at home counts as this much of a loss
+export let CLASS_READY_S = 10; // 0.41 (Insane): seconds the teachers take to line a class up before it walks to the zone
 export let WALK_SPREAD = 0.13; // 0.30: people's own walking pace varies by about this fraction
 // 0.30 crowd model (meters and seconds unless noted). Social force (Helbing) + time-to-collision power law
 // (Karamouzas 2014) + Weidmann speed-density curve.
@@ -450,7 +479,7 @@ export function cityGunProfile(cityId?: string): CityGunProfile {
   return { country: "US", avgHousehold: 2.5, armedRate: CIV_ARMED_BASE, cityFactor: 1.0, mix: US_MIX, militiaFactor: 1.0 };
 }
 
-export const VERSION = "0.38.0";
+export const VERSION = "0.43.0";
 
 /** The campaign: fixed cities that unlock in order (a medal on one opens the next). */
 export interface CityDef { id: string; name: string; seed: number; budget: number; waveMul: number; sites: number; speedMul: number; blurb: string; real?: boolean; trial?: string; recipe?: CityRecipe; clearXp?: number; intro?: string[]; areas?: AreaDef[]; realArea?: string } // 0.36: areas = a real city's battle areas; realArea = this def is one area ("<city>/<area>") // 0.35: recipe = designed campaign map; clearXp = one-time bonus for the first medal; intro = lines shown the first time // trial: hardware this city lends you before you unlock it
@@ -885,22 +914,6 @@ export const TUNABLE: Record<string, [() => number, (v: number) => void]> = {
   TRAIN_CAPACITY: [() => TRAIN_CAPACITY, v => { TRAIN_CAPACITY = v; }],
   TRAIN_BONUS_PER_CIV: [() => TRAIN_BONUS_PER_CIV, v => { TRAIN_BONUS_PER_CIV = v; }],
   CIVILIANS: [() => CIVILIANS, v => { CIVILIANS = v; }],
-  NOFIRE_M: [() => NOFIRE_M, v => { NOFIRE_M = v; }],
-  NOFIRE_BIG_M: [() => NOFIRE_BIG_M, v => { NOFIRE_BIG_M = v; }],
-  GUARD_SPACING: [() => GUARD_SPACING, v => { GUARD_SPACING = v; }],
-  GUARD_RANGE: [() => GUARD_RANGE, v => { GUARD_RANGE = v; }],
-  GUARD_RATE: [() => GUARD_RATE, v => { GUARD_RATE = v; }],
-  GUARD_DAMAGE: [() => GUARD_DAMAGE, v => { GUARD_DAMAGE = v; }],
-  GUARD_ACC: [() => GUARD_ACC, v => { GUARD_ACC = v; }],
-  ZONE_GUARD_COST_MUL: [() => ZONE_GUARD_COST_MUL, v => { ZONE_GUARD_COST_MUL = v; }],
-  DEMO_COST: [() => DEMO_COST, v => { DEMO_COST = v; }],
-  DEMO_SPILL: [() => DEMO_SPILL, v => { DEMO_SPILL = v; }],
-  CARRIER_PCT: [() => CARRIER_PCT, v => { CARRIER_PCT = v; }],
-  CARRIER_WINDOW_S: [() => CARRIER_WINDOW_S, v => { CARRIER_WINDOW_S = v; }],
-  NOFIRE_SCAN_M: [() => NOFIRE_SCAN_M, v => { NOFIRE_SCAN_M = v; }],
-  GUARD_GATE_SPACING: [() => GUARD_GATE_SPACING, v => { GUARD_GATE_SPACING = v; }],
-  GUARD_EYE_M: [() => GUARD_EYE_M, v => { GUARD_EYE_M = v; }],
-  DEMO_MAX_CELLS: [() => DEMO_MAX_CELLS, v => { DEMO_MAX_CELLS = v; }],
   OUTBREAK_SITES: [() => OUTBREAK_SITES, v => { OUTBREAK_SITES = v; }],
   INFECTED_PER_SITE: [() => INFECTED_PER_SITE, v => { INFECTED_PER_SITE = v; }],
   OUTBREAK_MIN_ZONE_DIST: [() => OUTBREAK_MIN_ZONE_DIST, v => { OUTBREAK_MIN_ZONE_DIST = v; }],
@@ -944,6 +957,33 @@ export const TUNABLE: Record<string, [() => number, (v: number) => void]> = {
   AGENT_RESERVE: [() => AGENT_RESERVE, v => { AGENT_RESERVE = v; }],
   CIV_SPEED: [() => CIV_SPEED, v => { CIV_SPEED = v; }],
   CIV_SPRINT: [() => CIV_SPRINT, v => { CIV_SPRINT = v; }],
+  CLOCK_MUL: [() => CLOCK_MUL, v => { CLOCK_MUL = v; }],
+  PEOPLE_EV_CAP: [() => PEOPLE_EV_CAP, v => { PEOPLE_EV_CAP = v; }],
+  DISTRICT_CELLS: [() => DISTRICT_CELLS, v => { DISTRICT_CELLS = v; }],
+  DISTRICT_FIELDS_MAX: [() => DISTRICT_FIELDS_MAX, v => { DISTRICT_FIELDS_MAX = v; }],
+  HOME_FIELDS_MAX: [() => HOME_FIELDS_MAX, v => { HOME_FIELDS_MAX = v; }],
+  DEPART_SPREAD_S: [() => DEPART_SPREAD_S, v => { DEPART_SPREAD_S = v; }],
+  GATHER_WAIT_S: [() => GATHER_WAIT_S, v => { GATHER_WAIT_S = v; }],
+  ABANDON_FEAR: [() => ABANDON_FEAR, v => { ABANDON_FEAR = v; }],
+  HOME_REACHED_CELLS: [() => HOME_REACHED_CELLS, v => { HOME_REACHED_CELLS = v; }],
+  REFUSE_P: [() => REFUSE_P, v => { REFUSE_P = v; }],
+  REFUSE_P_ELDER: [() => REFUSE_P_ELDER, v => { REFUSE_P_ELDER = v; }],
+  REFUSE_BLUFF_P: [() => REFUSE_BLUFF_P, v => { REFUSE_BLUFF_P = v; }],
+  REFUSE_BREAK_PER_S: [() => REFUSE_BREAK_PER_S, v => { REFUSE_BREAK_PER_S = v; }],
+  TEEN_SOLO_P: [() => TEEN_SOLO_P, v => { TEEN_SOLO_P = v; }],
+  GUARD_FAMILY_R: [() => GUARD_FAMILY_R, v => { GUARD_FAMILY_R = v; }],
+  GRIEF_SIGHT_R: [() => GRIEF_SIGHT_R, v => { GRIEF_SIGHT_R = v; }],
+  GRIEF_P: [() => GRIEF_P, v => { GRIEF_P = v; }],
+  GRIEF_FREEZE_SHARE: [() => GRIEF_FREEZE_SHARE, v => { GRIEF_FREEZE_SHARE = v; }],
+  GRIEF_GO_BACK_SHARE: [() => GRIEF_GO_BACK_SHARE, v => { GRIEF_GO_BACK_SHARE = v; }],
+  GRIEF_FREEZE_S_MIN: [() => GRIEF_FREEZE_S_MIN, v => { GRIEF_FREEZE_S_MIN = v; }],
+  GRIEF_FREEZE_S_MAX: [() => GRIEF_FREEZE_S_MAX, v => { GRIEF_FREEZE_S_MAX = v; }],
+  GO_BACK_S: [() => GO_BACK_S, v => { GO_BACK_S = v; }],
+  PERSUADE_R: [() => PERSUADE_R, v => { PERSUADE_R = v; }],
+  PERSUADE_S: [() => PERSUADE_S, v => { PERSUADE_S = v; }],
+  REFUSED_W: [() => REFUSED_W, v => { REFUSED_W = v; }],
+  REFUSER_LOST_W: [() => REFUSER_LOST_W, v => { REFUSER_LOST_W = v; }],
+  CLASS_READY_S: [() => CLASS_READY_S, v => { CLASS_READY_S = v; }],
   WALK_SPREAD: [() => WALK_SPREAD, v => { WALK_SPREAD = v; }],
   CROWD_TAU: [() => CROWD_TAU, v => { CROWD_TAU = v; }],
   PANIC_TAU: [() => PANIC_TAU, v => { PANIC_TAU = v; }],
@@ -1109,6 +1149,22 @@ export const TUNABLE: Record<string, [() => number, (v: number) => void]> = {
   APC_RELOAD_S: [() => APC_RELOAD_S, v => { APC_RELOAD_S = v; }],
   DEPOTS: [() => DEPOTS, v => { DEPOTS = v; }],
   DEPOT_RADIUS: [() => DEPOT_RADIUS, v => { DEPOT_RADIUS = v; }],
+  NOFIRE_M: [() => NOFIRE_M, v => { NOFIRE_M = v; }],
+  NOFIRE_BIG_M: [() => NOFIRE_BIG_M, v => { NOFIRE_BIG_M = v; }],
+  NOFIRE_SCAN_M: [() => NOFIRE_SCAN_M, v => { NOFIRE_SCAN_M = v; }],
+  GUARD_SPACING: [() => GUARD_SPACING, v => { GUARD_SPACING = v; }],
+  GUARD_GATE_SPACING: [() => GUARD_GATE_SPACING, v => { GUARD_GATE_SPACING = v; }],
+  GUARD_RANGE: [() => GUARD_RANGE, v => { GUARD_RANGE = v; }],
+  GUARD_RATE: [() => GUARD_RATE, v => { GUARD_RATE = v; }],
+  GUARD_DAMAGE: [() => GUARD_DAMAGE, v => { GUARD_DAMAGE = v; }],
+  GUARD_ACC: [() => GUARD_ACC, v => { GUARD_ACC = v; }],
+  GUARD_EYE_M: [() => GUARD_EYE_M, v => { GUARD_EYE_M = v; }],
+  ZONE_GUARD_COST_MUL: [() => ZONE_GUARD_COST_MUL, v => { ZONE_GUARD_COST_MUL = v; }],
+  DEMO_COST: [() => DEMO_COST, v => { DEMO_COST = v; }],
+  DEMO_MAX_CELLS: [() => DEMO_MAX_CELLS, v => { DEMO_MAX_CELLS = v; }],
+  DEMO_SPILL: [() => DEMO_SPILL, v => { DEMO_SPILL = v; }],
+  CARRIER_PCT: [() => CARRIER_PCT, v => { CARRIER_PCT = v; }],
+  CARRIER_WINDOW_S: [() => CARRIER_WINDOW_S, v => { CARRIER_WINDOW_S = v; }],
   STRUCT_DMG_MORTAR: [() => STRUCT_DMG_MORTAR, v => { STRUCT_DMG_MORTAR = v; }],
   STRUCT_DMG_BATTLESHIP: [() => STRUCT_DMG_BATTLESHIP, v => { STRUCT_DMG_BATTLESHIP = v; }],
   STRUCT_DMG_HOWITZER: [() => STRUCT_DMG_HOWITZER, v => { STRUCT_DMG_HOWITZER = v; }],

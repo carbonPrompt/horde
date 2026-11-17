@@ -302,3 +302,159 @@ test("picking an area gives its card", () => {
   expect(card.best).toContain("Silver");
   expect(areaCardInfo(k, {}, "medium").best).toBe("Not played");
 });
+
+import { clockSpan } from "../src/people";
+
+test("0.39: the top bar clock shows time of day, battle time on hover", () => {
+  expect(clockSpan(450, 120)).toBe(`<span class="clock" title="Battle time 2:00">8:30 AM</span>`);
+  expect(clockSpan(1380, 0)).toBe(`<span class="clock" title="Battle time 0:00">11:00 PM</span>`);
+});
+
+import { needsTimePick } from "../src/people";
+
+test("0.39: the time picker shows for a normal city, never in the tutorial or attract mode", () => {
+  expect(needsTimePick(false, false)).toBe(true);
+  expect(needsTimePick(true, false)).toBe(false);
+  expect(needsTimePick(false, true)).toBe(false);
+});
+
+test("0.39: save clean keeps a valid plan start time and drops junk", () => {
+  const base = { settings: { fullscreen: true, edgeScroll: false, showRanges: false }, best: {} };
+  const plan = (start: unknown) => ({ poly: [], walls: [], units: [], start });
+  const c = clean({ ...base, plans: { "fairhaven": plan(450) as any, "pike-landing": plan("noon") as any, "a": plan(99999) as any } });
+  expect(c.plans["fairhaven"].start).toBe(450);
+  expect(c.plans["pike-landing"]?.start).toBeUndefined();
+  expect(c.plans["a"]?.start).toBeUndefined();
+});
+
+// ---------- 0.39: the person window ----------
+import { Sim as PSim, DEAD as PDEAD } from "../src/sim";
+import { personHtml } from "../src/personui";
+import { personOf as pOf, EV_SAFE as PEV_SAFE, FATE_EVAC as PFATE_EVAC } from "../src/people";
+
+function headOfFamily(s: PSim): number { for (let k = 0; k < s.civN; k++) if (s.famLead[k] === k && s.famSize[k] >= 3) return k; return -1; }
+
+test("0.39: person window shows name, age, family and a Follow button", () => {
+  const s = new PSim(42, { civilians: 500 });
+  const k = headOfFamily(s); expect(k).toBeGreaterThanOrEqual(0);
+  const p = pOf(s.seed, k, s.famLead[k], s.famSize[k]);
+  const html = personHtml(s, k);
+  expect(html).toContain(`${p.first} ${p.last}`);
+  expect(html).toContain("Age");
+  expect(html).toContain(pOf(s.seed, k + 1, k, s.famSize[k]).first);
+  expect(html).toContain('data-act="follow"');
+  expect(html).toContain(`data-k="${k + 1}"`);
+  expect(html).not.toMatch(/—/);
+});
+
+test("0.39: person window story shows events with clock times", () => {
+  const s = new PSim(42, { civilians: 500 });
+  s.startMin = 450;
+  s.note(10, PEV_SAFE, 1);
+  const html = personHtml(s, 10);
+  expect(html).toContain("reached Zone 2");
+  expect(html).toContain("7:30 AM");
+});
+
+test("0.39: person window states: flown out, dead", () => {
+  const s = new PSim(42, { civilians: 500 });
+  s.note(20, 3); s.state[20] = PDEAD; // EV_EVAC
+  expect(personHtml(s, 20)).toContain("Flown out");
+  s.state[21] = PDEAD;
+  expect(personHtml(s, 21)).toContain("Dead");
+  expect(s.fate[20]).toBe(PFATE_EVAC);
+});
+
+test("0.39: a household cut short at the end of the population renders", () => {
+  const s = new PSim(42, { civilians: 500 });
+  const lead = s.civN - 2; s.famLead[lead] = lead; s.famLead[lead + 1] = lead; s.famSize[lead] = 5; s.famSize[lead + 1] = 5;
+  expect(() => personHtml(s, lead)).not.toThrow();
+  expect(() => personHtml(s, -1)).not.toThrow();
+});
+
+import { followEndLine } from "../src/personui";
+
+test("0.39: follow-end ticker lines name the person and what happened", () => {
+  const s = new PSim(42, { civilians: 500 });
+  const p = pOf(s.seed, 30, s.famLead[30], s.famSize[30]);
+  s.note(30, 3); s.state[30] = PDEAD;
+  expect(followEndLine(s, 30)).toBe(`${p.first} ${p.last}, ${p.age}, was flown out.`);
+  s.note(31, 4);
+  expect(followEndLine(s, 31)).toContain("was bitten and turned.");
+  s.state[32] = PDEAD;
+  expect(followEndLine(s, 32)).toContain("died.");
+});
+
+test("review: a household member a cell off the doorstep started at home", () => {
+  const s = new PSim(42, { civilians: 500 });
+  const k = 40, home = s.homeCell[k];
+  s.startCell[k] = home + 1; // the cell next door
+  expect(personHtml(s, k)).toContain("at home when the sirens went off");
+  s.startCell[k] = home + 5 * s.w;
+  expect(personHtml(s, k)).not.toContain("at home when");
+});
+
+import { followEndLine as fel2 } from "../src/personui";
+test("review: a train rider's follow ends with the train line", () => {
+  const s = new PSim(42, { civilians: 500 });
+  s.note(50, 3, 1); s.state[50] = PDEAD;
+  expect(fel2(s, 50)).toContain("left on an evacuation train");
+  expect(personHtml(s, 50)).toContain("Left on a train");
+});
+
+// ---------- 0.40: the window shows where people were and what they are doing ----------
+import * as UC from "../src/config";
+import { PL_SCHOOL as UPL_SCHOOL } from "../src/people";
+
+test("0.41: How to Play is current (J for heights, people and Follow, the no-fire band, the time pick)", async () => {
+  const html = await Bun.file("index.html").text();
+  const a = html.indexOf('id="s-howto"'), b = html.indexOf("data-back", a);
+  const page = html.slice(a, b);
+  expect(page).not.toContain("press V");
+  expect(page).toContain("press J");
+  expect(page).toContain("Follow");
+  expect(page).toContain("NO-FIRE");
+  expect(page).toContain("Pick a time");
+  expect(page).not.toMatch(/—/);
+});
+
+test("0.41: a kid at school reads right, and their walk with the class shows in the story", () => {
+  const c = UC.CITIES[1];
+  const s = new PSim(c.seed, { recipe: c.recipe, civilians: 4000, difficulty: "insane" });
+  s.setStartTime(600);
+  let kid = -1; for (let k = 0; k < s.civN && kid < 0; k++) if (s.dayPlace[k] === UPL_SCHOOL) kid = k;
+  expect(personHtml(s, kid)).toContain("at school when the sirens went off");
+  s.startBattle();
+  expect(personHtml(s, kid)).toContain("walking to the zone with the class");
+}, 120000);
+
+// ---------- 0.42: refusers in the UI ----------
+import { planWords as uPlanWords, personState as uPersonState } from "../src/personui";
+import { endStatsLines } from "../src/personui";
+test("0.42: How to Play explains refusers and age", async () => {
+  const html = await Bun.file("index.html").text();
+  const a = html.indexOf('id="s-howto"'), b = html.indexOf("data-back", a);
+  const page = html.slice(a, b);
+  expect(page).toContain("refuse to leave");
+  expect(page).toContain("talk them out");
+  expect(page).toContain("elderly");
+});
+test("0.42: a refuser's window says so", () => {
+  const c = UC.CITIES[1];
+  const s = new PSim(c.seed, { recipe: c.recipe, civilians: 6000, budget: 80_000_000 });
+  s.setStartTime(1380);
+  const cx = s.w >> 1, cy = s.h >> 1; s.setZone([[cx - 40, cy - 40], [cx + 40, cy - 40], [cx + 40, cy + 40], [cx - 40, cy + 40]]);
+  s.startBattle();
+  let k = -1; for (let i = 0; i < s.civN && k < 0; i++) if (s.plan[i] === 9) k = i;
+  expect(k).toBeGreaterThanOrEqual(0);
+  expect(uPlanWords(s, k)).toBe("Refusing to leave: feels safer at home");
+  expect(uPersonState(s, k).text).toBe("Refusing to leave: feels safer at home");
+});
+test("0.42: end-of-round lines for refusers and accidents (only what happened)", () => {
+  expect(endStatsLines({ refused: 0, refusedLost: 0, talkedOut: 0, broke: 0, civKilledByUs: 0, civFriendlyFire: 0 })).toEqual([]);
+  expect(endStatsLines({ refused: 12, refusedLost: 3, talkedOut: 5, broke: 4, civKilledByUs: 7, civFriendlyFire: 2 })).toEqual([
+    "Refused to leave: 12 stayed home (3 died there) · 5 talked out · 4 ran when the infected came",
+    "Killed by accident: 7 by our fire · 2 by other civilians",
+  ]);
+  expect(endStatsLines({ refused: 2, refusedLost: 0, talkedOut: 0, broke: 0, civKilledByUs: 0, civFriendlyFire: 0 })).toEqual(["Refused to leave: 2 stayed home"]);
+});

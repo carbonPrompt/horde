@@ -27,6 +27,9 @@ import { cleanQuickbar, setSlot, swapSlots, clearSlot, type Slots } from "./quic
 import { airHalfPx, drawAirframe, smoothHeading } from "./aircraft";
 import { tutorialSteps, currentStep, wantTutorial, type TutStep, type TutState } from "./tutorial";
 import { drawDepot, drawModel, drawSquad, drawSupport, drawWrecks, hasModel, hasSquad, MODEL_ZOOM, noteUnits, SQUAD_ZOOM } from "./models";
+import { clockSpan, START_CHOICES, randomStart, needsTimePick, formatClock, PLAN_REFUSE } from "./people";
+import { personHtml, followable, followEndLine, endStatsLines } from "./personui";
+import { TIPS, shouldTip, type TipId } from "./tips";
 
 installErrorHooks();
 initSprites();
@@ -65,6 +68,7 @@ let customMap: { name: string; map: CityMap } | null = null;
 let dailyDate: string | null = null;
 const activeMutators = new Set<C.MutatorId>();
 let seed = Math.floor(Math.random() * 1e9);
+let startMin = 600; // 0.39: the clock's start (minutes since midnight), picked after the city; Retry keeps it
 const simOpts = () => ({
   civilians: save.settings.crowd ?? C.CIVILIANS,
   realCityId: city?.real && !city.realArea && !city.areas?.length ? city.id : undefined, // pre-0.36 single map
@@ -200,7 +204,7 @@ function exportPlan(): Plan {
     poly: sim.zones[0] ?? [], zones: sim.zones.map(z => z.slice()), walls,
     units: sim.units.filter(u => u.kind !== "para" && u.kind !== "police" && u.kind !== "militia").map(u => [u.kind, u.x, u.y, u.mode ?? "near"]),
     supports: sim.supports.map(b => [b.kind, b.x, b.y]),
-    abilities: { ...sim.bought }, c4: [...sim.c4], demo: [...sim.demo],
+    abilities: { ...sim.bought }, c4: [...sim.c4], demo: [...sim.demo], start: startMin,
   };
 }
 function planSummary() {
@@ -229,11 +233,12 @@ function importPlanInner(p: Plan) {
   for (const i of p.demo ?? []) sim.toggleDemo(i % sim.w, (i / sim.w) | 0); // 0.38
 }
 function newSim(keepPlan: boolean, newSeed = false) {
-  openPicker(null); clearTicker();
+  openPicker(null); clearTicker(); closePerson();
   const plan = keepPlan ? exportPlan() : null;
   if (newSeed) seed = Math.floor(Math.random() * 1e9);
   if (city?.realArea && !realAreaMap(city.realArea)) { const c = city; loadRealArea(c.realArea!).then(() => { if (city === c) newSim(keepPlan, false); }); return; } // review #2
   sim = new Sim(seed, simOpts());
+  sim.setStartTime(startMin); // 0.40: people where they'd be at that hour
   if (plan) importPlan(plan);
   log("info", "restart", { ...cityTag(), keptPlan: keepPlan });
   draft = []; speed = 1; tipGates = false; lastWave = 0; warnedWave = -1; warnShown = false; outbreakShown = false; xpGiven = 0; roundShown = false;
@@ -241,6 +246,7 @@ function newSim(keepPlan: boolean, newSeed = false) {
   buildBase(); buildZone(); fitCamera();
   $("end").hidden = true;
   startTut(); // 0.35: Retry/Fresh map on City 1 starts the prompts again (steps already done are skipped)
+  if (tut && tut.steps[tut.i].id === "look") setTool("pan"); // 0.41
   refreshUi();
 }
 
@@ -342,6 +348,7 @@ function syncSettings() {
   $<HTMLInputElement>("opt-fs").checked = save.settings.fullscreen;
   $<HTMLInputElement>("opt-edge").checked = save.settings.edgeScroll;
   $<HTMLInputElement>("opt-ranges").checked = save.settings.showRanges;
+  $<HTMLInputElement>("opt-tips").checked = save.settings.tips !== false; // 0.41
   $<HTMLInputElement>("opt-checkupd").checked = save.settings.checkUpdates !== false;
   $<HTMLInputElement>("opt-autoupd").checked = !!save.settings.autoUpdate;
   $<HTMLInputElement>("opt-dev").checked = !!save.settings.devMode;
@@ -356,9 +363,48 @@ function applyFullscreen() {
   if (Save.desktop) Save.desktop.setFullscreen(on);
 }
 
+// ---------- 0.39: the person window and Follow ----------
+let selPerson = -1, following = false, lastPersonHtml = "";
+function selectPerson(k: number) {
+  selPerson = k; lastPersonHtml = ""; tutTrack.person = true;
+  if (following) following = followable(sim, k);
+  renderPerson();
+  log("info", "person-select", { k });
+}
+function closePerson() { selPerson = -1; following = false; $("person").hidden = true; lastPersonHtml = ""; }
+function renderPerson() {
+  if (selPerson < 0 || mode !== "game") { if (!$("person").hidden) $("person").hidden = true; return; }
+  const html = personHtml(sim, selPerson, following);
+  if (html !== lastPersonHtml) {
+    const keep = $("person").querySelector(".pw-story")?.scrollTop ?? 0; // keep the story where the player scrolled it
+    $("person").innerHTML = html; lastPersonHtml = html;
+    const st = $("person").querySelector(".pw-story"); if (st) st.scrollTop = keep;
+  }
+  $("person").classList.toggle("following", following);
+  $("person").hidden = false;
+}
+function centerOn(x: number, y: number) { cam.x = canvas.width / 2 - x * cam.scale; cam.y = canvas.height / 2 - y * cam.scale; }
+function followTick() {
+  if (!followable(sim, selPerson)) { following = false; notify(followEndLine(sim, selPerson)); renderPerson(); return; }
+  centerOn(sim.ax[selPerson], sim.ay[selPerson]);
+}
+$("person").addEventListener("click", ev => {
+  const t = ev.target as HTMLElement;
+  const fam = t.closest<HTMLElement>("[data-k]");
+  if (fam) { selectPerson(+fam.dataset.k!); if (following) centerOn(sim.ax[selPerson], sim.ay[selPerson]); return; }
+  const act = t.closest<HTMLElement>("[data-act]")?.dataset.act;
+  if (act === "close") closePerson();
+  else if (act === "follow" && followable(sim, selPerson)) {
+    following = !following;
+    if (following && cam.scale < 6) cam.scale = 6; // close enough to see them
+    renderPerson();
+  } else if (act === "home") { following = false; const c = sim.homeCell[selPerson]; if (c >= 0) centerOn((c % sim.w) + 0.5, ((c / sim.w) | 0) + 0.5); renderPerson(); }
+});
+
 function startAttract() {
   loadSeq++; // a pending area load must not pull the player back into a battle
   tut = null; showTut(); // 0.35: no tutorial banner over the menus
+  $("timepick").hidden = true; closePerson(); // 0.39
   openPicker(null); clearTicker();
   mode = "attract"; city = null; customMap = null; dailyDate = null; showHeatmap = false;
   document.body.classList.add("attract");
@@ -375,12 +421,15 @@ function startAttract() {
 }
 
 // ---------- 0.35: City 1 guided tutorial (steps in src/tutorial.ts) ----------
-let tut: { steps: TutStep[]; i: number; on: boolean } | null = null;
+let tut: { steps: TutStep[]; i: number; on: boolean; t0: number; ts0: number; vis: boolean } | null = null;
+// 0.41: what the tutorial watches for: gate cells flipped by hand, strikes called, a person window, a speed change, a horde
+const tutTrack = { toWall: 0, toGate: 0, strikes: 0, person: false, speed: false, horde: false };
 /** (Re)start or clear the tutorial for the current city; `replay` = the player asked for it. */
 function startTut(replay = false) {
   const c = city;
   tut = mode === "game" && c && c.recipe && wantTutorial({ first: c === C.CITIES[0], medal: anyMedal(save.best, c.id), daily: !!dailyDate, replay })
-    ? { steps: tutorialSteps(c.recipe.stands[0]), i: 0, on: true } : null;
+    ? { steps: tutorialSteps(c.recipe.stands[0]), i: 0, on: true, t0: performance.now(), ts0: 0, vis: true } : null;
+  Object.assign(tutTrack, { toWall: 0, toGate: 0, strikes: 0, person: false, speed: false, horde: false });
   showTut();
 }
 function tutState(): TutState {
@@ -393,17 +442,23 @@ function tutState(): TutState {
   }
   for (let i = 0; i < sim.inZone.length; i++) if (sim.inZone[i] === 3) { gates++; break; }
   const n = (k: string) => sim.units.filter(u => u.kind === k).length;
+  const gatesOpen = sim.openGateCells(); // 0.41 review: a broken gate can't be closed, so it doesn't count
+  const c = sim.counts();
   return { zoneCells: sim.zoneCells, zoneOverlap: cells ? inside / cells : 0, gates, garrisons: n("garrison"), snipers: n("sniper"),
-    evacs: sim.supports.filter(b => b.kind === "evac").length, phase: sim.phase === "plan" ? "plan" : sim.phase === "battle" ? "battle" : "over", lifts: sim.liftsFlown };
+    evacs: sim.supports.filter(b => b.kind === "evac").length, phase: sim.phase === "plan" ? "plan" : sim.phase === "battle" ? "battle" : "over", lifts: sim.liftsFlown,
+    toWall: tutTrack.toWall, toGate: tutTrack.toGate, gatesOpen, strikes: tutTrack.strikes, personOpened: tutTrack.person, speedChanged: tutTrack.speed,
+    safeShare: sim.civN ? (c.safe + sim.evacuated) / sim.civN : 0, hordeAnnounced: tutTrack.horde,
+    stepT: !tut ? 0 : sim.phase === "battle" ? sim.time - tut.ts0 : (performance.now() - tut.t0) / 1000 }; // battle steps count game time (pausing stops them)
 }
 function showTut() {
   const box = $("tut");
   document.querySelectorAll(".tut-glow").forEach(e => e.classList.remove("tut-glow"));
-  if (!tut || !tut.on) { box.hidden = true; return; }
+  if (!tut || !tut.on || !tut.vis) { box.hidden = true; return; }
   const st = tut.steps[tut.i];
   box.hidden = false;
   $("tut-text").textContent = `${tut.i + 1}/${tut.steps.length}  ${st.text}`;
-  $("tut-next").hidden = st.id !== "pan";
+  $("tut-next").hidden = st.id !== "look";
+  if (st.highlight?.kind === "button") document.getElementById(st.highlight.button)?.classList.add("tut-glow"); // 0.41
   if (st.highlight?.kind === "tool") {
     document.querySelectorAll(`[data-tool="${st.highlight.tool}"]`).forEach(e => e.classList.add("tut-glow"));
     const cat = catOf(st.highlight.tool!); // the tool may sit in a closed category: light that up too
@@ -412,8 +467,11 @@ function showTut() {
 }
 function stepTut() {
   if (!tut || !tut.on || mode !== "game") return;
-  const i = currentStep(tut.steps, tutState(), tut.i);
-  if (i !== tut.i) { tut.i = i; log("info", "tutorial-step", { step: tut.steps[i].id }); showTut(); }
+  const ts = tutState();
+  const i = currentStep(tut.steps, ts, tut.i), moved = i !== tut.i;
+  if (moved) { tut.i = i; tut.t0 = performance.now(); tut.ts0 = sim.time; ts.stepT = 0; log("info", "tutorial-step", { step: tut.steps[i].id }); }
+  const vis = tut.steps[i].show?.(ts) ?? true; // 0.41: some steps wait for the right moment
+  if (moved || vis !== tut.vis) { tut.vis = vis; showTut(); }
 }
 
 /** 0.36: a real area's map is decoded on first use (async); everything else starts at once. */
@@ -432,7 +490,7 @@ function playCity(c: C.CityDef | null, seedOverride?: number) {
   playCityNow(c, seedOverride);
 }
 function playCityNow(c: C.CityDef | null, seedOverride?: number) {
-  clearTicker();
+  clearTicker(); $("timepick").hidden = true; closePerson();
   mode = "game"; city = c; showHeatmap = false;
   document.body.classList.remove("attract");
   stack.length = 0; show(null);
@@ -447,6 +505,8 @@ function playCityNow(c: C.CityDef | null, seedOverride?: number) {
   if (c?.intro && firstTime) setTimeout(() => say(c.intro!.join(" "), 12000), 600); // 0.35: what this city teaches
   else if (c?.trial && !P.unlocked(c.trial, save.xp ?? 0)) setTimeout(() => say(`Field trial: ${toolName(c.trial!)} is on loan to you in ${c.name}. Earn ${P.UNLOCK_XP[c.trial!].toLocaleString()} XP to keep it everywhere.`, 9000), 600);
   startTut(); // 0.35: City 1 tutorial
+  if (!needsTimePick(!!tut, false)) startMin = 600;
+  sim.setStartTime(startMin); // 0.40 (the picker re-places when a time is chosen)
   Object.assign(perf, new Perf()); // perf numbers cover play time only
   draft = []; speed = 1; tipGates = false; lastWave = 0; warnedWave = -1; warnShown = false; outbreakShown = false; xpGiven = 0; roundShown = false;
   showRanges = save.settings.showRanges;
@@ -457,8 +517,30 @@ function playCityNow(c: C.CityDef | null, seedOverride?: number) {
   syncDev();
   setTool(saved ? "sniper" : "zone"); refreshUi();
   const mutStr = activeMutators.size ? ` Active mutators: ${[...activeMutators].map(m => C.MUTATORS[m].name).join(", ")}.` : "";
-  say((saved ? `Your last plan is loaded. Change it or press Start.`
-    : "Plan your defense: draw a safe zone, add gates, place units, then Start.") + mutStr, 6000);
+  const planMsg = (saved ? `Your last plan is loaded. Change it or press Start.`
+    : "Plan your defense: draw a safe zone, add gates, place units, then Start.") + mutStr;
+  if (needsTimePick(!!tut, false)) openTimePick(saved?.start ?? startMin, () => say(planMsg, 6000));
+  else if (!tut) say(planMsg, 6000); // 0.41: the tutorial banner says it
+  if (tut && tut.steps[tut.i].id === "look") setTool("pan"); // 0.41: left-drag moves the map while looking around
+}
+
+// ---------- 0.39: start-time picker ----------
+function timePickOpen() { return !$("timepick").hidden; }
+function openTimePick(pre: number, then: () => void) {
+  const grid = $("tp-grid");
+  const choose = (min: number) => { startMin = min; sim.setStartTime(min); buildZone(); $("timepick").hidden = true; log("info", "start-time", { min }); refreshUi(); then(); };
+  grid.innerHTML = START_CHOICES.map(c => `<button data-min="${c.min}"${c.min === pre ? ' class="sel"' : ""}>${c.label}<small>${formatClock(c.min)}</small></button>`).join("") +
+    `<button data-min="random">Random<small>any hour</small></button>`;
+  grid.onclick = ev => {
+    const b = (ev.target as HTMLElement).closest<HTMLButtonElement>("button[data-min]");
+    if (!b) return;
+    choose(b.dataset.min === "random" ? randomStart(Math.floor(Math.random() * 1e9)) : +b.dataset.min!);
+  };
+  const sel = $<HTMLSelectElement>("tp-hour");
+  sel.innerHTML = Array.from({ length: 24 }, (_, h) => `<option value="${h * 60}">${formatClock(h * 60)}</option>`).join("");
+  sel.value = String(Math.floor(pre / 60) * 60);
+  $("tp-set").onclick = () => choose(+sel.value);
+  $("timepick").hidden = false;
 }
 
 /** 0.36: a real city opens its City Map; a city with no baked areas plays its old single map. */
@@ -568,6 +650,16 @@ const alerts = new AlertQueue();
 let tickerBusy = false;
 /** until: sim time after which the alert is stale and skipped (horde warnings). */
 function notify(text: string, urgent = false, until?: number) { alerts.push(text, urgent, until); runTicker(); }
+/** 0.41: a one-line tip the first time something shows up (once per save; Settings > Tips switches them off). */
+/** Cheap check before any costly test for a tip (tips on, no tutorial banner up, not seen yet). */
+function tipPossible(id: TipId) { return mode === "game" && save.settings.tips !== false && !(tut?.on && tut.vis) && !(save.settings.tipsSeen ?? []).includes(id); }
+function tip(id: TipId) {
+  if (mode !== "game") return;
+  const seen = save.settings.tipsSeen ?? [];
+  if (!shouldTip(id, seen, !!(tut?.on && tut.vis), save.settings.tips !== false)) return;
+  save.settings.tipsSeen = [...seen, id]; Save.store(save);
+  notify(`Tip: ${TIPS[id]}`, false, sim.time + 25);
+}
 function runTicker() {
   if (tickerBusy) return;
   const box = $("ticker");
@@ -655,7 +747,9 @@ function click(cx: number, cy: number) {
   const planning = sim.phase === "plan";
   if (tool === "pan") {
     const m = sim.cycleTarget(cx, cy);
-    if (m) { say(`This unit now shoots ${C.TARGET_LABEL[m]} first.`, 2500); log("info", "target-mode", { mode: m, x, y }); }
+    if (m) { say(`This unit now shoots ${C.TARGET_LABEL[m]} first.`, 2500); log("info", "target-mode", { mode: m, x, y }); return; }
+    const k = sim.civAt(cx, cy, Math.max(0.6, 8 / cam.scale)); // 0.39: click a white dot to see who they are
+    if (k >= 0) selectPerson(k);
     return;
   }
   if (tool === "order") {
@@ -672,7 +766,7 @@ function click(cx: number, cy: number) {
   }
   if (!planning && tool === "remove") {
     const r = sim.sellAt(cx, cy);
-    if (typeof r === "string") say(r); else { say(`Pulling the unit out: ${r.toFixed(0)} s. It won't fight meanwhile; you get its cost back when it's out.`, 4000); log("info", "sell-in-battle", { x, y, secs: r }); }
+    if (typeof r === "string") say(r); else { tip("sell"); say(`Pulling the unit out: ${r.toFixed(0)} s. It won't fight meanwhile; you get its cost back when it's out.`, 4000); log("info", "sell-in-battle", { x, y, secs: r }); }
     return;
   }
   switch (tool) {
@@ -686,7 +780,12 @@ function click(cx: number, cy: number) {
       draft.push(p);
       break;
     }
-    case "gate": { const e = sim.toggleGate(x, y); if (e) say(e); else buildZone(); break; }
+    case "gate": {
+      const before = x >= 0 && y >= 0 && x < sim.w && y < sim.h ? sim.inZone[sim.idx(x, y)] : 0;
+      const e = sim.toggleGate(x, y);
+      if (e) say(e); else { buildZone(); if (before === 3) tutTrack.toWall++; else if (before === 2) tutTrack.toGate++; } // 0.41: the tutorial watches
+      break;
+    }
     case "remove": if (!sim.removeAt(x, y)) say("No unit or support building there (or removing a Budget Office would exceed your budget)."); break;
     case "depot": {
       if (planning) { say("Fuel depots go off during the battle. Plan around them."); break; }
@@ -695,9 +794,11 @@ function click(cx: number, cy: number) {
       break;
     }
     case "garrison": case "sniper": case "turret": case "mortar": case "howitzer": case "apc": case "gunboat": case "battleship": case "himars": case "tank": case "apache": case "reaper": {
-      if (!planning) { const e = sim.place(tool, x, y); if (e) say(e); else { say(`${C.UNITS[tool].name} deploying (${C.UNITS[tool].deploy} s).`, 2000); log("info", "bought-in-battle", { kind: tool, x, y, left: sim.remaining() }); } break; } const e = sim.place(tool, x, y); if (e) say(e); break; }
+      const placedTip = () => { tip("targeting"); if (tool === "apc" || tool === "tank" || tool === "gunboat") tip("mobile"); }; // 0.41
+      if (!planning) { const e = sim.place(tool, x, y); if (e) say(e); else { placedTip(); say(`${C.UNITS[tool].name} deploying (${C.UNITS[tool].deploy} s).`, 2000); log("info", "bought-in-battle", { kind: tool, x, y, left: sim.remaining() }); } break; } const e = sim.place(tool, x, y); if (e) say(e); else placedTip(); break; }
     case "evac": case "budget": case "repair": case "radio": case "supply": case "command": case "police": case "militia": {
       const e = sim.placeSupport(tool, x, y);
+      if (!e && tool === "evac" && sim.supports.filter(b => b.kind === "evac").length === 2) tip("padCost"); // 0.41
       if (e) say(e);
       else if (!planning) { say(`${C.SUPPORTS[tool].name} deploying (${C.SUPPORTS[tool].deploy} s).`, 2000); log("info", "bought-in-battle", { kind: tool, x, y, left: sim.remaining() }); }
       break;
@@ -708,7 +809,7 @@ function click(cx: number, cy: number) {
         const d = sim.demoAt(x, y);
         const e = planning || d < 0 ? sim.toggleDemo(x, y) : sim.blowBuilding(x, y);
         if (e) say(e);
-        else if (planning) say(d >= 0 ? "Charge removed." : "Demolition charge planted. Blow it during the battle.", 2500);
+        else if (planning) { say(d >= 0 ? "Charge removed." : "Demolition charge planted. Blow it during the battle.", 2500); if (d < 0) tip("c4"); }
         else if (d < 0) say("Charge planted. Click the building again to bring it down.", 3000);
         else { say("Building down!"); log("info", "building-blown", { x, y, t: +sim.time.toFixed(1) }); }
         break;
@@ -740,6 +841,7 @@ function click(cx: number, cy: number) {
       strikeStart = null;
       if (e) { say(e); break; }
       log("info", "ability", { kind: tool, x: Math.round(sx), y: Math.round(sy), t: +sim.time.toFixed(1), left: sim.charges[tool] });
+      if (sim.phase === "battle") tutTrack.strikes++; // 0.41
       say(`${C.ABILITIES[tool].name} inbound.`, 2500);
       if (tool === "nuke") setTool("pan");
       break;
@@ -759,10 +861,11 @@ canvas.addEventListener("pointermove", e => {
   const dpr = devicePixelRatio;
   const [cx, cy] = toCell(e.offsetX * dpr, e.offsetY * dpr);
   hover = cx >= 0 && cy >= 0 && cx < sim.w && cy < sim.h ? [cx, cy] : null;
+  if (hover && tool === "pan" && cam.scale >= 3 && sim.phase === "battle" && tipPossible("people") && sim.civAt(cx, cy, 0.8) >= 0) tip("people"); // 0.41 (battle: buckets, not a full scan)
   if (drag) {
     const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
     if (Math.abs(dx) + Math.abs(dy) > 4) drag.moved = true;
-    if (drag.pan && drag.moved) { cam.x += dx * dpr; cam.y += dy * dpr; drag.x = e.clientX; drag.y = e.clientY; }
+    if (drag.pan && drag.moved) { following = false; cam.x += dx * dpr; cam.y += dy * dpr; drag.x = e.clientX; drag.y = e.clientY; }
   }
 });
 canvas.addEventListener("pointerup", e => {
@@ -793,6 +896,7 @@ addEventListener("keydown", e => {
   if (k === "Escape") {
     if (stack.length) { const top = stack[stack.length - 1]; if (top !== "title" && !(top === "slots" && !Save.activeSlot())) back(); return; }
     if (mode === "game" && pickerCat) { openPicker(null); return; }
+    if (mode === "game" && selPerson >= 0) { closePerson(); return; } // 0.39
     if (mode === "game" && draft.length) { draft = []; return; }
     if (mode === "game" && strikeStart) { strikeStart = null; return; }
     if (mode === "game" && $("end").hidden) pause();
@@ -801,6 +905,7 @@ addEventListener("keydown", e => {
   if (mode !== "game" || stack.length) return;
   if (k === " ") { e.preventDefault(); if (sim.phase === "battle") setSpeed(speed ? 0 : pausedSpeed); }
   else if (k === "j" || k === "J") showHeights = !showHeights; // 0.22: V went to the quick bar
+  else if (k === "g" || k === "G") setTool("gate"); // 0.41: the Gate tool's key (shown on its button)
   else if (k === "r" || k === "R") showRanges = !showRanges;
   else if (k === "h" || k === "H") { showHeatmap = !showHeatmap; refreshUi(); }
   else if (k === "Enter" && tool === "zone" && draft.length) closeDraft();
@@ -812,17 +917,20 @@ addEventListener("keydown", e => {
 addEventListener("keyup", e => keys.delete(e.key.toLowerCase()));
 
 function setSpeed(s: number) {
+  if (sim.phase === "battle" && s !== speed) tutTrack.speed = true; // 0.41
   speed = s === 4 ? 2 : s;
   if (speed === 0.5 || speed === 1 || speed === 2) { if (pausedSpeed !== speed) { pausedSpeed = speed; if (mode === "game") { save.settings.speed = speed; Save.store(save); } } }
   refreshUi();
 } // 0.30.1: half, real time, 2x (dev tools keep 8x/16x)
 function startBattle() {
+  if (timePickOpen()) return; // 0.39: pick a time first
   if (sim.phase !== "plan") return;
   if (!sim.zoneClosed) { say("Draw a safe zone first."); return; }
   if (draft.length) { say("Finish or cancel (Esc) the zone you're drawing first."); return; }
   const planKey = dailyDate ? `daily:${dailyDate}` : city ? city.id : null;
   if (planKey) { save.plans[planKey] = exportPlan(); Save.store(save); }
-  sim.startBattle(); speed = pausedSpeed; setTool("pan"); refreshUi();
+  sim.startBattle(); speed = pausedSpeed; setTool("pan"); refreshUi(); tip("views"); // 0.41
+  if (sim.classKids > 0) notify("Schools are walking their students to your safe zone. Parents: meet your kids there.", false, sim.time + 30); // 0.41 (Insane school day)
   snd.music("battle");
   log("info", "battle-start", { ...cityTag(), ...planSummary(), sites: sim.sites.map(([x, y]) => [Math.round(x), Math.round(y)]) });
   messageT = -1e9; // the planning tip goes; battle news runs in the ticker
@@ -882,8 +990,13 @@ function hud(now: number) {
   if (mode !== "game" || now - lastHud < 200) return;
   lastHud = now;
   runTicker(); // picks up alerts queued while the strip was hidden
+  if (sim.phase === "battle") { // 0.41: tips the battle itself brings up
+    if (sim.liftsAborted > 0) tip("waveOff");
+    if (tipPossible("ammo") && sim.units.some(u => Number.isFinite(u.ammo) && u.ammo < (C.UNITS[u.kind]?.ammo ?? 0) * 0.25)) tip("ammo");
+    if (sim.outbreak && !sim.roundDone && tipPossible("endRound") && sim.counts().civ <= sim.civN * 0.05) tip("endRound");
+  }
+  if (selPerson >= 0) renderPerson(); // 0.39
   const c = sim.counts();
-  const m = Math.floor(sim.time / 60), s = Math.floor(sim.time % 60);
   $("stats").innerHTML =
     `<span class="civ">Outside ${c.civ.toLocaleString()}</span>` +
     `<span class="safe">Safe ${c.safe.toLocaleString()}</span>` +
@@ -891,7 +1004,7 @@ function hud(now: number) {
     `<span class="inf">Infected ${c.inf.toLocaleString()}</span>` +
     `<span>Killed ${sim.kills.toLocaleString()}</span>` +
     (sim.crushed ? `<span class="inf">Crushed ${sim.crushed.toLocaleString()}</span>` : "") +
-    `<span>${m}:${String(s).padStart(2, "0")}</span>` +
+    clockSpan(sim.startMin, sim.time) +
     (sim.phase === "battle" && sim.outbreak && !sim.roundDone ? `<button class="endround" data-act="endround" title="Score the round now: people in the zone count as saved, the rest are left behind">End round</button>` : "");
   $("budget").textContent = C.money(sim.remaining());
   if (sim.phase === "battle" && sim.lastIncome) $("budget").textContent += `  +${C.money(sim.lastIncome)}/10s`;
@@ -915,7 +1028,7 @@ function hud(now: number) {
       log("info", "wave", { n: sim.wave, routes, count: sim.lastWaveCount, big: sim.lastWaveBig, t: +sim.time.toFixed(1), evacuated: sim.evacuated, ...c });
       snd.horn();
       if (sim.lastWaveBig) notify("A big one is coming.", true, sim.time + 20);
-      notify(`Horde #${sim.wave} (${sim.lastWaveCount.toLocaleString()}) coming in ${routes}!`, true, sim.time + 20);
+      notify(`Horde #${sim.wave} (${sim.lastWaveCount.toLocaleString()}) coming in ${routes}!`, true, sim.time + 20); tutTrack.horde = true; tip("horde");
     }
     const left = sim.nextWaveT - sim.time;
     if (left > 0 && left < C.WAVE_WARN_S && warnedWave !== sim.wave) { warnedWave = sim.wave; notify(`Next horde in ${Math.ceil(left)} s, ${routeNames(sim.upcoming)}.`, true, sim.nextWaveT); }
@@ -945,13 +1058,13 @@ function showEnd(r: Score, round: boolean) {
   $("end-score").innerHTML = `Round score <b>${f0(r.score)}</b> = saved ${f0(r.parts.saved)}% (${f0(pp.saved)} pts) + speed (${f0(pp.speed)} pts) + city ${f0(r.parts.city)}% intact (${f0(pp.city)} pts) + ${f0(r.parts.kills)}% of the infected killed (${f0(pp.kills)} pts)` +
     (r.mayhem !== undefined ? `<br>Keep fighting: <b>Mayhem ${r.mayhem.toLocaleString()}</b> = ${(r.killsAfter ?? 0).toLocaleString()} kills + ${Math.floor((r.damageAfter ?? 0) / C.MAYHEM_DAMAGE_PER_POINT).toLocaleString()} for ${C.money(r.damageAfter ?? 0)} of damage${bestMayhem !== undefined && bestMayhem >= r.mayhem ? ` · best ${bestMayhem.toLocaleString()}` : city && !dailyDate ? " · new best" : ""}` : "");
   const held = Math.max(0, sim.time - C.WARNING_S), hm = Math.floor(held / 60), hs = Math.floor(held % 60);
-  $("end-pct").textContent = `${r.pct.toFixed(1)}% saved (${r.saved.toLocaleString()} of ${sim.civN.toLocaleString()})${r.left ? ` · ${r.left.toLocaleString()} left behind` : ""} · held ${hm}:${String(hs).padStart(2, "0")} after the outbreak · ${sim.wave} hordes · ${sim.liftsFlown} lifts flown${sim.liftsAborted ? `, ${sim.liftsAborted} waved off` : ""}`;
+  $("end-pct").textContent = `${r.pct.toFixed(1)}% saved (${r.saved.toLocaleString()} of ${sim.civN.toLocaleString()})${r.left ? ` · ${r.left.toLocaleString()} left behind` : ""}${r.refused || r.refusedLost ? " (people who refused to leave count only a little against it)" : ""} · held ${hm}:${String(hs).padStart(2, "0")} after the outbreak · ${sim.wave} hordes · ${sim.liftsFlown} lifts flown${sim.liftsAborted ? `, ${sim.liftsAborted} waved off` : ""}`;
   const by = new Map<C.UnitKind, [number, number]>();
   for (const u of sim.units) { const v = by.get(u.kind) ?? [0, 0]; by.set(u.kind, [v[0] + 1, v[1] + u.kills]); }
   const rows = [...by].map(([k, [n, kills]]) => `${n} ${C.UNITS[k].name}${n > 1 ? "s" : ""}: ${kills.toLocaleString()}`).join(" · ");
   const swStr = sim.swimmersKilled ? ` (${sim.swimmersKilled.toLocaleString()} swimmers)` : "";
-  $("end-kills").textContent = `Killed ${sim.kills.toLocaleString()} infected${swStr}. ${rows}` +
-    (sim.civKilledByUs ? ` · Civilians lost to our own fire: ${sim.civKilledByUs.toLocaleString()}` : "");
+  $("end-kills").textContent = `Killed ${sim.kills.toLocaleString()} infected${swStr}. ${rows}`;
+  $("end-people").innerHTML = endStatsLines(r).map(esc).join("<br>"); // 0.42: refusers and accidental kills
   $("end-tiers").textContent = C.MEDALS.map(([n, p]) => `${n} ${p}`).join("  ·  ") + ` points (needs ${C.MEDAL_MIN_SAVED_PCT}% saved)`;
   recordResult(r);
   const rk = P.rankFor(save.xp ?? 0);
@@ -1149,6 +1262,34 @@ function draw(now: number) {
     }
   }
 
+  // 0.39: the selected person (and their family, fainter): a ring so you can find them in the crowd.
+  if (selPerson >= 0 && selPerson < sim.civN && (sim.state[selPerson] === CIV || sim.state[selPerson] === SAFE_CIV)) {
+    const lead = sim.famLead[selPerson], size = lead >= 0 ? sim.famSize[selPerson] : 1, r = Math.max(6, dot * 2.5);
+    ctx.lineWidth = 1.5; ctx.strokeStyle = "rgba(253,230,138,0.45)";
+    if (lead >= 0) for (let m = lead; m < Math.min(lead + size, sim.civN); m++) {
+      if (m === selPerson || (sim.state[m] !== CIV && sim.state[m] !== SAFE_CIV)) continue;
+      ctx.beginPath(); ctx.arc(cam.x + sim.ax[m] * s, cam.y + sim.ay[m] * s, r * 0.8, 0, 7); ctx.stroke();
+    }
+    ctx.lineWidth = 2.5; ctx.strokeStyle = `rgba(253,230,138,${0.75 + 0.25 * Math.sin(now / 200)})`;
+    ctx.beginPath(); ctx.arc(cam.x + sim.ax[selPerson] * s, cam.y + sim.ay[selPerson] * s, r, 0, 7); ctx.stroke();
+  }
+  // 0.42: people refusing to leave, sheltering at home: an amber ring so the player can find them and send a unit
+  if (sim.phase === "battle" && sim.refuserList.length) {
+    const r = Math.max(4, dot * 2); let shown = false, drawn = 0;
+    ctx.lineWidth = 1.5; ctx.strokeStyle = "rgba(251,191,36,0.85)";
+    ctx.beginPath();
+    for (const m of sim.refuserList) {
+      if (sim.refuser[m] !== 1 || sim.state[m] !== CIV || sim.plan[m] !== PLAN_REFUSE) continue;
+      const ax = sim.ax[m], ay = sim.ay[m];
+      if (ax < x0 || ay < y0 || ax > x1 || ay > y1) continue;
+      const px = cam.x + ax * s, py = cam.y + ay * s;
+      if (s >= 4) { ctx.moveTo(px + r, py); ctx.arc(px, py, r, 0, 6.2832); shown = true; } // zoomed in: a ring
+      else ctx.rect(px - 1.5, py - 1.5, 3, 3); // zoomed out: an amber speck (the tip waits for a closer look)
+      if (++drawn >= 2000) break;
+    }
+    if (s >= 4) ctx.stroke(); else { ctx.fillStyle = "rgba(251,191,36,0.9)"; ctx.fill(); }
+    if (shown && tipPossible("refuse")) tip("refuse");
+  }
   // Explosions: a ring that grows and fades over a second.
   for (const b of sim.blasts) {
     const k = Math.min(1, (sim.time - b.t) / 0.8);
@@ -2072,11 +2213,13 @@ function frame(now: number) {
   if (keys.has("d") || keys.has("arrowright")) cam.x -= pan;
   if (keys.has("w") || keys.has("arrowup")) cam.y += pan;
   if (keys.has("s") || keys.has("arrowdown")) cam.y -= pan;
-  if (mode === "game" && !stack.length && save.settings.edgeScroll && mouse && document.hasFocus()) {
+  if (following && ["a", "d", "w", "s", "arrowleft", "arrowright", "arrowup", "arrowdown"].some(k => keys.has(k))) following = false; // 0.39: panning by hand stops a follow
+  if (mode === "game" && !following && !stack.length && save.settings.edgeScroll && mouse && document.hasFocus()) {
     const m = 6;
     if (mouse[0] <= m) cam.x += pan; else if (mouse[0] >= innerWidth - 1 - m) cam.x -= pan;
     if (mouse[1] <= m) cam.y += pan; else if (mouse[1] >= innerHeight - 1 - m) cam.y -= pan;
   }
+  if (following && mode === "game") followTick();
   if (mode === "attract") {
     // The title screen: a city with no safe zone falls; start another one after a while.
     acc += real * 2;
@@ -2182,6 +2325,7 @@ function renderPicker() {
   renderPickerDetail();
 }
 function openPicker(cat: string | null) {
+  if (cat) tip("quickbar"); // 0.41
   pickerCat = cat && catTools[cat] ? cat : null;
   if (!pickerCat) hoverUnitHeatmap = null;
   document.querySelectorAll<HTMLButtonElement>("#classes button").forEach(b => b.classList.toggle("on", b.dataset.cat === pickerCat));
@@ -2458,6 +2602,7 @@ $("opt-edge").addEventListener("change", e => { save.settings.edgeScroll = (e.ta
 $("opt-checkupd").addEventListener("change", e => { save.settings.checkUpdates = (e.target as HTMLInputElement).checked; Save.store(save); }); // 0.26
 $("opt-autoupd").addEventListener("change", e => { save.settings.autoUpdate = (e.target as HTMLInputElement).checked; Save.store(save); });
 $("opt-ranges").addEventListener("change", e => { save.settings.showRanges = showRanges = (e.target as HTMLInputElement).checked; Save.store(save); });
+$("opt-tips").addEventListener("change", e => { save.settings.tips = (e.target as HTMLInputElement).checked; if (save.settings.tips) save.settings.tipsSeen = []; Save.store(save); }); // 0.41: on again = see them again
 
 // ---------- Developer mode ----------
 const DEV_SWITCHES: [keyof Sim["dev"], string][] = [
@@ -2600,6 +2745,7 @@ async function loadBattle(n: number) {
   activeMutators.clear(); for (const m of Array.isArray(p.mutators) ? p.mutators : []) if (m in C.MUTATORS) activeMutators.add(m);
   seed = Number(p.seed) || 0;
   sim = snap.sim;
+  closePerson(); $("timepick").hidden = true; startMin = sim.startMin; // 0.39: the loaded battle's clock; no window or follow carried over
   document.body.classList.remove("attract");
   stack.length = 0; show(null);
   $("osm-credit").hidden = !(city?.real || customMap);
@@ -2702,9 +2848,9 @@ startAttract();
 if (!Save.activeSlot()) go("slots"); // 0.33: first time: pick a slot (an old save is already in Slot 1)
 initUpdater({ save: () => save, go, say, log: (ev, d) => log("info", ev, d), inGame: () => mode === "game" }); // 0.26: Windows app only
 $("p-tutorial").addEventListener("click", () => { resume(); startTut(true); });
-$("tut-next").addEventListener("click", () => { if (tut) { tut.i = Math.min(tut.steps.length - 1, tut.i + 1); showTut(); } });
+$("tut-next").addEventListener("click", () => { if (tut) { tut.i = Math.min(tut.steps.length - 1, tut.i + 1); tut.t0 = performance.now(); tut.ts0 = sim.time; showTut(); } });
 $("tut-skip").addEventListener("click", () => { if (tut) { tut.on = false; log("info", "tutorial-skip", { step: tut.steps[tut.i].id }); showTut(); } });
 requestAnimationFrame(frame);
 
 // Exposed for automated checks.
-(window as any).horde = { get sim() { return sim; }, get mode() { return mode; }, get save() { return save; }, get tut() { return tut; }, cities: C.CITIES, recentLog, click, closeDraft, startBattle, setTool, setSpeed, cam, playCity, startAttract, pause, resume };
+(window as any).horde = { get sim() { return sim; }, get mode() { return mode; }, get save() { return save; }, get tut() { return tut; }, cities: C.CITIES, recentLog, click, closeDraft, startBattle, setTool, setSpeed, cam, playCity, startAttract, pause, resume, saveGame, loadBattle, get startMin() { return startMin; }, get selPerson() { return selPerson; }, get following() { return following; } };

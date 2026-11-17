@@ -1,10 +1,16 @@
 import { buildCity } from "./cities/build";
 import type { CityRecipe } from "./cities/recipe";
 import * as C from "./config";
-import { padCost, roundParts, roundScore, medalFor, mayhem, type RoundParts } from "./scoring";
+import { EV_SAFE, EV_EVAC, EV_TURNED, EV_CRUSHED, EV_KILLED_BY_US, EV_FRIENDLY_FIRE, EV_SHOT, hash32, isEnding, personOf, placeFor, PL_HOME, PL_WORK, PL_SCHOOL, PL_STORE, PL_ROAD, PL_VENUE,
+  rallyFor, RALLY_HOME, RALLY_ZONE, PLAN_STRAIGHT, PLAN_GATHER, PLAN_MEET, PLAN_HOME_WAIT, PLAN_FOLLOW, PLAN_NONE,
+  EV_HEAD_HOME, EV_HOME_WAIT, EV_FAMILY_TOGETHER, EV_ZONE_WAIT, EV_GAVE_UP, EV_TO_ZONE, EV_CLASS, PLAN_CLASS,
+  PLAN_REFUSE, EV_REFUSE, EV_BROKE, EV_TALKED_OUT, EV_SOLO, AGE_PACE, FATE_EVAC,
+  PLAN_GO_BACK, EV_SAW_TURN, EV_FROZE, EV_GO_BACK, EV_GRIEF_STAY } from "./people";
+import { padCost, roundParts, roundScore, medalFor, mayhem, savedPct, type RoundParts } from "./scoring";
 import { heat, rollGap, rollSize, routesFor } from "./storyteller";
 import { BRIDGE, BUILDING, CityMap, ROAD, INFRA_HIGHWAY, INFRA_RAIL, INFRA_STATION, PARK, WATER, extractRailLines, generateCity, rng, walkable } from "./map";
 import { decodeCityMap } from "./osm";
+import { navOf } from "./nav";
 import { REAL_CITY_MAPS } from "./realcities";
 import { realAreaMap } from "./realcity/load";
 /** 0.36: levels that count for the roof range bonus (real towers stay tall but don't outrange the map). */
@@ -29,6 +35,8 @@ export interface Score {
   score: number; parts: RoundParts; kills: number; // 0.20: round score 0..100 and its four parts
   killsAfter?: number; damageAfter?: number; mayhem?: number; // Keep fighting (after the round)
   left?: number; zoneHeld?: number; // 0.30.1: people still outside (left behind) and in the zone when the round was scored
+  // 0.42: refused to leave (still at home), refusers lost at home, talked out, bluffers who ran; killed by accident
+  refused?: number; refusedLost?: number; talkedOut?: number; broke?: number; civKilledByUs?: number; civFriendlyFire?: number;
 }
 
 export interface Entry { kind: "highway" | "rail" | "bridge" | "road" | "river"; cells: [number, number][]; x: number; y: number; edge: number; weight: number }
@@ -116,6 +124,7 @@ export interface TrainRun {
 
 const hyp = (a: number, b: number) => Math.sqrt(a * a + b * b);
 const BUCKET = 4; // cells per spatial bucket
+const ERRAND_HOLD = "hold" as const; // 0.40: an errand says stand here
 /** 0.28: distance-field units. A straight step costs FIELD_STEP, a diagonal FIELD_DIAG (~sqrt 2), and a cell
  *  under a standing ground unit adds FIELD_OCC (walk around it unless it plugs the only way). */
 export const FIELD_STEP = 10, FIELD_DIAG = 14, FIELD_OCC = 300;
@@ -205,6 +214,32 @@ export class Sim {
   // 0.37: armed population and household group origins
   cityId = "generated";
   civWep: Uint8Array; civAmmo: Uint8Array; civMilitia: Uint8Array; civCd: Float32Array; civShotT: Float32Array;
+  // 0.39: people. Where they live and stood at spawn, how their round ended (0 = still in it, else a FATE_* code), the
+  // clock's start (minutes since midnight) and the story log: one event stream, linked per person newest first.
+  startMin = 600;
+  seed: number; // 0.39: who each person is comes from this (people.personOf)
+  homeCell: Int32Array; startCell: Int32Array; fate: Uint8Array; lastEv: Int32Array; private lastShotNote: Float32Array;
+  // 0.40: daily life. Off until setStartTime (old tests and attract mode stay as 0.39). spawnX/Y: where the household
+  // stood at spawn (home), so a new start time always re-places from the same base.
+  dayLife = false;
+  dayPlace: Uint8Array; workCell: Int32Array; schoolCell: Int32Array; age: Uint8Array; atVenue: Uint8Array;
+  spawnX: Float32Array; spawnY: Float32Array; schools: number[] = []; private doorSpots: Int32Array = new Int32Array(0);
+  // 0.40: alert plans (people.PLAN_*), each errand's goal cell (or, for PLAN_FOLLOW, the person followed), seconds in
+  // the current stage (negative: still getting ready to leave), seconds with no route, and each household's rally
+  plan: Uint8Array; goal: Int32Array; planT: Float32Array; stuckT: Float32Array; rally: Uint8Array;
+  progT: Float32Array; ancX: Float32Array; ancY: Float32Array; // seconds without moving 2 cells from the anchor point (routes detour, so not 'closer')
+  // walking-home fields depend only on this: walkable cells frozen at the battle's start (rubble from collapses is not
+  // added, so a replay after a snapshot load builds the same fields) and a version bumped by every wall/gate/bridge change
+  walkMask: Uint8Array | null = null; navVersion = 0;
+  classKids = 0; // 0.41: kids walking to the zone with their class this round
+  // 0.42: refusers. refuser: 0 not one, 1 refusing, 2 talked out, 3 broke and ran; resolve: drops while infected are
+  // close (at 0 they run); persuadeT: seconds a unit has stood beside them. unitNear: cells a unit stands within
+  // PERSUADE_R of, stamped this tick (unitNearGen === tick + 1).
+  refuser: Uint8Array; resolve: Float32Array; persuadeT: Float32Array;
+  solo: Uint8Array; // 0.42: a teen heading for the zone alone (out of the family group)
+  refusers = 0; talkedOut = 0; broke = 0; refuserList: number[] = []; // (the list: for the map's rings)
+  private unitNear: Int32Array | null = null;
+  evT: Float32Array; evK: Int32Array; evCode: Uint8Array; evArg: Int32Array; evPrev: Int32Array; evN = 0;
   civKills = 0; civFriendlyFire = 0; lastCivShotT = -1; lastCivShotX = 0; lastCivShotY = 0;
   // 0.30: the crowd waiting at the Evac Points takes room: the waiting area grows with how many are waiting
   // (at about WAIT_RHO people/m2) instead of everyone piling into the cells around the pad
@@ -407,6 +442,7 @@ export class Sim {
   wallMaxHp() { return this.mutators.has("fragile_walls") ? C.WALL_HP * 0.5 : C.WALL_HP; }
   gateMaxHp() { return this.mutators.has("fragile_walls") ? C.GATE_HP * 0.5 : C.GATE_HP; }
   constructor(seed: number, opts: SimOpts = {}) {
+    this.seed = seed;
     if (opts.difficulty && C.DIFFICULTY[opts.difficulty]) this.difficulty = opts.difficulty;
     this.budget = C.startBudget(opts.budget || C.START_BUDGET, opts.civilians ?? C.CIVILIANS);
     if (opts.waveMul) this.waveMul = opts.waveMul;
@@ -465,6 +501,17 @@ export class Sim {
     this.downT = new Float32Array(this.n); this.crushT = new Float32Array(this.n);
     this.pspd = new Float32Array(this.n); this.famLead = new Int32Array(this.n).fill(-1); this.famSize = new Uint8Array(this.n);
     this.civWep = new Uint8Array(this.n); this.civAmmo = new Uint8Array(this.n); this.civMilitia = new Uint8Array(this.n);
+    this.homeCell = new Int32Array(this.civN).fill(-1); this.startCell = new Int32Array(this.civN).fill(-1);
+    this.dayPlace = new Uint8Array(this.civN); this.workCell = new Int32Array(this.civN).fill(-1); this.schoolCell = new Int32Array(this.civN).fill(-1);
+    this.age = new Uint8Array(this.civN); this.atVenue = new Uint8Array(this.civN);
+    this.spawnX = new Float32Array(this.civN); this.spawnY = new Float32Array(this.civN);
+    this.plan = new Uint8Array(this.civN); this.goal = new Int32Array(this.civN).fill(-1); this.planT = new Float32Array(this.civN);
+    this.stuckT = new Float32Array(this.civN); this.rally = new Uint8Array(this.civN);
+    this.solo = new Uint8Array(this.civN); this.refuser = new Uint8Array(this.civN); this.resolve = new Float32Array(this.civN); this.persuadeT = new Float32Array(this.civN);
+    this.progT = new Float32Array(this.civN); this.ancX = new Float32Array(this.civN).fill(-1e4); this.ancY = new Float32Array(this.civN).fill(-1e4);
+    this.fate = new Uint8Array(this.civN); this.lastEv = new Int32Array(this.civN).fill(-1); this.lastShotNote = new Float32Array(this.civN).fill(-1e9);
+    const ev0 = Math.max(1024, Math.min(C.PEOPLE_EV_CAP, this.civN * 2));
+    this.evT = new Float32Array(ev0); this.evK = new Int32Array(ev0); this.evCode = new Uint8Array(ev0); this.evArg = new Int32Array(ev0); this.evPrev = new Int32Array(ev0);
     this.civCd = new Float32Array(this.n); this.civShotT = new Float32Array(this.n).fill(-10);
     this.cellHead = new Int32Array(cells).fill(-1); this.cellNext = new Int32Array(this.n).fill(-1); this.cellGen = new Uint32Array(cells);
     const nb = this.bw * this.bh;
@@ -623,6 +670,24 @@ export class Sim {
     return best;
   }
 
+  /** 0.42: who an armed civilian shoots: first an infected right beside a living member of their family (in range and
+   *  in sight), else the nearest they can see. */
+  private civTarget(k: number, x: number, y: number, range: number): number {
+    const near = this.nearestSeen(x, y, range, true, C.EYE_M);
+    const lead = this.famLead[k];
+    if (near >= 0 && lead >= 0 && this.dayLife) { // (nothing in sight at all: no family scan)
+      let best = -1, bd = range * range;
+      for (let m = lead, e = lead + this.famSize[k]; m < e; m++) {
+        if (m === k || this.state[m] !== CIV) continue;
+        const t = this.nearest(this.ax[m], this.ay[m], C.GUARD_FAMILY_R, INF);
+        if (t < 0) continue;
+        const d2 = (this.ax[t] - x) ** 2 + (this.ay[t] - y) ** 2;
+        if (d2 <= bd && this.seen(x, y, this.ax[t], this.ay[t], true, C.EYE_M)) { bd = d2; best = t; }
+      }
+      if (best >= 0) return best;
+    }
+    return near;
+  }
   /** Nearest live armed civilian within r cells of (x, y), or -1. */
   armedCivAt(x: number, y: number, r = 2.2): number {
     const b0x = Math.max(0, ((x - r) / BUCKET) | 0), b1x = Math.min(this.bw - 1, ((x + r) / BUCKET) | 0);
@@ -635,6 +700,201 @@ export class Sim {
         if (d2 < bd) { bd = d2; best = k; }
       }
     return best;
+  }
+
+  /** 0.39: nearest live person (index < civN, outside or in a zone) within r cells of (x, y), or -1. */
+  civAt(x: number, y: number, r = 1.5): number {
+    if (this.phase === "plan") { // the buckets fill only once the battle runs; one scan per click is cheap at 200k
+      let best = -1, bd = r * r;
+      for (let k = 0; k < this.civN; k++) {
+        if (this.state[k] !== CIV && this.state[k] !== SAFE_CIV) continue;
+        const dx = this.ax[k] - x, dy = this.ay[k] - y, d2 = dx * dx + dy * dy;
+        if (d2 <= bd) { bd = d2; best = k; }
+      }
+      return best;
+    }
+    const b0x = Math.max(0, ((x - r) / BUCKET) | 0), b1x = Math.min(this.bw - 1, ((x + r) / BUCKET) | 0);
+    const b0y = Math.max(0, ((y - r) / BUCKET) | 0), b1y = Math.min(this.bh - 1, ((y + r) / BUCKET) | 0);
+    let best = -1, bd = r * r;
+    for (let by = b0y; by <= b1y; by++) for (let bx = b0x; bx <= b1x; bx++)
+      for (let k = this.headC[by * this.bw + bx]; k !== -1; k = this.next[k]) {
+        if (k >= this.civN || (this.state[k] !== CIV && this.state[k] !== SAFE_CIV)) continue;
+        const dx = this.ax[k] - x, dy = this.ay[k] - y, d2 = dx * dx + dy * dy;
+        if (d2 <= bd) { bd = d2; best = k; }
+      }
+    return best;
+  }
+  /** 0.39: which zone (0-based) holds cell (x, y); 0 when none or unknown. Only called on a person's state change. */
+  zoneIndexAt(x: number, y: number): number {
+    for (let z = 0; z < this.zones.length; z++) {
+      const p = this.zones[z]; let inside = false;
+      for (let i = 0, j = p.length - 1; i < p.length; j = i++) {
+        const [xi, yi] = p[i], [xj, yj] = p[j];
+        if ((yi > y) !== (yj > y) && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside;
+      }
+      if (inside) return z;
+    }
+    return 0;
+  }
+  /** 0.39: add a story event for person k (ignored for anyone who isn't one of the starting people). The first ending
+   *  event sets their fate. Past PEOPLE_EV_CAP events, recording stops (fates still update). */
+  note(k: number, code: number, arg = 0) {
+    if (k < 0 || k >= this.civN) return;
+    if (isEnding(code) && this.fate[k] === 0) this.fate[k] = code;
+    if (this.evN >= this.evT.length) {
+      const cap = Math.min(C.PEOPLE_EV_CAP, this.evT.length * 2);
+      if (cap <= this.evT.length) return;
+      const grow = <T extends Float32Array | Int32Array | Uint8Array>(a: T): T => { const b = new (a.constructor as any)(cap) as T; b.set(a); return b; };
+      this.evT = grow(this.evT); this.evK = grow(this.evK); this.evCode = grow(this.evCode); this.evArg = grow(this.evArg); this.evPrev = grow(this.evPrev);
+    }
+    const e = this.evN++;
+    this.evT[e] = this.time; this.evK[e] = k; this.evCode[e] = code; this.evArg[e] = arg;
+    this.evPrev[e] = this.lastEv[k]; this.lastEv[k] = e;
+  }
+  /** 0.39: person k's story, oldest first. */
+  storyOf(k: number): { t: number; code: number; arg: number }[] {
+    const out: { t: number; code: number; arg: number }[] = [];
+    if (k < 0 || k >= this.civN) return out;
+    for (let e = this.lastEv[k]; e >= 0; e = this.evPrev[e]) out.push({ t: this.evT[e], code: this.evCode[e], arg: this.evArg[e] });
+    return out.reverse();
+  }
+  /** 0.40: put everyone where they would be at clock time `min` (minutes since midnight): home, work, school, a store,
+   *  on the road or out with friends, by age and job (people.placeFor). Planning only. Always re-places from the
+   *  households' spawn positions, so picking another time gives the same result as picking it first. */
+  setStartTime(min: number) {
+    if (this.phase !== "plan") return;
+    min = ((Math.floor(min) % 1440) + 1440) % 1440;
+    this.startMin = min; this.dayLife = true;
+    const w = this.w, h = this.h, seed = this.seed, tile = this.map.tile, ht = this.map.height, N = this.civN;
+    const uu = (k: number, salt: number) => hash32(seed, k, salt) / 4294967296;
+    const doors = this.doorSpots.length ? this.doorSpots : Int32Array.from(this.homeCell);
+    const dist = (a: number, b: number) => Math.hypot((a % w) - (b % w), ((a / w) | 0) - ((b / w) | 0));
+    const adjH = (c: number) => { // tallest building next to a doorstep
+      const x = c % w, y = (c / w) | 0; let m = 0;
+      for (const n of [x > 0 ? c - 1 : -1, x < w - 1 ? c + 1 : -1, y > 0 ? c - w : -1, y < h - 1 ? c + w : -1]) if (n >= 0 && tile[n] === BUILDING && ht[n] > m) m = ht[n];
+      return m;
+    };
+    const night = min >= 1320 || min < 360;
+    this.workCell.fill(-1); this.schoolCell.fill(-1);
+    for (let k = 0; k < N; k++) {
+      const p = personOf(seed, k, this.famLead[k], this.famSize[k]);
+      this.age[k] = Math.min(255, p.age);
+      this.dayPlace[k] = this.atVenue[k] ? (night ? PL_HOME : PL_VENUE) : placeFor(seed, k, p, min);
+      // kids are at school (and need fetching) only on Insane; otherwise they're home with the family
+      if (this.difficulty !== "insane" && (this.dayPlace[k] === PL_SCHOOL || (this.dayPlace[k] === PL_ROAD && p.age >= 5 && p.age <= 17))) this.dayPlace[k] = PL_HOME;
+    }
+    // a preschooler (below Insane: any child) is never home alone: if no adult of the household is home, the first adult stays home
+    for (let k = 0; k < N; k++) {
+      if (this.famLead[k] !== k) continue;
+      const end = Math.min(N, k + this.famSize[k]);
+      let tot = false, adultHome = false, firstAdult = -1;
+      for (let m = k; m < end; m++) {
+        if ((this.age[m] < 5 || (this.age[m] < 18 && this.difficulty !== "insane")) && this.dayPlace[m] === PL_HOME) tot = true;
+        if (this.age[m] >= 18) { if (firstAdult < 0) firstAdult = m; if (this.dayPlace[m] === PL_HOME) adultHome = true; }
+      }
+      if (tot && !adultHome && firstAdult >= 0) this.dayPlace[firstAdult] = PL_HOME;
+    }
+    // schools: one per ~450 pupils, at doorsteps of low buildings, spread out (farthest-point sampling)
+    const pupil = (k: number) => this.age[k] >= 5 && this.age[k] <= 17 && (this.dayPlace[k] === PL_SCHOOL || this.dayPlace[k] === PL_ROAD);
+    let kids = 0; for (let k = 0; k < N; k++) if (pupil(k)) kids++;
+    this.schools = [];
+    if (kids > 0) {
+      let cand = Array.from(doors).filter(c => { const a = adjH(c); return a > 0 && a <= 3; });
+      if (!cand.length) cand = Array.from(doors);
+      if (cand.length > 4000) { const step = cand.length / 4000; cand = Array.from({ length: 4000 }, (_, i) => cand[Math.floor(i * step)]); }
+      const want = Math.min(cand.length, Math.ceil(kids / 450));
+      const best = new Float32Array(cand.length).fill(Infinity);
+      let pick = cand[hash32(seed, 0, 31) % cand.length];
+      while (this.schools.length < want) {
+        this.schools.push(pick);
+        let far = -1, fd = -1;
+        for (let i = 0; i < cand.length; i++) { const d = dist(cand[i], pick); if (d < best[i]) best[i] = d; if (best[i] > fd) { fd = best[i]; far = i; } }
+        if (far < 0 || fd <= 0) break;
+        pick = cand[far];
+      }
+    }
+    const offices = Array.from(doors).filter(c => adjH(c) >= 4);
+    const workPool = offices.length ? offices : Array.from(doors);
+    const snap = (c: number) => { // nearest walkable cell (spiral, up to 6 out)
+      if (walkable(tile[c])) return c;
+      const x = c % w, y = (c / w) | 0;
+      for (let r = 1; r <= 6; r++) for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) {
+        if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
+        const nx = x + dx, ny = y + dy;
+        if (nx >= 0 && ny >= 0 && nx < w && ny < h && walkable(tile[ny * w + nx])) return ny * w + nx;
+      }
+      return -1;
+    };
+    // nearest road/bridge cell of a kind (station, highway) for every cell, out to R steps: one breadth-first pass per kind
+    const nearMaps = new Map<number, Int32Array | null>();
+    const nearestInfra = (c: number, kind: number, R: number) => {
+      if (!nearMaps.has(kind)) {
+        const near = new Int32Array(w * h).fill(-1), d = new Uint16Array(w * h).fill(65535), q: number[] = [];
+        for (let i = 0; i < w * h; i++) if (walkable(tile[i]) && tile[i] !== PARK && ht[i] === kind) { near[i] = i; d[i] = 0; q.push(i); }
+        for (let qi = 0; qi < q.length; qi++) {
+          const i = q[qi], x = i % w; if (d[i] >= R) continue;
+          for (const n of [x > 0 ? i - 1 : -1, x < w - 1 ? i + 1 : -1, i - w, i + w]) if (n >= 0 && n < w * h && d[n] === 65535) { d[n] = d[i] + 1; near[n] = near[i]; q.push(n); }
+        }
+        nearMaps.set(kind, q.length ? near : null);
+      }
+      const m = nearMaps.get(kind);
+      return m ? m[c] : -1;
+    };
+    const schoolOf = (home: number) => { let bs = this.schools[0], bd = Infinity; for (const sc of this.schools) { const d = dist(sc, home); if (d < bd) { bd = d; bs = sc; } } return bs; };
+    for (let k = 0; k < N; k++) {
+      const pl = this.dayPlace[k], home = this.homeCell[k];
+      let cell = -1;
+      if (pl === PL_ROAD && pupil(k) && this.schools.length) { // school's out: somewhere between school and home
+        const sc = schoolOf(home); this.schoolCell[k] = sc;
+        const f = 0.2 + 0.6 * uu(k, 48);
+        const x = Math.round((home % w) + ((sc % w) - (home % w)) * f), y = Math.round(((home / w) | 0) + (((sc / w) | 0) - ((home / w) | 0)) * f);
+        cell = snap(y * w + x);
+      } else if (pl === PL_WORK || pl === PL_ROAD) {
+        // a workplace 40 to 160 cells (80 to 320 m) from home: most picks land in that ring; the closest try wins otherwise
+        let c = workPool[hash32(seed, k, 40) % workPool.length];
+        for (let t = 1; t < 24 && (dist(c, home) < 40 || dist(c, home) > 160); t++) {
+          const c2 = workPool[hash32(seed, k, 40 + t) % workPool.length], d2 = dist(c2, home);
+          if ((d2 >= 40 && d2 <= 160) || Math.abs(d2 - 100) < Math.abs(dist(c, home) - 100)) c = c2;
+        }
+        this.workCell[k] = c;
+        if (pl === PL_WORK) cell = c;
+        else {
+          const f = 0.2 + 0.6 * uu(k, 48);
+          const x = Math.round((home % w) + ((c % w) - (home % w)) * f), y = Math.round(((home / w) | 0) + (((c / w) | 0) - ((home / w) | 0)) * f);
+          cell = snap(y * w + x);
+          // commuters: some wait for a train at a station, some sit in traffic on the highway
+          const roll = uu(k, 49);
+          if (cell >= 0 && roll < 0.2) { const st = nearestInfra(cell, INFRA_STATION, 40); if (st >= 0) cell = st; }
+          else if (cell >= 0 && roll < 0.55) { const hw = nearestInfra(cell, INFRA_HIGHWAY, 60); if (hw >= 0) cell = hw; }
+        }
+      } else if (pl === PL_SCHOOL && this.schools.length) {
+        const bs = schoolOf(home); this.schoolCell[k] = bs; cell = bs;
+      } else if (pl === PL_STORE) {
+        for (let t = 0; t < 8 && cell < 0; t++) { const c = doors[hash32(seed, k, 44 + t) % doors.length], d = dist(c, home); if (d >= 10 && d <= 60) cell = c; }
+      }
+      if (cell < 0 && pl !== PL_HOME && pl !== PL_VENUE) this.dayPlace[k] = PL_HOME; // nowhere fitting on this map: home
+      if (cell >= 0) {
+        this.ax[k] = Math.fround((cell % w) + 0.15 + 0.7 * uu(k, 50)); this.ay[k] = Math.fround(((cell / w) | 0) + 0.15 + 0.7 * uu(k, 51));
+      } else if (this.dayPlace[k] === PL_HOME && this.atVenue[k]) {
+        this.ax[k] = Math.fround((home % w) + 0.15 + 0.7 * uu(k, 50)); this.ay[k] = Math.fround(((home / w) | 0) + 0.15 + 0.7 * uu(k, 51));
+      } else { this.ax[k] = this.spawnX[k]; this.ay[k] = this.spawnY[k]; }
+      this.velX[k] = 0; this.velY[k] = 0;
+      const ci = this.idx(Math.max(0, Math.min(w - 1, this.ax[k] | 0)), Math.max(0, Math.min(h - 1, this.ay[k] | 0)));
+      this.startCell[k] = ci;
+      if (this.state[k] === CIV || this.state[k] === SAFE_CIV) this.state[k] = this.inZone[ci] === 1 ? SAFE_CIV : CIV;
+    }
+  }
+  /** 0.39: k reached a zone. Not written while planning (drawing a zone isn't an arrival), nor twice in a row (a gate
+   *  rebuilt as wall moves people who were already safe). */
+  noteSafe(k: number) {
+    if (this.phase === "plan" || k < 0 || k >= this.civN) return;
+    const e = this.lastEv[k];
+    if (e >= 0 && this.evCode[e] === EV_SAFE) return;
+    this.note(k, EV_SAFE, this.zoneIndexAt(this.ax[k], this.ay[k]));
+    if (this.refuser[k] === 1) this.refuser[k] = 0; // a zone came to them: safe, not refusing
+    if (this.dayLife && this.rally[k] === RALLY_ZONE && this.famLead[k] >= 0 && this.plan[k] !== PLAN_MEET && !this.meetDone(k)) {
+      this.plan[k] = PLAN_MEET; this.goal[k] = -1; this.planT[k] = 0; this.note(k, EV_ZONE_WAIT); // 0.40: wait in the zone for the family
+    } else if (this.dayLife && this.plan[k] !== PLAN_MEET) { this.plan[k] = PLAN_STRAIGHT; this.goal[k] = -1; } // safe beats any errand
   }
 
   private placeCivilians(seed: number) {
@@ -686,7 +946,7 @@ export class Sim {
       }
       size = Math.min(size, this.civN - k);
       // Choose origin cell: either continuing a venue crowd at a park/station or starting a household at a building front
-      let anchorCell: number;
+      let anchorCell: number, atVenue = true;
       if (venueLeft > 0 && venueAnchor >= 0) {
         venueLeft -= size;
         const vx = venueAnchor % w, vy = (venueAnchor / w) | 0;
@@ -702,12 +962,17 @@ export class Sim {
         anchorCell = venueAnchor;
       } else {
         anchorCell = homes[Math.floor(fr() * homes.length)];
+        atVenue = false;
       }
+      // 0.39: home address. A household starts at its own doorstep; a group out at a park or station lives at a
+      // doorstep picked by hash (no fr() call, so spawn layouts don't move).
+      const home = atVenue ? homes[hash32(seed, k, 13) % homes.length] : anchorCell;
       const ax0 = (anchorCell % w) + 0.15 + fr() * 0.7, ay0 = ((anchorCell / w) | 0) + 0.15 + fr() * 0.7;
       this.ax[k] = Math.fround(ax0); this.ay[k] = Math.fround(ay0);
       for (let j = 0; j < size; j++) {
         const m = k + j;
         this.pspd[m] = pace;
+        this.homeCell[m] = home; this.atVenue[m] = atVenue ? 1 : 0;
         if (size > 1) {
           this.famLead[m] = k; this.famSize[m] = size;
           if (j > 0) {
@@ -744,6 +1009,12 @@ export class Sim {
         }
       }
       k += size;
+    }
+    this.doorSpots = Int32Array.from(homes); // 0.40: doorsteps, for work/school/store places
+    for (let k = 0; k < this.civN; k++) { // 0.39: where each person stood when the round began
+      this.spawnX[k] = this.ax[k]; this.spawnY[k] = this.ay[k];
+      this.startCell[k] = this.idx(Math.max(0, Math.min(w - 1, this.ax[k] | 0)), Math.max(0, Math.min(h - 1, this.ay[k] | 0)));
+      if (this.homeCell[k] < 0) this.homeCell[k] = this.startCell[k];
     }
     for (let k = this.civN; k < this.n; k++) this.state[k] = DEAD; // outbreak slots, filled at battle start
   }
@@ -803,6 +1074,7 @@ export class Sim {
 
   /** Kept for the plan format and tests: in planning, replaces all zones with one. */
   setZone(poly: [number, number][]): string | null {
+    this.navVersion++; // 0.40
     if (this.phase === "plan" && this.zones.length) {
       // check the replacement fits before throwing the old zone away
       if (poly.length >= 3 && Sim.zonePrice(this.polyCells(poly).length, 0) > this.remaining() + this.zoneCost()) return "Not enough budget for a zone that big.";
@@ -851,7 +1123,7 @@ export class Sim {
     this.pay(price);
     for (let k = 0; k < this.civN; k++) { // civilians already inside are safe
       if (this.state[k] !== CIV) continue;
-      if (this.inZone[this.idx(this.ax[k] | 0, this.ay[k] | 0)] === 1) this.state[k] = SAFE_CIV;
+      if (this.inZone[this.idx(this.ax[k] | 0, this.ay[k] | 0)] === 1) { this.state[k] = SAFE_CIV; this.noteSafe(k); }
     }
     this.refreshUnitAmmo();
     this.fieldDirty = true;
@@ -859,6 +1131,7 @@ export class Sim {
   }
 
   clearZone() {
+    this.navVersion++; // 0.40
     if (this.phase !== "plan") return;
     this.zones = []; this.zoneCellsEach = []; this.inZone.fill(0); this.zoneCells = 0;
     this.supports = []; // support buildings require a safe zone; removing the zone refunds them
@@ -872,6 +1145,7 @@ export class Sim {
   /** 0.30.1: gates and walls take time to open or close during a battle (people get out of the way first). */
   switching: { cells: number[]; to: 2 | 3; start: number; at: number }[] = [];
   private applySwitch(cells: number[], to: 2 | 3) {
+    this.navVersion++; // 0.40
     const gMax = this.gateMaxHp(), wMax = this.wallMaxHp();
     for (const c of cells) {
       if (this.wallHp[c] <= 0 || this.inZone[c] === to || (this.inZone[c] !== 2 && this.inZone[c] !== 3)) continue; // broken meanwhile
@@ -899,7 +1173,7 @@ export class Sim {
       if (x < 0 || y < 0 || x >= this.w || y >= this.h) continue;
       const i = this.idx(x, y);
       if (this.inZone[i] === 1 && walkable(this.map.tile[i]) && !this.occ[i]) {
-        this.ax[k] = Math.fround(x + 0.5); this.ay[k] = Math.fround(y + 0.5); this.state[k] = SAFE_CIV; this.velX[k] = 0; this.velY[k] = 0; return;
+        this.ax[k] = Math.fround(x + 0.5); this.ay[k] = Math.fround(y + 0.5); this.state[k] = SAFE_CIV; this.velX[k] = 0; this.velY[k] = 0; this.noteSafe(k); return;
       }
     }
   }
@@ -911,6 +1185,7 @@ export class Sim {
   }
 
   toggleGate(x: number, y: number): string | null {
+    this.navVersion++; // 0.40
     const i = this.idx(x, y);
     const z = this.inZone[i];
     if (z !== 2 && z !== 3) return "Click where a road crosses the safe zone edge.";
@@ -944,7 +1219,14 @@ export class Sim {
   }
 
   /** Turn every intact gate into a wall (planning or battle). Returns how many crossings changed. */
+  /** 0.41: gate cells still standing open (intact and not already swinging shut): what Lock Gates would close. */
+  openGateCells(): number {
+    const moving = new Set(this.switching.flatMap(sw => sw.cells));
+    let n = 0; for (let i = 0; i < this.inZone.length; i++) if (this.inZone[i] === 3 && this.wallHp[i] > 0 && !moving.has(i)) n++;
+    return n;
+  }
   closeAllGates() {
+    this.navVersion++; // 0.40
     let n = 0;
     const wMax = this.wallMaxHp(), cells: number[] = [];
     const moving = new Set(this.switching.flatMap(sw => sw.cells));
@@ -1449,11 +1731,12 @@ export class Sim {
     this.blown.add(b);
     if (!this.memDir) { if (this.fieldDirty) this.buildFields(); this.memDir = this.infDir.slice(); } // 0.33: what the infected still believe
     const cells = new Set(this.bridges[b]);
-    for (const i of cells) { this.map.tile[i] = WATER; this.inZone[i] = 0; }
+    for (const i of cells) { this.map.tile[i] = WATER; this.inZone[i] = 0; if (this.walkMask) this.walkMask[i] = 0; }
+    this.navVersion++; // 0.40
     for (let k = 0; k < this.n; k++) {
       const s = this.state[k];
       if (s === DEAD || !cells.has(this.idx(this.ax[k] | 0, this.ay[k] | 0))) continue;
-      if (s === INF) this.recordKill(k); else this.civKilledByUs++;
+      if (s === INF) this.recordKill(k); else { this.civKilledByUs++; this.note(k, EV_KILLED_BY_US); }
       this.state[k] = DEAD;
     }
     let sx = 0, sy = 0;
@@ -1551,7 +1834,7 @@ export class Sim {
         if (s === INF) {
           this.hp[k] -= dmg;
           if (this.hp[k] <= 0) { this.state[k] = DEAD; killed++; this.recordKill(k, u); }
-        } else if (dmg >= 50) { this.state[k] = DEAD; this.civKilledByUs++; } // civilians have no armor
+        } else if (dmg >= 50) { this.state[k] = DEAD; this.civKilledByUs++; this.note(k, EV_KILLED_BY_US); } // civilians have no armor
       }
     }
     return killed;
@@ -1732,7 +2015,7 @@ export class Sim {
         const s = this.state[k];
         if (s !== CIV && s !== SAFE_CIV) continue;
         const dx = this.ax[k] - f.x, dy = this.ay[k] - f.y;
-        if (dx * dx + dy * dy <= r2 && rr() < C.FALLOUT_CIV_P) { this.state[k] = DEAD; this.civKilledByUs++; }
+        if (dx * dx + dy * dy <= r2 && rr() < C.FALLOUT_CIV_P) { this.state[k] = DEAD; this.civKilledByUs++; this.note(k, EV_KILLED_BY_US); }
       }
   }
 
@@ -1937,8 +2220,7 @@ export class Sim {
               for (let k = this.headC[by * this.bw + bx]; k !== -1 && tr.boarded < cap; k = this.next[k]) {
                 if (this.state[k] !== CIV && this.state[k] !== SAFE_CIV) continue;
                 const dx = this.ax[k] - tr.x, dy = this.ay[k] - tr.y;
-                if (dx * dx + dy * dy <= br2) {
-                  this.state[k] = DEAD; // carried out of the city
+                if (dx * dx + dy * dy <= br2 && this.trainBoard(k)) {
                   tr.boarded++;
                   this.trainsEvacuated++;
                   this.evacuated++;
@@ -2048,8 +2330,232 @@ export class Sim {
     this.phase = "battle";
     this.fieldDirty = true;
     this.rebuildBuckets();
+    if (this.dayLife) { this.walkMask = Uint8Array.from(this.map.tile, t => walkable(t) ? 1 : 0); this.navVersion++; this.assignPlans(); }
   }
   sites: [number, number][] = [];
+
+  // ---------- 0.40: alert plans ----------
+  /** The phone alert lands: each household decides. Singles, friends out together and households already together go
+   *  straight to a zone. Split households meet at home or at the zone (rallyFor); a parent fetches the kids from school. */
+  private assignPlans() {
+    const N = this.civN, seed = this.seed;
+    this.plan.fill(PLAN_STRAIGHT); this.goal.fill(-1); this.planT.fill(0); this.stuckT.fill(0);
+    this.solo.fill(0); this.refuser.fill(0); this.resolve.fill(0); this.persuadeT.fill(0); this.refusers = 0; this.talkedOut = 0; this.broke = 0; this.refuserList = [];
+    for (let k = 0; k < N; k++) {
+      const lead = this.famLead[k];
+      if (lead !== k && lead >= 0) continue; // households only, handled from their lead
+      const end = lead < 0 ? k + 1 : Math.min(N, k + this.famSize[k]);
+      if (this.atVenue[k]) continue; // friends out together
+      if (this.refuseRoll(k, end)) continue; // 0.42: staying home
+      if (lead < 0) continue; // singles go straight
+      let r = rallyFor(seed, k, this.startMin);
+      for (let m = k; m < end; m++) if (this.state[m] === SAFE_CIV || this.inZone[this.homeCell[m]] === 1) r = RALLY_ZONE; // already safe, or home is in the zone
+      let away = false, kid = -1;
+      for (let m = k; m < end; m++) {
+        this.rally[m] = r;
+        if (this.state[m] === CIV && this.dayPlace[m] !== PL_HOME) away = true;
+        if (kid < 0 && this.state[m] === CIV && this.dayPlace[m] === PL_SCHOOL && this.schoolCell[m] >= 0) kid = m;
+      }
+      if (!away) continue; // together already
+      // 0.41: the school walks its classes to the zone and tells the parents; the family meets them there
+      if (kid >= 0) { r = RALLY_ZONE; for (let m = k; m < end; m++) this.rally[m] = r; }
+      for (let m = k; m < end; m++) {
+        if (this.state[m] === SAFE_CIV) { if (r === RALLY_ZONE) { this.plan[m] = PLAN_MEET; this.note(m, EV_ZONE_WAIT); } continue; }
+        if (this.state[m] !== CIV) continue;
+        const delay = -C.DEPART_SPREAD_S * (hash32(seed, m, 60) / 4294967296); // finishing up, grabbing keys
+        if (this.dayPlace[m] === PL_SCHOOL && this.schoolCell[m] >= 0) continue; // the class (below)
+        else if (r === RALLY_HOME) {
+          this.goal[m] = this.homeCell[m];
+          if (this.dayPlace[m] === PL_HOME) { this.plan[m] = PLAN_HOME_WAIT; this.note(m, EV_HOME_WAIT); }
+          else { this.plan[m] = PLAN_GATHER; this.planT[m] = delay; this.note(m, EV_HEAD_HOME); }
+        } else this.note(m, EV_TO_ZONE); // they meet in the zone (noteSafe sets PLAN_MEET)
+      }
+    }
+    for (let k = 0; k < N; k++) { // 0.42: some teens go on their own
+      if (this.state[k] !== CIV || this.famLead[k] < 0 || this.atVenue[k] || this.refuser[k] || this.age[k] < 13 || this.age[k] > 17) continue;
+      if (this.dayPlace[k] === PL_SCHOOL && this.schoolCell[k] >= 0) continue; // with the class
+      if (hash32(seed, k, 73) / 4294967296 >= C.TEEN_SOLO_P) continue;
+      this.solo[k] = 1; this.plan[k] = PLAN_STRAIGHT; this.goal[k] = -1; this.planT[k] = 0; this.note(k, EV_SOLO);
+    }
+    for (let k = 0; k < N; k++) if (this.state[k] === CIV && this.dayPlace[k] === PL_SCHOOL && this.schoolCell[k] >= 0) { // 0.41: the classes
+      this.plan[k] = PLAN_CLASS; this.goal[k] = this.schoolCell[k]; this.planT[k] = 0; this.note(k, EV_CLASS); this.classKids++;
+    }
+  }
+  /** 0.42: household k..end-1 refuses to leave (design: 2 to 4% of households, more among the elderly; some bluff).
+   *  Not when anyone is already safe, home is inside a zone, or a kid is walking with a class. Members at home stay;
+   *  members out head home and stay. */
+  private refuseRoll(k: number, end: number): boolean {
+    const seed = this.seed, u = (i: number, salt: number) => hash32(seed, i, salt) / 4294967296;
+    let elder = false;
+    for (let m = k; m < end; m++) {
+      if (this.state[m] === SAFE_CIV || this.inZone[this.homeCell[m]] === 1 || (this.dayPlace[m] === PL_SCHOOL && this.schoolCell[m] >= 0)) return false;
+      if (this.age[m] >= 65) elder = true;
+    }
+    if (u(k, 70) >= (elder ? C.REFUSE_P_ELDER : C.REFUSE_P)) return false;
+    const bluff = u(k, 71) < C.REFUSE_BLUFF_P;
+    for (let m = k; m < end; m++) {
+      if (this.state[m] !== CIV) continue;
+      this.refuser[m] = 1; this.refusers++; this.refuserList.push(m); this.rally[m] = RALLY_HOME; this.goal[m] = this.homeCell[m];
+      this.resolve[m] = bluff ? 0.15 + 0.25 * u(m, 72) : 2 + u(m, 72);
+      this.note(m, EV_REFUSE);
+      if (this.dayPlace[m] === PL_HOME) this.plan[m] = PLAN_REFUSE;
+      else { this.plan[m] = PLAN_GATHER; this.planT[m] = -C.DEPART_SPREAD_S * u(m, 60); this.note(m, EV_HEAD_HOME); }
+    }
+    return true;
+  }
+  /** Person k gets on a passing train (carried out of the city); 0.42: a refuser at home won't, one still on the way
+   *  home takes the ride and stops refusing. */
+  private trainBoard(k: number): boolean {
+    if (k < this.civN && this.refuser[k] === 1) { if (this.plan[k] === PLAN_REFUSE) return false; this.refuser[k] = 0; }
+    this.state[k] = DEAD;
+    this.note(k, EV_EVAC, 1); // arg 1: by train
+    return true;
+  }
+  /** 0.43: v just turned. Each family member out on the street who sees it (close, clear view) may freeze in shock, go
+   *  back toward them, or refuse to leave (design: rare enough to read as a story beat). Rolled by hash, keyed on
+   *  witness and turned person, so replays match. */
+  private grieve(v: number) {
+    if (!this.dayLife || v >= this.civN || this.famLead[v] < 0) return;
+    const lead = this.famLead[v], seed = this.seed, vx = this.ax[v], vy = this.ay[v], R2 = C.GRIEF_SIGHT_R * C.GRIEF_SIGHT_R;
+    for (let m = lead, e = Math.min(this.civN, lead + this.famSize[v]); m < e; m++) {
+      if (m === v || this.state[m] !== CIV) continue;
+      const dx = this.ax[m] - vx, dy = this.ay[m] - vy;
+      if (dx * dx + dy * dy > R2 || !this.seen(this.ax[m], this.ay[m], vx, vy, true, C.EYE_M)) continue;
+      let again = false; for (let ev = this.lastEv[m]; ev >= 0 && !again; ev = this.evPrev[ev]) again = this.evCode[ev] === EV_SAW_TURN && this.evArg[ev] === v;
+      if (again) continue; // (once per person turned)
+      this.note(m, EV_SAW_TURN, v);
+      const u = (salt: number) => hash32(seed ^ Math.imul(v + 1, 0x27d4eb2d), m, salt) / 4294967296;
+      if (u(80) >= C.GRIEF_P) continue;
+      const pick = u(81), onlyFreeze = this.age[m] < 13 || this.refuser[m] !== 0 || this.plan[m] === PLAN_CLASS;
+      if (onlyFreeze || pick < C.GRIEF_FREEZE_SHARE) {
+        this.act[m] = 2; this.actT[m] = C.GRIEF_FREEZE_S_MIN + (C.GRIEF_FREEZE_S_MAX - C.GRIEF_FREEZE_S_MIN) * u(82);
+        this.note(m, EV_FROZE);
+      } else if (pick < C.GRIEF_FREEZE_SHARE + C.GRIEF_GO_BACK_SHARE) {
+        this.plan[m] = PLAN_GO_BACK; this.goal[m] = v; this.planT[m] = 0; this.resetProgress(m);
+        this.note(m, EV_GO_BACK, v);
+      } else {
+        this.refuser[m] = 1; this.refusers++; this.refuserList.push(m); this.resolve[m] = 0.5; this.persuadeT[m] = 0;
+        this.goal[m] = this.homeCell[m]; this.planT[m] = 0; this.resetProgress(m);
+        this.plan[m] = this.cellNear(this.ax[m], this.ay[m], this.homeCell[m], C.HOME_REACHED_CELLS) ? PLAN_REFUSE : PLAN_GATHER;
+        this.note(m, EV_GRIEF_STAY, v);
+      }
+    }
+  }
+  /** 0.42: stamp the cells within PERSUADE_R of every set-up ground unit (once a tick, only while someone refuses). */
+  private stampUnitNear() {
+    const w = this.w, h = this.h, g = this.tick + 1, R = C.PERSUADE_R;
+    const a = this.unitNear ??= new Int32Array(w * h);
+    for (const u of this.units) {
+      if ((u.deployT ?? 0) > 0 || u.extractT !== undefined || u.kind === "apache" || u.kind === "reaper") continue;
+      const ux = Math.floor(u.x), uy = Math.floor(u.y);
+      for (let y = Math.max(0, uy - R); y <= Math.min(h - 1, uy + R); y++) for (let x = Math.max(0, ux - R); x <= Math.min(w - 1, ux + R); x++)
+        if ((x - ux) * (x - ux) + (y - uy) * (y - uy) <= R * R) a[y * w + x] = g;
+    }
+  }
+  private cellNear(x: number, y: number, c: number, r: number) { return Math.abs(x - (c % this.w) - 0.5) <= r + 0.5 && Math.abs(y - ((c / this.w) | 0) - 0.5) <= r + 0.5; }
+  private famEnd(k: number) { const lead = this.famLead[k]; return lead < 0 ? k + 1 : Math.min(this.civN, lead + this.famSize[k]); }
+  /** Everyone of k's household still out on the street is at home (the rest are safe, out or gone). */
+  private homeDone(k: number): boolean {
+    const lead = this.famLead[k]; if (lead < 0) return true;
+    for (let m = lead, e = this.famEnd(k); m < e; m++) if (this.state[m] === CIV && this.fate[m] === 0 && !this.solo[m] && !this.cellNear(this.ax[m], this.ay[m], this.homeCell[m], C.HOME_REACHED_CELLS)) return false;
+    return true;
+  }
+  /** Nobody of k's household is still out on the street. */
+  private meetDone(k: number): boolean {
+    const lead = this.famLead[k]; if (lead < 0) return true;
+    for (let m = lead, e = this.famEnd(k); m < e; m++) if (this.state[m] === CIV && this.fate[m] === 0 && !this.solo[m] && !(this.refuser[m] === 1 && this.plan[m] === PLAN_REFUSE)) return false; // (0.43: not for someone staying home)
+    return true;
+  }
+  /** Someone of k's household is still on the way home. */
+  private coming(k: number): boolean {
+    const lead = this.famLead[k]; if (lead < 0) return false;
+    for (let m = lead, e = this.famEnd(k); m < e; m++) if (m !== k && this.state[m] === CIV && (this.plan[m] === PLAN_GATHER || this.plan[m] === PLAN_FOLLOW)) return true;
+    return false;
+  }
+  private resetProgress(k: number) { this.stuckT[k] = 0; this.progT[k] = 0; this.ancX[k] = -1e4; this.ancY[k] = -1e4; }
+  private giveUp(k: number) { if (this.refuser[k] === 1) this.refuser[k] = 0; this.resetProgress(k); const p = this.plan[k]; this.plan[k] = PLAN_STRAIGHT; this.goal[k] = -1; this.note(k, EV_GAVE_UP, p === PLAN_GATHER ? 1 : 0); } // arg 1: turned back on the way
+  /** The household's own plan for k once an errand is over: home (rally HOME) or the zone. */
+  private backToRally(k: number) {
+    this.resetProgress(k);
+    if (this.rally[k] === RALLY_HOME && this.famLead[k] >= 0) { this.plan[k] = PLAN_GATHER; this.goal[k] = this.homeCell[k]; this.planT[k] = 0; this.note(k, EV_HEAD_HOME); }
+    else { this.plan[k] = PLAN_STRAIGHT; this.goal[k] = -1; this.note(k, EV_TO_ZONE); }
+  }
+  /** One think of an errand: a direction to walk, ERRAND_HOLD to stand, or null when the errand ended (walk to a zone). */
+  private errand(k: number, x: number, y: number, f: number, dt: number): [number, number] | typeof ERRAND_HOLD | null {
+    const p = this.plan[k];
+    this.planT[k] += dt;
+    const refusing = this.refuser[k] === 1 && (p === PLAN_REFUSE || p === PLAN_GATHER); // (0.43: on the way home too)
+    if (refusing && this.zStim[k] > 0 && (this.resolve[k] -= this.zStim[k] * C.REFUSE_BREAK_PER_S * dt) <= 0) { // the infected came close: they run after all
+      this.refuser[k] = 3; this.broke++; this.plan[k] = PLAN_STRAIGHT; this.goal[k] = -1; this.resetProgress(k); this.note(k, EV_BROKE); return null;
+    }
+    if (f > C.ABANDON_FEAR && p !== PLAN_FOLLOW && !refusing && p !== PLAN_GO_BACK) { this.giveUp(k); return null; } // (a refuser's test is their resolve)
+    if (this.planT[k] < 0) return ERRAND_HOLD; // still getting ready to leave
+    const check = (k + this.tick) % 10 === 0, g = this.goal[k];
+    const toward = (c: number, near: number, travel = false): [number, number] | typeof ERRAND_HOLD | null => {
+      if (this.cellNear(x, y, c, near)) return ERRAND_HOLD;
+      if (!travel || hyp(x - this.ancX[k], y - this.ancY[k]) > 2) { this.ancX[k] = x; this.ancY[k] = y; this.progT[k] = 0; }
+      else if ((this.progT[k] += dt) > 30) { this.giveUp(k); return null; } // pinned in place for 30 s: drop it
+      const d = navOf(this).dirTo(c, x, y);
+      if (d) { this.stuckT[k] = 0; return d; }
+      this.stuckT[k] += dt;
+      if (this.stuckT[k] > 5) { this.giveUp(k); return null; } // no way there
+      const tx = (c % this.w) + 0.5 - x, ty = ((c / this.w) | 0) + 0.5 - y, l = hyp(tx, ty) || 1;
+      return [tx / l, ty / l];
+    };
+    switch (p) {
+      case PLAN_GATHER: {
+        if (this.cellNear(x, y, g, C.HOME_REACHED_CELLS) && this.refuser[k] === 1) { this.plan[k] = PLAN_REFUSE; this.planT[k] = 0; this.resetProgress(k); return ERRAND_HOLD; } // 0.42: home, and staying
+        if (this.cellNear(x, y, g, C.HOME_REACHED_CELLS)) {
+          this.plan[k] = PLAN_HOME_WAIT; this.planT[k] = 0; this.resetProgress(k); this.note(k, EV_HOME_WAIT);
+          for (let m = this.famLead[k], e = this.famEnd(k); m >= 0 && m < e; m++) if (this.plan[m] === PLAN_FOLLOW && this.goal[m] === k) { this.plan[m] = PLAN_HOME_WAIT; this.goal[m] = this.homeCell[m]; this.planT[m] = 0; }
+          return ERRAND_HOLD;
+        }
+        return toward(g, 0, true); // travelling: dropped if pinned in place
+      }
+      case PLAN_HOME_WAIT: {
+        if (check && this.homeDone(k)) {
+          for (let m = this.famLead[k], e = this.famEnd(k); m >= 0 && m < e; m++) if (this.state[m] === CIV && (this.plan[m] === PLAN_HOME_WAIT || this.plan[m] === PLAN_FOLLOW)) {
+            this.plan[m] = PLAN_STRAIGHT; this.goal[m] = -1; this.note(m, EV_FAMILY_TOGETHER);
+          }
+          return null;
+        }
+        if (this.planT[k] > C.GATHER_WAIT_S || (check && !this.coming(k))) { this.giveUp(k); return null; } // nobody else is on the way
+        return toward(g, 2);
+      }
+      case PLAN_REFUSE: { // 0.42: sheltering at home
+        if (this.inZone[g] === 1) { this.refuser[k] = 0; this.plan[k] = PLAN_STRAIGHT; this.goal[k] = -1; this.resetProgress(k); return null; } // home is inside a zone now: in they go
+        const ci = this.idx(Math.max(0, Math.min(this.w - 1, x | 0)), Math.max(0, Math.min(this.h - 1, y | 0)));
+        if (this.unitNear && this.unitNear[ci] === this.tick + 1) {
+          if ((this.persuadeT[k] += dt) >= C.PERSUADE_S) { // talked out: the family at home leaves with them
+            for (let m = this.famLead[k] >= 0 ? this.famLead[k] : k, e = this.famEnd(k); m < e; m++) if (this.refuser[m] === 1 && this.plan[m] === PLAN_REFUSE && this.state[m] === CIV && hyp(this.ax[m] - x, this.ay[m] - y) <= 3) {
+              this.refuser[m] = 2; this.talkedOut++; this.plan[m] = PLAN_STRAIGHT; this.goal[m] = -1; this.resetProgress(m); this.note(m, EV_TALKED_OUT);
+            }
+            return null;
+          }
+        }
+        return toward(g, 2);
+      }
+      case PLAN_GO_BACK: { // 0.43: back toward the one who turned, then they run for it
+        const l = g;
+        if (l < 0 || this.state[l] !== INF || this.planT[k] >= C.GO_BACK_S) { this.plan[k] = PLAN_STRAIGHT; this.goal[k] = -1; return null; }
+        const tx = this.ax[l] - x, ty = this.ay[l] - y, d = hyp(tx, ty);
+        if (d < 1.5) { this.plan[k] = PLAN_STRAIGHT; this.goal[k] = -1; return null; }
+        return [tx / d, ty / d];
+      }
+      case PLAN_CLASS: { // 0.41: lining up with the teachers, then the class walks to the zone
+        if (this.planT[k] >= C.CLASS_READY_S) { this.plan[k] = PLAN_STRAIGHT; this.goal[k] = -1; return null; }
+        return toward(g, 2);
+      }
+      case PLAN_FOLLOW: {
+        const l = g;
+        if (l < 0 || this.state[l] !== CIV) { this.plan[k] = PLAN_STRAIGHT; this.goal[k] = -1; return null; } // with them in the zone, or they're gone
+        if (this.plan[l] === PLAN_STRAIGHT && hyp(this.ax[l] - x, this.ay[l] - y) < 3) { this.plan[k] = PLAN_STRAIGHT; this.goal[k] = -1; return null; } // walking to the zone together
+        const tx = this.ax[l] - x, ty = this.ay[l] - y, d = hyp(tx, ty);
+        return d < 1.2 ? ERRAND_HOLD : [tx / d, ty / d];
+      }
+    }
+    return null;
+  }
   outbreak = false; // the warning is over and the first cases have turned
   /** 0.24: outbreaks rolled after the first cases (sorted by time); spreadNext = the next one to turn. */
   spreadSites: { x: number; y: number; t: number }[] = [];
@@ -2350,9 +2856,11 @@ export class Sim {
     while (this.outbreak && this.carrierNext < this.carriers.length && this.time >= this.carriers[this.carrierNext].t) {
       const v = this.carriers[this.carrierNext++].k;
       if (this.state[v] !== CIV || !this.dev.bites) continue; // made it into a zone, got out, or already gone
+      this.note(v, EV_TURNED);
       this.state[v] = INF; this.mutant[v] = 0; this.hp[v] = C.INF_HP * infHpScale * this.infHpMul; this.chase[v] = 0;
       this.civWep[v] = 0; this.civAmmo[v] = 0; this.civMilitia[v] = 0; this.civCd[v] = 0;
       this.infectedEver++; this.carriersTurned++;
+      this.grieve(v);
       this.scare(this.ax[v], this.ay[v], 8, 0.95);
     }
     if (this.time >= this.nextWaveT) {
@@ -2368,6 +2876,7 @@ export class Sim {
       this.gatherD = Math.max(C.EVAC_GATHER_D, ring.length ? ring[Math.min(ring.length - 1, need)] : 0); }
     { let alive = 0; for (let k = 0; k < this.civN; k++) if (this.state[k] === CIV || this.state[k] === SAFE_CIV) alive++;
       this.lod = alive > 120000 ? 8 : alive > 6000 ? 4 : alive > 2000 ? 2 : 1; } // people rethink every 0.2 s (8 ticks = 0.4 s for huge crowds): human reaction time
+    if (this.refusers) this.stampUnitNear(); // 0.42: units talking refusers out
     { const fd = Math.pow(0.5, dt / C.FEAR_GRID_HALF), nd = Math.pow(0.5, dt / C.NOISE_HALF), fb = this.fearB, nzb = this.noiseB;
       for (let b = 0; b < fb.length; b++) { fb[b] *= fd; nzb[b] *= nd; } }
 
@@ -2478,9 +2987,11 @@ export class Sim {
             if (this.hasActiveSupport("militia", this.ax[v], this.ay[v])) p *= C.MILITIA_BITE_MUL;
           }
           if (r() < p) {
+            this.note(v, EV_TURNED);
             this.state[v] = INF; this.mutant[v] = 0; this.hp[v] = C.INF_HP * infHpScale * this.infHpMul; this.chase[v] = 0;
             this.civWep[v] = 0; this.civAmmo[v] = 0; this.civMilitia[v] = 0; this.civCd[v] = 0;
             this.infectedEver++;
+            this.grieve(v);
             this.scare(this.ax[v], this.ay[v], 8, 0.95); // 0.30: watching someone get bitten
           }
         }
@@ -2797,7 +3308,7 @@ export class Sim {
     else this.crushT[k] = Math.max(0, this.crushT[k] - dt);
     if (this.downT[k] > 0) {
       this.downT[k] -= dt; this.velX[k] = 0; this.velY[k] = 0;
-      if (this.crushT[k] > C.CRUSH_S * 1.5) { this.state[k] = DEAD; this.crushed++; this.scare(x, y, 4, 0.7); }
+      if (this.crushT[k] > C.CRUSH_S * 1.5) { this.state[k] = DEAD; this.crushed++; this.note(k, EV_CRUSHED); this.scare(x, y, 4, 0.7); }
       else if (this.downT[k] <= 0) this.crushT[k] = 0;
       return;
     }
@@ -2881,10 +3392,12 @@ export class Sim {
     // --- family: drift back toward the group (until terror takes over), wait slightly when someone falls behind, and cover the group
     const lead = this.famLead[k];
     let famWait = false;
-    if (lead >= 0 && f < C.GROUP_COHESION_FEAR) {
+    // 0.40: with daily life, only members walking together (to a zone, or a kid with the parent) keep together
+    const pk = this.plan[k], walking = (q: number) => q === PLAN_NONE || q === PLAN_STRAIGHT || q === PLAN_FOLLOW;
+    if (lead >= 0 && f < C.GROUP_COHESION_FEAR && (!this.dayLife || (walking(pk) && !this.solo[k]))) {
       let sx = 0, sy = 0, n = 0, maxBehind = 0;
       const myDist = !safe && this.zoneClosed ? this.civField[ci] : 65535;
-      for (let m = lead, e = lead + this.famSize[k]; m < e; m++) if (m !== k && this.state[m] === CIV) {
+      for (let m = lead, e = lead + this.famSize[k]; m < e; m++) if (m !== k && this.state[m] === CIV && (!this.dayLife || (walking(this.plan[m]) && !this.solo[m]))) {
         sx += this.ax[m]; sy += this.ay[m]; n++;
         if (myDist < 65535) {
           const mDist = this.civField[this.idx(this.ax[m] | 0, this.ay[m] | 0)];
@@ -2906,11 +3419,12 @@ export class Sim {
       this.civCd[k] -= dt;
       if (this.civCd[k] <= 0 && (this.zStim[k] > 0 || (k + this.tick) % 4 === 0)) {
         const wep = C.CIV_WEAPONS[this.civWep[k] as C.CivWeaponId];
-        const t = this.nearestSeen(x, y, wep.range, true, C.EYE_M);
+        const t = this.civTarget(k, x, y, wep.range);
         if (t < 0) this.civCd[k] = 0.15;
         else {
           this.civAmmo[k]--;
           this.civCd[k] = (1 / wep.rate) * (0.85 + r() * 0.3);
+          if (this.time - this.lastShotNote[k] >= 10) { this.lastShotNote[k] = this.time; this.note(k, EV_SHOT); } // 0.39: once per 10 s in the story
           this.civShotT[k] = this.time; this.lastCivShotT = this.time; this.lastCivShotX = x; this.lastCivShotY = y;
           const tx = this.ax[t], ty = this.ay[t], dist = hyp(tx - x, ty - y) || 1;
           const hitP = wep.accuracy * (1 - C.CIV_FEAR_AIM_PENALTY * f);
@@ -2925,7 +3439,7 @@ export class Sim {
             if (f > 0.6 && this.dev.friendlyFire && r() < C.CIV_FF_CHANCE) {
               const v = this.nearest(mx, my, 0.9, CIV);
               if (v >= 0 && v !== k && (this.famLead[v] < 0 || this.famLead[v] !== this.famLead[k])) {
-                this.state[v] = DEAD; this.civWep[v] = 0; this.civAmmo[v] = 0; this.civFriendlyFire++; this.scare(this.ax[v], this.ay[v], 5, 0.85);
+                this.state[v] = DEAD; this.civWep[v] = 0; this.civAmmo[v] = 0; this.civFriendlyFire++; this.note(v, EV_FRIENDLY_FIRE); this.scare(this.ax[v], this.ay[v], 5, 0.85);
               }
             }
           }
@@ -2933,11 +3447,24 @@ export class Sim {
       }
     }
     // --- where they want to go
-    let dx = 0, dy = 0, wander = false, queue = false;
+    let dx = 0, dy = 0, wander = false, queue = false, hold = false;
     if (this.act[k] === 1) { dx = this.hx[k]; dy = this.hy[k]; }
     else {
+      let meetHold = false;
+      if (safe && this.dayLife && this.plan[k] === PLAN_MEET) { // 0.40: waiting in the zone for the family: not in the lift queue yet
+        this.planT[k] += dt;
+        if ((k + this.tick) % 10 === 0 && this.meetDone(k)) { this.plan[k] = PLAN_STRAIGHT; this.note(k, EV_FAMILY_TOGETHER); }
+        else if (this.planT[k] > C.GATHER_WAIT_S) this.giveUp(k);
+        else meetHold = true;
+      }
+      let routed = false;
+      if (!safe && this.dayLife && this.plan[k] >= PLAN_GATHER && this.plan[k] !== PLAN_MEET) { // 0.40: a family errand
+        const d = this.errand(k, x, y, f, dt);
+        if (d === ERRAND_HOLD) { hold = true; routed = true; }
+        else if (d) { const a = C.AIM_SWAY * Math.sin(this.time * 0.3 + k * 2.399963), ca = Math.cos(a), sa = Math.sin(a); dx = d[0] * ca - d[1] * sa; dy = d[0] * sa + d[1] * ca; routed = true; }
+      }
       if (safe) { // just inside: walk on in, away from the gate
-        const pf = this.hasPads && this.inZone[ci] === 1 ? this.padField[ci] : 65535;
+        const pf = this.hasPads && this.inZone[ci] === 1 && !meetHold ? this.padField[ci] : 65535;
         const d = this.inZone[ci] !== 1 ? (this.routeAt(this.civDir, x, y) ? [this.rdx, this.rdy] : null)
           : (pf !== 65535 && pf > C.EVAC_GATHER_D ? (queue = true, this.downhill(this.padGo, cx, cy)) : null) // on to the Evac Point (a queue: they stop where it's full)
             ?? (this.depth[ci] < C.GATE_CLEAR_DEPTH ? this.inward(cx, cy) : null); // clear of the gate; deeper in they settle
@@ -2946,13 +3473,13 @@ export class Sim {
           this.spread(cx, cy);
           if (hyp(this.spx, this.spy) > 0.05) { dx = this.spx; dy = this.spy; queue = true; }
         }
-      } else if (this.zoneClosed && this.routeAt(this.civDir, x, y)) {
+      } else if (!routed && this.zoneClosed && this.routeAt(this.civDir, x, y)) {
         const a = C.AIM_SWAY * Math.sin(this.time * (0.15 + 0.25 * ((k * 0.754877666) % 1)) + k * 2.399963), ca = Math.cos(a), sa = Math.sin(a);
         dx = this.rdx * ca - this.rdy * sa; dy = this.rdx * sa + this.rdy * ca;
       }
       const zs = this.zStim[k];
-      if (zs > 0) { dx += this.hx[k] * zs * 1.5; dy += this.hy[k] * zs * 1.5; }
-      if (dx === 0 && dy === 0) {
+      if (zs > 0 && !(routed && this.plan[k] === PLAN_GO_BACK)) { dx += this.hx[k] * zs * 1.5; dy += this.hy[k] * zs * 1.5; } // (0.43: not while going back for them)
+      if (dx === 0 && dy === 0 && !hold) {
         if (r() < 0.02) { const a = r() * 6.283; this.hx[k] = Math.cos(a); this.hy[k] = Math.sin(a); }
         dx = this.hx[k]; dy = this.hy[k]; wander = true;
       }
@@ -2965,6 +3492,7 @@ export class Sim {
     // fear, and with it panic, crush and herding, stays as it was)
     const hurry = safe ? (queue || this.inZone[ci] !== 1 ? C.EVAC_HURRY : 0) : C.EVAC_HURRY_OUT;
     let v0 = this.pspd[k] * (C.CIV_SPEED + Math.max(f, hurry) * (C.CIV_SPRINT - C.CIV_SPEED));
+    if (this.dayLife && k < this.civN) v0 *= AGE_PACE[this.age[k]]; // 0.42: pace by age
     v0 *= infra === INFRA_HIGHWAY ? C.HIGHWAY_SPEED_MUL : infra === INFRA_RAIL || infra === INFRA_STATION ? C.RAIL_SPEED_MUL : 1;
     if (this.rough[ci]) v0 *= this.roughMul(ci);
     // speed is set by the space in front of them (Weidmann), not by the crowd behind
@@ -2979,6 +3507,7 @@ export class Sim {
     if (wander) v0 *= safe ? 0.25 : 0.5; // the waiting crowd mostly stands and shuffles
     if (byVeh) v0 *= C.VEH_SLOW; // 0.33: right beside a tank: they edge around it, not sprint
     if (famWait) v0 *= C.GROUP_WAIT_MUL; // 0.37: wait slightly for a family member who fell behind
+    if (hold && this.zStim[k] <= 0) v0 = 0; // 0.40: waiting at home or school, or getting ready to leave
     if (this.time - this.civShotT[k] < C.CIV_SHOOT_PAUSE_S) v0 *= C.CIV_SHOOT_SLOW; // 0.37: pause briefly to aim and fire
     const dl = hyp(dx, dy) || 1;
     // --- steer: relax toward the wanted velocity, add the pushes (m/s2 -> cells/s2)
@@ -3008,7 +3537,7 @@ export class Sim {
     this.velX[k] = vx; this.velY[k] = vy;
     if (safe) return;
     const z = this.inZone[this.idx(this.ax[k] | 0, this.ay[k] | 0)];
-    if (z === 1 || z === 3) this.state[k] = SAFE_CIV; // a gate is a guarded checkpoint
+    if (z === 1 || z === 3) { this.state[k] = SAFE_CIV; this.noteSafe(k); } // a gate is a guarded checkpoint
   }
 
   private mill(k: number, r: () => number, dt: number) {
@@ -3204,7 +3733,7 @@ export class Sim {
             if (this.state[k] !== SAFE_CIV) continue;
             const dx = this.ax[k] - x, dy = this.ay[k] - y;
             if (dx * dx + dy * dy > rr * rr) continue;
-            this.state[k] = DEAD; n++; // flown out
+            this.state[k] = DEAD; n++; this.note(k, EV_EVAC); // flown out
           }
       }
       this.evacuated += n; this.liftsFlown++;
@@ -3793,12 +4322,13 @@ export class Sim {
   }
 
   counts() {
-    let civ = 0, safe = 0, inf = 0;
+    let civ = 0, safe = 0, inf = 0, refusing = 0, refusedLost = 0;
     for (let k = 0; k < this.n; k++) {
       const s = this.state[k];
       if (s === CIV) civ++; else if (s === SAFE_CIV) safe++; else if (s === INF) inf++;
+      if (this.refusers && k < this.civN && this.refuser[k] === 1) { if (s === CIV) refusing++; else if ((s === INF || s === DEAD) && this.fate[k] !== FATE_EVAC) refusedLost++; } // 0.42
     }
-    return { civ, safe, inf, total: this.civN };
+    return { civ, safe, inf, total: this.civN, refusing, refusedLost };
   }
 
   result: Score | null = null;
@@ -3828,14 +4358,15 @@ export class Sim {
   /** The score as it stands: evacuated share, medal, city damage bonus and XP. */
   scoreNow(reason: string, zoneCredit = 0): Score {
     const cnt = this.counts();
-    const saved = this.evacuated + zoneCredit, pct = (100 * saved) / this.civN;
+    const saved = this.evacuated + zoneCredit, pct = savedPct(saved, this.civN, cnt.refusing, cnt.refusedLost); // 0.42: refusers cost a little
     const { intact, bill } = this.cityDamage();
     const emptiedAfterS = this.roundDone && this.roundEmptied && this.roundAt !== null ? Math.max(0, this.roundAt - C.WARNING_S) : null;
     const parts = roundParts({ pct, emptiedAfterS, intact, kills: this.kills, infAlive: this.counts().inf });
     const score = roundScore(parts), medal = medalFor(score, pct);
     const bonus = intact >= C.INTACT_BONUS_PCT ? "Light Touch" : 100 - intact >= C.SCORCHED_BONUS_PCT || bill >= C.BILLION ? "Scorched Earth" : null;
     const xp = Math.max(0, Math.round((score * 10 + this.wave * 20 + (bonus ? C.BONUS_XP : 0) - this.nukesUsed * C.NUKE_XP_PENALTY) * this.diff.xpMul));
-    return { saved, pct, medal, reason, intact, bonus, xp, waves: this.wave, round: this.roundDone && saved > 0, damage: bill, spent: this.spent(), score, parts, kills: this.kills, left: cnt.civ, zoneHeld: cnt.safe };
+    return { saved, pct, medal, reason, intact, bonus, xp, waves: this.wave, round: this.roundDone && saved > 0, damage: bill, spent: this.spent(), score, parts, kills: this.kills, left: cnt.civ - cnt.refusing, zoneHeld: cnt.safe,
+      refused: cnt.refusing, refusedLost: cnt.refusedLost, talkedOut: this.talkedOut, broke: this.broke, civKilledByUs: this.civKilledByUs, civFriendlyFire: this.civFriendlyFire };
   }
   /** The round is over (city empty or stalled): score it, freeze it, keep the battle running for Keep fighting. */
   /** 0.30.1: the player ends the round (only stragglers left): people inside the zone count as saved, the zone
@@ -3844,7 +4375,7 @@ export class Sim {
     if (this.phase !== "battle" || this.roundDone) return "No round to end.";
     if (!this.outbreak) return "Wait for the outbreak first.";
     const c = this.counts();
-    this.endRound(`You ended the round. ${c.safe.toLocaleString()} people in the zone count as saved; ${c.civ.toLocaleString()} left behind.`, false, c.safe);
+    this.endRound(`You ended the round. ${c.safe.toLocaleString()} people in the zone count as saved; ${(c.civ - c.refusing).toLocaleString()} left behind.${c.refusing ? ` ${c.refusing.toLocaleString()} refused to leave.` : ""}`, false, c.safe);
     return null;
   }
   private endRound(reason: string, emptied: boolean, zoneCredit = 0) {
@@ -3853,14 +4384,21 @@ export class Sim {
     this.roundResult = this.scoreNow(reason, zoneCredit);
   }
 
+  /** 0.40: someone is still on a family errand or waiting for family (the round isn't stalled). */
+  private errandsActive(): boolean {
+    for (let k = 0; k < this.civN; k++) { const q = this.plan[k]; if (q >= PLAN_GATHER && q !== PLAN_REFUSE && (this.state[k] === CIV || this.state[k] === SAFE_CIV)) return true; }
+    return false;
+  }
   private checkEnd(force = false) {
     if (!force && this.tick % 10) return;
     const c = this.counts();
     if (!this.roundDone && this.phase === "battle") {
-      if (c.safe > this.lastSafe || this.liftsFlown > this.lastLifts) this.lastProgressT = this.time;
+      const left = c.civ - c.refusing + c.safe, out = this.evacuated.toLocaleString(); // 0.42: refusers at home don't hold the round up
+      const few = left <= this.civN * C.ROUND_STRAGGLERS_PCT / 100;
+      if (c.safe > this.lastSafe || this.liftsFlown > this.lastLifts || (few && this.dayLife && this.errandsActive())) this.lastProgressT = this.time; // 0.40: families still on errands aren't a stall
       this.lastSafe = c.safe; this.lastLifts = this.liftsFlown;
-      const left = c.civ + c.safe, out = this.evacuated.toLocaleString();
-      if (left === 0) this.endRound(this.evacuated ? `Round complete: everyone left alive is out. ${out} people saved.` : "Everyone is lost.", true);
+      const stay = c.refusing ? ` ${c.refusing.toLocaleString()} refused to leave.` : "";
+      if (left === 0) this.endRound(this.evacuated ? `Round complete: everyone left alive is out. ${out} people saved.${stay}` : `Everyone is lost.${stay}`, true);
       else if (this.outbreak && left <= this.civN * C.ROUND_STRAGGLERS_PCT / 100 && this.time - this.lastProgressT >= C.ROUND_STALL_S)
         this.endRound(`Round complete: nobody else can be reached. ${out} people saved.`, false);
     }
@@ -3873,7 +4411,7 @@ export class Sim {
       else {
         // the round score, medal and round XP stay frozen; damage, intact and the bonus are live (for achievements)
         const bonus = intact >= C.INTACT_BONUS_PCT ? "Light Touch" : 100 - intact >= C.SCORCHED_BONUS_PCT || bill >= C.BILLION ? "Scorched Earth" : null;
-        this.result = { ...r, reason: `You pulled out after ${this.wave} hordes. ${killsAfter.toLocaleString()} more infected killed after the round.`, killsAfter, damageAfter, mayhem: mayhem(killsAfter, damageAfter), xp: r.xp + Math.round(killsAfter * C.MAYHEM_XP_PER_KILL * this.diff.xpMul), waves: this.wave, damage: bill, intact, bonus };
+        this.result = { ...r, reason: `You pulled out after ${this.wave} hordes. ${killsAfter.toLocaleString()} more infected killed after the round.`, killsAfter, damageAfter, civKilledByUs: this.civKilledByUs, civFriendlyFire: this.civFriendlyFire, mayhem: mayhem(killsAfter, damageAfter), xp: r.xp + Math.round(killsAfter * C.MAYHEM_XP_PER_KILL * this.diff.xpMul), waves: this.wave, damage: bill, intact, bonus };
       }
     } else {
       this.result = this.scoreNow(this.calledIt ? `You called it there: ${this.evacuated.toLocaleString()} people got out.` : this.evacuated ? `You pulled out. ${this.evacuated.toLocaleString()} people got out.` : "You pulled out.");

@@ -3,16 +3,53 @@ import { tutorialSteps, currentStep, type TutState } from "../src/tutorial";
 import * as C from "../src/config";
 
 const target = C.CITIES[0].recipe!.stands[0];
-const zero: TutState = { zoneCells: 0, zoneOverlap: 0, gates: 0, garrisons: 0, snipers: 0, evacs: 0, phase: "plan", lifts: 0 };
+const zero: TutState = { zoneCells: 0, zoneOverlap: 0, gates: 0, garrisons: 0, snipers: 0, evacs: 0, phase: "plan", lifts: 0,
+  toWall: 0, toGate: 0, gatesOpen: 0, strikes: 0, personOpened: false, speedChanged: false, safeShare: 0, hordeAnnounced: false, stepT: 0 };
 
-test("tutorial steps advance in order", () => {
+test("0.41: the fifteen tutorial steps in order", () => {
   const steps = tutorialSteps(target);
-  expect(steps.map(s => s.id)).toEqual(["pan", "zone", "gates", "garrison", "sniper", "evac", "start", "lift", "end"]);
+  expect(steps.map(s => s.id)).toEqual(["look", "zone", "wall", "reopen", "garrison", "sniper", "evac", "start", "alert", "speed", "close", "strike", "money", "people", "finish"]);
   expect(currentStep(steps, zero, 0)).toBe(0);
   expect(currentStep(steps, { ...zero, zoneOverlap: 0.7, zoneCells: 900 }, 1)).toBe(2);
   expect(currentStep(steps, { ...zero, zoneOverlap: 0.5, zoneCells: 900 }, 1)).toBe(1); // under 60% of the park
-  const done: TutState = { zoneCells: 900, zoneOverlap: 1, gates: 3, garrisons: 1, snipers: 1, evacs: 1, phase: "battle", lifts: 1 };
-  expect(currentStep(steps, done, 1)).toBe(steps.length - 1);
+});
+
+test("0.41: the walls step waits for the player to turn a gate into wall (the zone's own gates don't count)", () => {
+  const steps = tutorialSteps(target), i = steps.findIndex(s => s.id === "wall");
+  const zoned = { ...zero, zoneOverlap: 0.8, zoneCells: 900, gates: 60, gatesOpen: 60 };
+  expect(currentStep(steps, zoned, 1)).toBe(i);
+  expect(currentStep(steps, { ...zoned, toWall: 1 }, 1)).toBe(i + 1); // now: open it again
+  expect(currentStep(steps, { ...zoned, toWall: 1, toGate: 1 }, 1)).toBe(i + 2);
+});
+
+test("0.41: battle steps: speed, close gates once most are in, a strike, money times out, people, finish", () => {
+  const steps = tutorialSteps(target), id = (n: number) => steps[n].id;
+  const planned: TutState = { ...zero, zoneOverlap: 1, zoneCells: 900, gates: 60, gatesOpen: 60, toWall: 1, toGate: 1, garrisons: 1, snipers: 1, evacs: 1, phase: "battle" };
+  expect(id(currentStep(steps, planned, 1))).toBe("alert");
+  const lifted = { ...planned, lifts: 1 };
+  expect(id(currentStep(steps, lifted, 1))).toBe("speed");
+  const sped = { ...lifted, speedChanged: true };
+  const close = steps.find(s => s.id === "close")!;
+  expect(id(currentStep(steps, sped, 1))).toBe("close");
+  expect(close.show!({ ...sped, safeShare: 0.3 })).toBe(false); // too early: most people are still outside
+  expect(close.show!({ ...sped, safeShare: 0.7 })).toBe(true);
+  expect(close.show!({ ...sped, safeShare: 0.3, hordeAnnounced: true })).toBe(true);
+  const closed = { ...sped, gatesOpen: 0 };
+  expect(id(currentStep(steps, closed, 1))).toBe("strike");
+  const struck = { ...closed, strikes: 1 };
+  expect(id(currentStep(steps, struck, 1))).toBe("money");
+  expect(id(currentStep(steps, { ...struck, stepT: 13 }, 1))).toBe("people");
+  expect(id(currentStep(steps, { ...struck, stepT: 13, personOpened: true }, 1))).toBe("finish");
+  const fin = steps.find(s => s.id === "finish")!;
+  expect(fin.show!({ ...struck, stepT: 5 })).toBe(true);
+  expect(fin.show!({ ...struck, stepT: 25 })).toBe(false); // closes itself
+});
+
+test("0.41: the look step says right-drag and the zone step says how to close it", () => {
+  const steps = tutorialSteps(target);
+  expect(steps[0].text).toContain("Right-drag");
+  expect(steps[1].text).toMatch(/first corner|Enter/);
+  expect(steps.find(s => s.id === "start")!.highlight).toEqual({ kind: "button", button: "startbtn" });
 });
 
 test("the zone step highlights the tutorial park and the surrounding building blocks", () => {
@@ -63,4 +100,12 @@ test("the tutorial runs on City 1 until its first medal, or when asked to replay
   expect(wantTutorial({ first: true, medal: true, daily: false, replay: true })).toBe(true);     // Replay tutorial
   expect(wantTutorial({ first: false, medal: false, daily: false, replay: true })).toBe(false);  // other cities never
   expect(wantTutorial({ first: true, medal: false, daily: true, replay: false })).toBe(false);   // not in a daily
+});
+
+test("0.41 review: the alert and people steps heal themselves after a minute", () => {
+  const steps = tutorialSteps(target);
+  const alert = steps.find(s => s.id === "alert")!, people = steps.find(s => s.id === "people")!;
+  expect(alert.done({ ...zero, phase: "battle", stepT: 61 })).toBe(true); // no lift came (pad removed, waved off)
+  expect(people.done({ ...zero, phase: "battle", stepT: 61 })).toBe(true); // nobody clickable / skipped by the player
+  expect(alert.done({ ...zero, phase: "battle", stepT: 10 })).toBe(false);
 });
