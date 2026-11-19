@@ -2,7 +2,10 @@ import * as C from "./config";
 import { BRIDGE, BUILDING, CityMap, INFRA_HIGHWAY, INFRA_RAIL, INFRA_STATION, PARK, ROAD, WATER } from "./map";
 import { fetchLiveOsmCity } from "./osm";
 import { CIV, INF, SAFE_CIV, SHOT_CANNON, SHOT_ROCKET, SHOT_SHELL, SHOT_SNIPER, Sim } from "./sim";
-import type { Score } from "./sim";
+import type { Score, Entity, Orbit } from "./sim";
+import { describeCell, estimateAt } from "./cursorinfo";
+import { keyIntent, cameraKeysActive, pruneSelection, type ArmCmd } from "./input";
+import { drawMinimap, miniToWorld } from "./minimap";
 import * as Save from "./save";
 import * as Snap from "./snapshot";
 import * as P from "./progress";
@@ -27,7 +30,7 @@ import { cleanQuickbar, setSlot, swapSlots, clearSlot, type Slots } from "./quic
 import { airHalfPx, drawAirframe, smoothHeading } from "./aircraft";
 import { tutorialSteps, currentStep, wantTutorial, type TutStep, type TutState } from "./tutorial";
 import { drawDepot, drawModel, drawSquad, drawSupport, drawWrecks, hasModel, hasSquad, MODEL_ZOOM, noteUnits, SQUAD_ZOOM } from "./models";
-import { clockSpan, START_CHOICES, randomStart, needsTimePick, formatClock, PLAN_REFUSE } from "./people";
+import { clockSpan, START_CHOICES, randomStart, needsTimePick, formatClock } from "./people";
 import { personHtml, followable, followEndLine, endStatsLines } from "./personui";
 import { TIPS, shouldTip, type TipId } from "./tips";
 
@@ -84,6 +87,9 @@ let pausedSpeed = save.settings.speed ?? 1; // 0.32: the player's last chosen sp
 let tool: Tool = "zone";
 let speed = 1; // 0 paused
 let draft: [number, number][] = []; // zone being drawn
+let sel: Entity[] = []; // 0.44/0.45: what is selected with the Move/Aim tool (click, Shift-click, or drag a box)
+let armedCmd: ArmCmd | null = null; // 0.45: A/P/E pressed: the next left-click aims it
+let box: [number, number, number, number] | null = null; // 0.45: selection box being dragged (canvas px)
 let hover: [number, number] | null = null; // cell under the mouse
 let showHeights = false;
 let showRanges = false;
@@ -202,7 +208,12 @@ function exportPlan(): Plan {
   sim.inZone.forEach((z, i) => { if (z === 2) walls.push(i); });
   return {
     poly: sim.zones[0] ?? [], zones: sim.zones.map(z => z.slice()), walls,
-    units: sim.units.filter(u => u.kind !== "para" && u.kind !== "police" && u.kind !== "militia").map(u => [u.kind, u.x, u.y, u.mode ?? "near"]),
+    units: sim.units.filter(u => u.kind !== "para" && u.kind !== "police" && u.kind !== "militia").map(u => {
+      // 0.45: orders given in planning (after the start, the copy kept then: Retry replays the plan, not what was left)
+      const po = sim.phase === "plan" ? (u.cmd ? { orders: u.orders ?? [], standby: !!u.standby } : undefined) : u.planOrders;
+      return po ? [u.kind, u.x, u.y, u.mode ?? "near", po.orders.map(o => ({ ...o })), ...(po.standby ? [true] : [])] as Plan["units"][number]
+        : [u.kind, u.x, u.y, u.mode ?? "near"] as Plan["units"][number];
+    }),
     supports: sim.supports.map(b => [b.kind, b.x, b.y]),
     abilities: { ...sim.bought }, c4: [...sim.c4], demo: [...sim.demo], start: startMin,
   };
@@ -227,7 +238,12 @@ function importPlanInner(p: Plan) {
   sim.fieldDirty = true;
   for (const [k, x, y] of p.supports ?? []) if (k === "budget") sim.placeSupport(k, x, y);
   for (const [k, x, y] of p.supports ?? []) if (k !== "budget") sim.placeSupport(k, x, y);
-  for (const [k, x, y, m] of p.units) { if (!sim.place(k, x, y) && m) sim.units[sim.units.length - 1].mode = m; }
+  for (const [k, x, y, m, ord, sb] of p.units) {
+    if (sim.place(k, x, y)) continue; // didn't fit: its orders go with it
+    const u = sim.units[sim.units.length - 1];
+    if (m) u.mode = m;
+    if (ord && sim.canOrder(u)) { u.orders = ord.map(o => ({ ...o })); u.cmd = true; u.standby = !!sb; if (sb) u.holdAt = [u.x, u.y]; } // 0.45
+  }
   for (const k of ABILITY_KINDS) for (let n = p.abilities?.[k] ?? 0; n > 0; n--) sim.buyAbility(k);
   for (const b of p.c4 ?? []) if (sim.bridges[b] && sim.remaining() >= C.C4_COST) sim.c4.add(b);
   for (const i of p.demo ?? []) sim.toggleDemo(i % sim.w, (i / sim.w) | 0); // 0.38
@@ -367,6 +383,7 @@ function applyFullscreen() {
 let selPerson = -1, following = false, lastPersonHtml = "";
 function selectPerson(k: number) {
   selPerson = k; lastPersonHtml = ""; tutTrack.person = true;
+  if (sim.refuser[k] === 1 && tipPossible("refuse")) tip("refuse"); // 0.44: the refuser tip comes with their window (no rings)
   if (following) following = followable(sim, k);
   renderPerson();
   log("info", "person-select", { k });
@@ -686,14 +703,16 @@ function toggleTool(t: Tool) { if (tool === t && t !== "pan") setTool("pan"); el
 function setTool(t: Tool) {
   if (!isOpen(t)) { say(`${toolName(t)} unlocks at ${P.UNLOCK_XP[t].toLocaleString()} XP. You have ${(save.xp ?? 0).toLocaleString()}.`, 3500); return; }
   orderSel = null; nukeArm = null;
+  if (t === "order") { t = "pan"; say("Select units (click them or drag a box), then right-click where to send them. A attack-move, P patrol, E escort, S stop, D stand by.", 6000); } // 0.45: the Order card now opens unit control
+  if (t !== "pan" && (sel.length || armedCmd)) { sel = []; armedCmd = null; renderSelbar(); } // 0.44: the strip goes with the selection
   openCatFor(t);
   tool = t; strikeStart = null;
   if (t !== "zone") draft = [];
   document.querySelectorAll<HTMLButtonElement>("[data-tool]").forEach(b => b.classList.toggle("on", b.dataset.tool === t));
   renderQuickbar();
   const hints: Record<Tool, string> = {
-    pan: "Drag to move the map. Wheel to zoom. Click a unit to change what it shoots first.",
-    order: "Click an APC, squad, paratroopers or boat, then click where to send it. It clears that area and holds it.",
+    pan: "Right-drag to move the map, wheel to zoom. Click a unit to select it (drag a box for several): right-click sends mobile units or an AC-130, T changes what it shoots first, Delete removes it (an AC-130 goes home).",
+    order: "Unit control: select units with Move/Aim (click or drag a box), then right-click where to send them. A attack-move, P patrol, E escort, S stop, D stand by.",
     barrage: C.ABILITIES.barrage.hint, moab: C.ABILITIES.moab.hint, nuke: C.ABILITIES.nuke.hint,
     a10: C.ABILITIES.a10.hint, cluster: C.ABILITIES.cluster.hint, tomahawk: C.ABILITIES.tomahawk.hint, gunship: C.ABILITIES.gunship.hint,
     himars: "Click a street or park, ideally inside your zone (free reloads). Ripples 6 rockets at the thickest crowd up to 460 m away. Nothing closer than 60 m.",
@@ -709,7 +728,7 @@ function setTool(t: Tool) {
     garrison: "Click a building. Garrisons fire fast at short range.",
     sniper: "Click a building. Taller buildings give snipers more range (press J to see heights).",
     turret: "Click a street. Turrets fire very fast but never reload.",
-    remove: "Planning: click a unit or support building to remove it for a full refund. Battle: it stops working and is pulled out after a while, then refunds.",
+    remove: "Planning: click a unit or support building to remove it for a full refund (or select it with Move/Aim and press Delete). Battle: it stops working and is pulled out after a while, then refunds.",
     battleship: "Click the river. A slow, heavy warship whose guns shell crowds far inland. Set its target (Move map, click it) to cover your walls or civilians on the run.",
     mortar: "Click a street or park. Mortars lob shells far into crowds of infected, but can't hit anything close.",
     evac: C.SUPPORTS.evac.hint, police: C.SUPPORTS.police.hint, militia: C.SUPPORTS.militia.hint,
@@ -746,8 +765,15 @@ function click(cx: number, cy: number) {
   const x = Math.floor(cx), y = Math.floor(cy);
   const planning = sim.phase === "plan";
   if (tool === "pan") {
-    const m = sim.cycleTarget(cx, cy);
-    if (m) { say(`This unit now shoots ${C.TARGET_LABEL[m]} first.`, 2500); log("info", "target-mode", { mode: m, x, y }); return; }
+    if (armedCmd) { aimArmed(cx, cy); return; } // 0.45: A/P/E then click
+    const hit = sim.entityAt(cx, cy); // 0.44: clicking a unit selects it (T changes its targeting, Delete removes it)
+    const add = keys.has("shift");
+    if (hit) {
+      const same = (e: Entity) => entObj(e) === entObj(hit);
+      sel = add ? (sel.some(same) ? sel.filter(e => !same(e)) : [...sel, hit]) : [hit];
+      renderSelbar(); return;
+    }
+    if (!add) { sel = []; renderSelbar(); }
     const k = sim.civAt(cx, cy, Math.max(0.6, 8 / cam.scale)); // 0.39: click a white dot to see who they are
     if (k >= 0) selectPerson(k);
     return;
@@ -855,7 +881,7 @@ canvas.addEventListener("contextmenu", e => e.preventDefault());
 canvas.addEventListener("pointerdown", e => {
   if (mode !== "game") return;
   canvas.setPointerCapture(e.pointerId);
-  drag = { x: e.clientX, y: e.clientY, moved: false, pan: e.button !== 0 || tool === "pan" };
+  drag = { x: e.clientX, y: e.clientY, moved: false, pan: e.button !== 0 }; // 0.45: left-drag with Move/Aim draws a selection box; right/middle-drag pans
 });
 canvas.addEventListener("pointermove", e => {
   const dpr = devicePixelRatio;
@@ -866,11 +892,63 @@ canvas.addEventListener("pointermove", e => {
     const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
     if (Math.abs(dx) + Math.abs(dy) > 4) drag.moved = true;
     if (drag.pan && drag.moved) { following = false; cam.x += dx * dpr; cam.y += dy * dpr; drag.x = e.clientX; drag.y = e.clientY; }
+    else if (!drag.pan && drag.moved && tool === "pan" && !armedCmd) { // 0.45: the selection box
+      const r = canvas.getBoundingClientRect();
+      box = [(drag.x - r.left) * dpr, (drag.y - r.top) * dpr, e.offsetX * dpr, e.offsetY * dpr];
+    }
   }
 });
+/** 0.45: the minimap, top right: 220 px wide (160 under 900 px), redrawn 4 times a second. */
+const mini = $<HTMLCanvasElement>("minimap"), miniCtx = mini.getContext("2d")!;
+let miniT = 0, miniDrag = false;
+function minimap(now: number) {
+  const show = mode === "game" && !stack.length;
+  if (mini.hidden === show) mini.hidden = !show;
+  if (!show || now - miniT < 250) return;
+  miniT = now;
+  const cssW = canvas.clientWidth < 900 ? 160 : 220, cssH = Math.round(cssW * Math.min(1.2, sim.h / sim.w));
+  const dpr = devicePixelRatio;
+  if (mini.width !== Math.round(cssW * dpr) || mini.height !== Math.round(cssH * dpr)) {
+    mini.width = Math.round(cssW * dpr); mini.height = Math.round(cssH * dpr); mini.style.width = cssW + "px"; mini.style.height = cssH + "px";
+  }
+  drawMinimap(miniCtx, sim, baseImg, zoneImg, cam, { w: canvas.width, h: canvas.height });
+}
+function miniCell(e: PointerEvent | MouseEvent): [number, number] {
+  const r = mini.getBoundingClientRect();
+  return miniToWorld((e.clientX - r.left) * (mini.width / r.width), (e.clientY - r.top) * (mini.height / r.height), mini.width, mini.height, sim.w, sim.h);
+}
+mini.addEventListener("contextmenu", e => e.preventDefault());
+mini.addEventListener("pointerdown", e => {
+  e.stopPropagation();
+  const [x, y] = miniCell(e);
+  if (e.button === 2) { if (orderable().length || selOrbits().length) moveOrder(x, y); miniT = 0; return; } // right-click: send the selected units / AC-130s
+  if (e.button !== 0) return;
+  mini.setPointerCapture(e.pointerId); miniDrag = true; following = false; centerOn(x, y); miniT = 0;
+});
+mini.addEventListener("pointermove", e => { if (miniDrag) { const [x, y] = miniCell(e); centerOn(x, y); miniT = 0; } });
+mini.addEventListener("pointerup", () => { miniDrag = false; });
+
+/** 0.45: units that take orders inside the dragged box (canvas px); Shift adds to the selection. */
+function boxSelect(b: [number, number, number, number]) {
+  const [x0, x1] = [Math.min(b[0], b[2]), Math.max(b[0], b[2])], [y0, y1] = [Math.min(b[1], b[3]), Math.max(b[1], b[3])];
+  const s = cam.scale, inside: Entity[] = [];
+  for (const u of sim.units) {
+    if (!sim.canOrder(u) || (u.deployT && u.deployT > 0)) continue;
+    const px = cam.x + (u.x + 0.5) * s, py = cam.y + (u.y + 0.5) * s;
+    if (px >= x0 && px <= x1 && py >= y0 && py <= y1) inside.push({ unit: u });
+  }
+  if (keys.has("shift")) { for (const e of inside) if (!sel.some(x => "unit" in x && "unit" in e && x.unit === e.unit)) sel.push(e); }
+  else sel = inside;
+  if (inside.length) { closePerson(); tip("orders"); }
+  renderSelbar();
+}
+canvas.addEventListener("pointerleave", () => { if (!drag) hover = null; }); // 0.44: the cursor label goes when the pointer leaves the map
 canvas.addEventListener("pointerup", e => {
+  if (box) { boxSelect(box); box = null; }
   if (drag && !drag.moved && e.button === 0 && hover) click(hover[0], hover[1]);
-  if (drag && !drag.moved && e.button === 2) {
+  if (drag && !drag.moved && e.button === 2 && armedCmd) { armedCmd = null; renderSelbar(); } // 0.45: right-click cancels an armed command
+  else if (drag && !drag.moved && e.button === 2 && tool === "pan" && (orderable().length || selOrbits().length) && hover) moveOrder(hover[0], hover[1]); // 0.45: right-click = move (0.46: AC-130s too)
+  else if (drag && !drag.moved && e.button === 2) {
     if (tool === "zone" && draft.length) draft.pop();          // drawing a zone: drop the last corner
     else if (tool !== "pan") setTool("pan");                 // 0.19.1: right-click puts the tool down
   }
@@ -897,12 +975,20 @@ addEventListener("keydown", e => {
     if (stack.length) { const top = stack[stack.length - 1]; if (top !== "title" && !(top === "slots" && !Save.activeSlot())) back(); return; }
     if (mode === "game" && pickerCat) { openPicker(null); return; }
     if (mode === "game" && selPerson >= 0) { closePerson(); return; } // 0.39
+    if (mode === "game" && armedCmd) { armedCmd = null; renderSelbar(); return; } // 0.45: an armed command first
+    if (mode === "game" && sel.length) { sel = []; renderSelbar(); return; } // 0.44
     if (mode === "game" && draft.length) { draft = []; return; }
     if (mode === "game" && strikeStart) { strikeStart = null; return; }
     if (mode === "game" && $("end").hidden) pause();
     return;
   }
   if (mode !== "game" || stack.length) return;
+  const tgt = e.target as HTMLElement | null;
+  if (tgt && (tgt.tagName === "INPUT" || tgt.tagName === "TEXTAREA" || tgt.tagName === "SELECT")) return; // 0.44: typing is not a command
+  if ((k === "Delete" || k === "Backspace") && sel.length) { e.preventDefault(); removeSelected(); return; }
+  if ((k === "t" || k === "T") && sel.length && !e.ctrlKey && !e.altKey && !e.metaKey) { cycleSelected(); return; }
+  { const it = keyIntent(k, { shift: e.shiftKey, ctrl: e.ctrlKey || e.metaKey, alt: e.altKey }, orderable().length > 0); // 0.45
+    if (it) { e.preventDefault(); runIntent(it); return; } }
   if (k === " ") { e.preventDefault(); if (sim.phase === "battle") setSpeed(speed ? 0 : pausedSpeed); }
   else if (k === "j" || k === "J") showHeights = !showHeights; // 0.22: V went to the quick bar
   else if (k === "g" || k === "G") setTool("gate"); // 0.41: the Gate tool's key (shown on its button)
@@ -938,6 +1024,7 @@ function startBattle() {
 
 // ---------- HUD ----------
 function refreshUi() {
+  renderSelbar(); // 0.44
   const planning = sim.phase === "plan";
   $("budget").textContent = C.money(sim.remaining());
   $("phase").textContent = planning ? "PLANNING" : sim.phase === "battle" ? "BATTLE" : "OVER";
@@ -992,6 +1079,7 @@ function hud(now: number) {
   runTicker(); // picks up alerts queued while the strip was hidden
   if (sim.phase === "battle") { // 0.41: tips the battle itself brings up
     if (sim.liftsAborted > 0) tip("waveOff");
+    if (tipPossible("gunship") && sim.orbits.some(o => o.arrived && !o.leaving)) tip("gunship"); // 0.46.1: how to move it / send it home
     if (tipPossible("ammo") && sim.units.some(u => Number.isFinite(u.ammo) && u.ammo < (C.UNITS[u.kind]?.ammo ?? 0) * 0.25)) tip("ammo");
     if (sim.outbreak && !sim.roundDone && tipPossible("endRound") && sim.counts().civ <= sim.civN * 0.05) tip("endRound");
   }
@@ -1009,6 +1097,7 @@ function hud(now: number) {
   $("budget").textContent = C.money(sim.remaining());
   if (sim.phase === "battle" && sim.lastIncome) $("budget").textContent += `  +${C.money(sim.lastIncome)}/10s`;
   if (tool === "zone" && draft.length) $("budget").textContent += `  (zone ≈ ${C.money(draftCost())})`;
+  while (sim.orderLog.length) say(sim.orderLog.shift()!, 3000); // 0.45
   while (sim.soldLog.length) { const k = sim.soldLog.shift()!; const name = (C.UNITS[k as C.UnitKind] ?? C.SUPPORTS[k as C.SupportKind]).name; say(`${name} pulled out. Money refunded.`, 3000); log("info", "unit-sold", { kind: k, money: sim.remaining() }); }
   while (sim.lostLog.length) { const k = sim.lostLog.shift()!; const name = (C.UNITS[k as C.UnitKind] ?? C.SUPPORTS[k as C.SupportKind]).name; notify(`${name} lost!`); log("warn", "unit-lost", { kind: k, t: +sim.time.toFixed(1) }); }
   if (sim.earned !== lastEarned) { log("info", "income", { pay: sim.lastIncome, total: sim.earned, money: sim.remaining() }); lastEarned = sim.earned; }
@@ -1273,23 +1362,7 @@ function draw(now: number) {
     ctx.lineWidth = 2.5; ctx.strokeStyle = `rgba(253,230,138,${0.75 + 0.25 * Math.sin(now / 200)})`;
     ctx.beginPath(); ctx.arc(cam.x + sim.ax[selPerson] * s, cam.y + sim.ay[selPerson] * s, r, 0, 7); ctx.stroke();
   }
-  // 0.42: people refusing to leave, sheltering at home: an amber ring so the player can find them and send a unit
-  if (sim.phase === "battle" && sim.refuserList.length) {
-    const r = Math.max(4, dot * 2); let shown = false, drawn = 0;
-    ctx.lineWidth = 1.5; ctx.strokeStyle = "rgba(251,191,36,0.85)";
-    ctx.beginPath();
-    for (const m of sim.refuserList) {
-      if (sim.refuser[m] !== 1 || sim.state[m] !== CIV || sim.plan[m] !== PLAN_REFUSE) continue;
-      const ax = sim.ax[m], ay = sim.ay[m];
-      if (ax < x0 || ay < y0 || ax > x1 || ay > y1) continue;
-      const px = cam.x + ax * s, py = cam.y + ay * s;
-      if (s >= 4) { ctx.moveTo(px + r, py); ctx.arc(px, py, r, 0, 6.2832); shown = true; } // zoomed in: a ring
-      else ctx.rect(px - 1.5, py - 1.5, 3, 3); // zoomed out: an amber speck (the tip waits for a closer look)
-      if (++drawn >= 2000) break;
-    }
-    if (s >= 4) ctx.stroke(); else { ctx.fillStyle = "rgba(251,191,36,0.9)"; ctx.fill(); }
-    if (shown && tipPossible("refuse")) tip("refuse");
-  }
+  // 0.44: people refusing to leave are not highlighted on the map (their person window says so)
   // Explosions: a ring that grows and fades over a second.
   for (const b of sim.blasts) {
     const k = Math.min(1, (sim.time - b.t) / 0.8);
@@ -1326,6 +1399,18 @@ function draw(now: number) {
   // AC-130s on station: the orbit ring and the plane circling it.
   for (const o of sim.orbits) {
     const ox = cam.x + o.x * s, oy = cam.y + o.y * s, R = C.GUNSHIP_RADIUS * s;
+    if (o.inbound || o.leaving) { // 0.46: flying in from the edge, over to a new spot, or home
+      const [tx, ty] = o.inbound ? [o.x + Math.cos(o.angle) * C.GUNSHIP_RADIUS * 1.15, o.y + Math.sin(o.angle) * C.GUNSHIP_RADIUS * 1.15] : sim.edgeEntry(o.fx, o.fy);
+      const px = cam.x + o.fx * s, py = cam.y + o.fy * s, h = Math.atan2(ty - o.fy, tx - o.fx);
+      if (o.inbound) {
+        ctx.strokeStyle = "rgba(206,147,216,0.5)"; ctx.lineWidth = 1.5; ctx.setLineDash([8, 6]);
+        ctx.beginPath(); ctx.arc(ox, oy, R, 0, 7); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(px, py); ctx.lineTo(cam.x + tx * s, cam.y + ty * s); ctx.stroke(); ctx.setLineDash([]);
+      }
+      if (Number.isFinite(h)) drawAirframe(ctx, "ac130", px, py, s, h, 1, now / 1000 * 12);
+      label(o.inbound ? "AC-130 inbound" : "AC-130 heading home", px + airHalfPx("ac130", s) + 4, py - 10);
+      continue;
+    }
     if (o.away) { // 0.32: refueling: flies out along its heading, later flies back in to the same point of the orbit
       const left = o.until - sim.time, gone = C.GUNSHIP_REFUEL_S - left, fly = 14, v = C.GUNSHIP_RADIUS * 1.15 * 0.5; // orbit speed, cells/s
       const h = o.angle - Math.PI / 2, jx = ox + Math.cos(o.angle) * R * 1.15, jy = oy + Math.sin(o.angle) * R * 1.15;
@@ -1560,6 +1645,163 @@ function draw(now: number) {
     ctx.fillStyle = "#7CFC9A";
     for (const [x, y] of draft) { ctx.beginPath(); ctx.arc(cam.x + x * s, cam.y + y * s, 4, 0, 7); ctx.fill(); }
   }
+  drawSelection(s);
+  drawCursorInfo(s);
+}
+
+/** 0.44: the selection drops whatever is gone (sold, removed, killed, a new battle, a loaded plan). */
+function entAlive(e: Entity): boolean {
+  if ("orbit" in e) return sim.orbitAlive(e.orbit); // 0.46: an AC-130 until it heads home
+  return "unit" in e ? sim.units.includes(e.unit) && e.unit.extractT === undefined && (e.unit.hp === undefined || e.unit.hp > 0)
+    : sim.supports.includes(e.support) && e.support.extractT === undefined;
+}
+/** The thing a selection entry points at. */
+function entObj(e: Entity): object { return "unit" in e ? e.unit : "support" in e ? e.support : e.orbit; }
+/** 0.46: the selected AC-130s. */
+function selOrbits(): Orbit[] { return sel.flatMap(e => "orbit" in e && sim.orbitAlive(e.orbit) ? [e.orbit] : []); }
+function selAlive(): boolean {
+  if (!sel.length) return false;
+  const kept = pruneSelection(sel, entAlive);
+  if (kept.length !== sel.length) { sel = kept; if (!orderable().length) armedCmd = null; renderSelbar(); }
+  return sel.length > 0;
+}
+/** 0.45: the selected units that take orders. */
+function orderable(): import("./sim").Unit[] { return sel.flatMap(e => "unit" in e && sim.canOrder(e.unit) ? [e.unit] : []); }
+function removeSelected() {
+  if (!selAlive()) return;
+  if (sim.phase === "plan") {
+    let refused = false;
+    for (const e of sel) { if ("orbit" in e) continue; if (!sim.removeEntity(e)) refused = true; else log("info", "removed", { kind: "unit" in e ? e.unit.kind : e.support.kind }); }
+    if (refused) say("Removing this Budget Office would exceed your budget.");
+    sel = sel.filter(entAlive); renderSelbar(); refreshUi(); return;
+  }
+  if (sim.phase !== "battle") return;
+  const os = selOrbits(); // 0.46: Delete sends an AC-130 home (cancelled before it arrives: the charge comes back)
+  if (os.length) {
+    const refunded = os.filter(o => !o.arrived).length;
+    for (const o of os) sim.sendHome(o);
+    say(refunded ? `AC-130 cancelled: charge returned${refunded > 1 ? ` (${refunded})` : ""}.` : `AC-130${os.length > 1 ? "s" : ""} heading home.`, 3000);
+    log("info", "gunship-home", { n: os.length, refunded });
+  }
+  let secs = 0, why = "";
+  for (const e of sel) { if ("orbit" in e) continue; const r = sim.sellEntity(e); if (typeof r === "string") why = r; else secs = Math.max(secs, r); }
+  if (secs) { tip("sell"); say(`Pulling ${sel.length > 1 ? "them" : "the unit"} out: ${secs.toFixed(0)} s. No fighting meanwhile; you get the cost back when out.`, 4000); log("info", "sell-in-battle", { secs }); }
+  else if (why) say(why);
+  sel = sel.filter(entAlive); renderSelbar();
+}
+function cycleSelected() {
+  if (!selAlive()) return;
+  const us = sel.flatMap(e => "unit" in e && C.UNITS[e.unit.kind].range > 0 ? [e.unit] : []);
+  if (!us.length) return;
+  const m = sim.cycleTargetOf(us[0]);
+  for (const u of us.slice(1)) u.mode = m;
+  say(`${us.length > 1 ? "These units now shoot" : "This unit now shoots"} ${C.TARGET_LABEL[m]} first.`, 2500); log("info", "target-mode", { mode: m });
+  renderSelbar();
+}
+/** 0.45: carry out a command from a key or the bar. */
+function runIntent(it: import("./input").Intent) {
+  const us = orderable();
+  if (it.k === "arm") { armedCmd = it.cmd; renderSelbar(); return; }
+  if (it.k === "cancel") { armedCmd = null; renderSelbar(); return; }
+  if (it.k === "stop") { for (const u of us) sim.stopUnit(u); say(us.length > 1 ? "Holding here." : "Holding here.", 1500); }
+  else if (it.k === "standby") { for (const u of us) sim.standBy(u); say("Standing by: holding fire.", 2000); }
+  log("info", "command", { k: it.k, n: us.length });
+  renderSelbar();
+}
+/** 0.45: the armed command lands where the player clicked. */
+function aimArmed(cx: number, cy: number) {
+  const us = orderable(), cmd = armedCmd!, queue = keys.has("shift");
+  if (!us.length) { armedCmd = null; return; }
+  let e: string | null;
+  if (cmd === "escort") {
+    const k = sim.civAt(cx, cy, Math.max(0.8, 10 / cam.scale));
+    if (k < 0) { say("Click a person to escort."); return; }
+    e = sim.issueGroup(us, { k: "escort", x: cx, y: cy, who: k }, queue);
+  } else e = sim.issueGroup(us, { k: cmd, x: cx, y: cy }, queue);
+  if (e) { say(e); return; }
+  log("info", "order", { k: cmd, n: us.length, x: Math.floor(cx), y: Math.floor(cy), queue });
+  if (!queue) armedCmd = null; // Shift keeps it armed for the next point
+  renderSelbar();
+}
+/** 0.45: right-click with units selected: move there (Shift adds it to their queue). */
+function moveOrder(cx: number, cy: number) {
+  const us = orderable(), os = selOrbits();
+  if (os.length) { // 0.46: the selected AC-130s fly over to circle the new spot
+    let why: string | null = null;
+    for (const o of os) why = sim.redeployOrbit(o, cx, cy) ?? why;
+    if (why) say(why); else { snd.radio(); say(sim.redeployNote(os[0]), 3000); log("info", "gunship-move", { n: os.length, x: Math.floor(cx), y: Math.floor(cy) }); }
+  }
+  if (!us.length) return;
+  const e = sim.issueGroup(us, { k: "move", x: cx, y: cy }, keys.has("shift"));
+  if (e) say(e); else log("info", "order", { k: "move", n: us.length, x: Math.floor(cx), y: Math.floor(cy), queue: keys.has("shift") });
+}
+/** The small bar for the selection: names, targeting (T), unit commands, remove/pull out (Del). */
+function renderSelbar() {
+  const bar = $("selbar");
+  if (!sel.length || mode !== "game") { bar.hidden = true; return; }
+  const us = orderable();
+  const first = sel[0];
+  const name = sel.length > 1 ? `${sel.length} selected` : "unit" in first ? C.UNITS[first.unit.kind].name : "support" in first ? C.SUPPORTS[first.support.kind].name : "AC-130";
+  const armedU = sel.find(e => "unit" in e && C.UNITS[e.unit.kind].range > 0) as { unit: import("./sim").Unit } | undefined;
+  const os = selOrbits(), onlyAir = os.length === sel.length;
+  const del = onlyAir ? (os.every(o => !o.arrived) ? "Cancel (charge back)" : "Send home") : sim.phase === "plan" ? "Remove" : "Pull out";
+  const cmds = us.length ? [["amove", "Attack-move", "A"], ["patrol", "Patrol", "P"], ["escort", "Escort", "E"], ["stop", "Stop", "S"], ["standby", "Stand by", "D"]]
+    .map(([k, l, h]) => `<button data-sel="${k}"${armedCmd === k || (k === "standby" && us.every(u => u.standby)) ? ' class="on"' : ""}>${l} <span class="hk">${h}</span></button>`).join("") : "";
+  const html = `<b>${name}</b>${os.length ? ` <span class="hk">Move: right-click</span>` : ""}${armedU ? `<button data-sel="target">Target: ${C.TARGET_LABEL[armedU.unit.mode ?? "near"]} <span class="hk">T</span></button>` : ""}${cmds}${sim.phase === "over" ? "" : `<button data-sel="remove">${del} <span class="hk">Del</span></button>`}`;
+  if (bar.innerHTML !== html) bar.innerHTML = html;
+  bar.hidden = false;
+}
+const ORDER_COLOR: Record<string, string> = { move: "#80cbc4", amove: "#f87171", patrol: "#fbbf24", escort: "#86efac" };
+function drawSelection(s: number) {
+  if (box) { ctx.strokeStyle = "#80cbc4"; ctx.lineWidth = 1.5; ctx.setLineDash([5, 4]); ctx.strokeRect(Math.min(box[0], box[2]), Math.min(box[1], box[3]), Math.abs(box[2] - box[0]), Math.abs(box[3] - box[1])); ctx.setLineDash([]); }
+  if (!selAlive()) return;
+  for (const e of sel) {
+    if ("orbit" in e) { // 0.46: a ring on the plane, and a line to where it's headed
+      const [ax, ay] = sim.orbitPos(e.orbit), px = cam.x + ax * s, py = cam.y + ay * s;
+      ctx.strokeStyle = "#80cbc4"; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(px, py, Math.max(12, airHalfPx("ac130", s) + 4), 0, 7); ctx.stroke();
+      ctx.beginPath(); ctx.arc(cam.x + e.orbit.x * s, cam.y + e.orbit.y * s, Math.max(6, s * 1.5), 0, 7); ctx.stroke();
+      continue;
+    }
+    const o = "unit" in e ? e.unit : e.support;
+    const px = cam.x + (o.x + 0.5) * s, py = cam.y + (o.y + 0.5) * s;
+    ctx.strokeStyle = "unit" in e && e.unit.standby ? "#94a3b8" : "#80cbc4"; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(px, py, Math.max(8, s * 2), 0, 7); ctx.stroke();
+    if (!("unit" in e) || !e.unit.orders?.length) continue;
+    // its queue: a line through every point, colored by order
+    let lx = px, ly = py;
+    for (const q of e.unit.orders) {
+      let tx = q.x + 0.5, ty = q.y + 0.5;
+      if (q.k === "escort") { const c = sim.escortCenter(q.who!); if (!c) continue; [tx, ty] = c; }
+      const qx = cam.x + tx * s, qy = cam.y + ty * s;
+      ctx.strokeStyle = ORDER_COLOR[q.k]; ctx.lineWidth = 1.5; ctx.setLineDash([5, 4]);
+      ctx.beginPath(); ctx.moveTo(lx, ly); ctx.lineTo(qx, qy);
+      if (q.k === "patrol") ctx.lineTo(cam.x + (q.px! + 0.5) * s, cam.y + (q.py! + 0.5) * s);
+      ctx.stroke(); ctx.setLineDash([]);
+      ctx.fillStyle = ORDER_COLOR[q.k]; ctx.beginPath(); ctx.arc(qx, qy, 3, 0, 7); ctx.fill();
+      lx = qx; ly = qy;
+    }
+  }
+}
+
+/** 0.44: next to the pointer, in every tool and phase: what is under it (unit, ground with roof height, zone) and,
+ *  while placing or drawing the zone, what it costs and what is left. Sits above-right of the pointer so the
+ *  strike warnings (below-right) stay readable. */
+function drawCursorInfo(s: number) {
+  if (!hover || stack.length || mode !== "game") return;
+  const lines = describeCell(sim, hover[0], hover[1]);
+  if (!lines) return;
+  const est = estimateAt(sim, tool, hover[0], hover[1], draft);
+  const rows: [string, string][] = lines.map(t => [t, "#e2e8f0"]);
+  if (armedCmd) rows.unshift([armedCmd === "amove" ? "Attack-move: click a spot" : armedCmd === "patrol" ? "Patrol: click a spot" : "Escort: click a person", ORDER_COLOR[armedCmd]]); // 0.45
+  if (est?.blocked) rows.push([est.blocked, "#fbbf24"]);
+  else if (est && est.price !== null) rows.push([`Cost ${C.money(est.price)} · ${C.money(est.left!)} left`, est.left! < 0 ? "#f87171" : "#86efac"]);
+  const dpr = devicePixelRatio, fs = 12 * dpr, lh = 16 * dpr, pad = 6 * dpr;
+  ctx.font = `${fs}px system-ui, sans-serif`;
+  const w = Math.max(...rows.map(([t]) => ctx.measureText(t).width)) + pad * 2, h = rows.length * lh + pad;
+  let x = cam.x + hover[0] * s + 14 * dpr, y = cam.y + hover[1] * s - 14 * dpr - h;
+  if (x + w > ctx.canvas.width - 4) x = cam.x + hover[0] * s - 14 * dpr - w;
+  if (y < 4) y = cam.y + hover[1] * s + 40 * dpr;
+  ctx.fillStyle = "rgba(10,14,20,0.85)"; ctx.fillRect(x, y, w, h);
+  rows.forEach(([t, c], i) => { ctx.fillStyle = c; ctx.fillText(t, x + pad, y + pad / 2 + (i + 1) * lh - 4 * dpr); });
 }
 
 /** 0.28: rounds in flight. No beams: a tiny tracer streak for small arms, a longer thin one for the sniper,
@@ -1868,7 +2110,7 @@ function toolInfoHtml(t: string): { html: string; accent: string } | null {
       a10: "A-10C Thunderbolt II (GAU-8 30 mm)",
       cluster: "Strike Jet (CBU-97, 50 Bomblets)",
       tomahawk: "Destroyer (BGM-109 Tomahawk)",
-      gunship: "AC-130J Ghostrider (40 s Orbit)",
+      gunship: "AC-130U (25 mm, 40 mm, 105 mm; 40 s Orbit)",
     };
     const struct: Record<C.AbilityKind, string> = {
       airstrike: "Heavy (Demolishes Buildings & Roads)",
@@ -1889,7 +2131,7 @@ function toolInfoHtml(t: string): { html: string; accent: string } | null {
       `<div class="ip-role" style="color:${spec.color}">Tactical Air Support · ${platforms[k]}</div></div></div>` +
       `<div class="ip-desc">${spec.hint}</div>` +
       `<div class="ip-grid">` +
-        `<div><span>Arrival Delay</span><b>${spec.delay} s</b></div>` +
+        `<div><span>Arrival Delay</span><b>${k === "gunship" ? "Flies in from the nearest edge" : `${spec.delay} s`}</b></div>` +
         `<div><span>Aircraft</span><b>${platforms[k].split(" (")[0]}</b></div>` +
         `<div style="grid-column:1/3"><span>Structure / Field Effect</span><b>${struct[k]}</b></div>` +
       `</div>`,
@@ -1903,8 +2145,8 @@ function toolInfoHtml(t: string): { html: string; accent: string } | null {
       c4: ["Bridge Demolition Charge", `${C.money(C.C4_COST)}`, "Combat Engineering · River Denial", "Plant charges on river bridges or buildings during planning or battle, then detonate during battle. A bridge drops into the river (Swimmer mutants still swim across). A building comes down in a controlled demolition: rubble fills its footprint and spills into the street, slowing everyone. Block a road or clear a sight line. Not on safe zone buildings or roofs you hold.", "c4"],
       depot: ["Fuel Depot Detonation", `${sim.depots.filter(d => !d.used).length} remaining`, "Environmental Hazard · Massive Blast", "Pre-existing industrial fuel tanks (orange triangles). Click during battle for a 22 m explosion (5,000 dmg) that levels adjacent buildings into rubble and ignites fires.", "depot"],
       remove: ["Remove / Helicopter Extraction", "100% Refund", "Logistics · Redeployment", "In Planning, removes a unit or support building immediately for a full refund. In Battle, dispatches an extraction helicopter (1.5x deploy time) to pull the unit out and refund its cost.", "remove"],
-      order: ["Strike Order", "Free", "Command & Control", "Click an APC, police or militia squad, paratroopers or a boat, then click a destination. The unit moves out, clears infected around that spot and holds it: guard an evac route or a road a horde comes in on.", "order"],
-      pan: ["Move Map & Target Priority", "Left-Click Unit", "Command & Control", "Drag to pan the map, scroll wheel to zoom. Click any placed combat unit to cycle its target priority between Nearest, Wall Biters, and Infected Chasing Civilians.", "pan"],
+      order: ["Unit Orders", "Free", "Command & Control", "Select mobile units with Move/Aim (click, Shift-click or drag a box). Right-click: move (straight there, shooting on the way). A: attack-move. P: patrol. E: escort a person and their family. S: stop. D: stand by (hold fire). Shift queues orders.", "order"],
+      pan: ["Move/Aim: Select & Command", "Click / Drag", "Command & Control", "Right-drag to pan, wheel to zoom. Click a unit or building to select it, drag a box to select mobile units. Right-click sends selected units (A attack-move, P patrol, E escort, S stop, D stand by; Shift queues) or a selected AC-130. T cycles target priority (Nearest, Wall Biters, Infected Chasing Civilians); Delete removes it (full refund in Planning, extraction in Battle).", "pan"],
       heatmap: ["Spatial Kill Heatmap [H]", `${sim.kills.toLocaleString()} kills`, "Battlefield Intelligence", "Overlays a smoothed thermal density map of every infected kill. Hover a unit in the picker during battle to isolate kills made by that unit class.", "heatmap"],
       recall: ["Recall Units [Q]", sim.recalled ? "Recalled" : "Instant", "Command & Control", "Every APC, tank, squad, paratrooper and aircraft falls back to the nearest safe zone and holds there. Boats and street emplacements stay put. Press again to send them all back to their posts; a strike order sends one unit out on its own.", "order"],
       closegates: ["Lock Down All Gates", "Instant", "Emergency Perimeter Seal", "Immediately converts every intact blue Gate across all Safe Zones into a reinforced white Wall (scaling current HP proportionally).", "gate"],
@@ -1965,7 +2207,7 @@ function updateInfoPanel() {
         `<div style="grid-column:1/3"><span>Ammunition</span><b>${ammoText}</b></div>` +
       `</div>` +
       `<div class="ip-bar"><i style="width:${ammoPct}%;background:${u.supplied ? "#ffb74d" : "#4fc3f7"}"></i></div>` +
-      (hpPct !== null ? `<div class="ip-grid"><div style="grid-column:1/3"><span>Hull / Squad Health</span><b>${Math.max(0, Math.round(u.hp!))} / ${spec.mobile!.hp} HP (${hpPct}%)</b></div></div><div class="ip-bar"><i style="width:${hpPct}%;background:${hpPct > 50 ? "#7cfc9a" : hpPct > 25 ? "#ffd54f" : "#ff5252"}"></i></div>` : "") +
+      (hpPct !== null ? `<div class="ip-grid"><div style="grid-column:1/3"><span>Hull / Squad Health</span><b>${Math.max(0, Math.round(u.hp!))} / ${hpMax} HP (${hpPct}%)</b></div></div><div class="ip-bar"><i style="width:${hpPct}%;background:${hpPct > 50 ? "#7cfc9a" : hpPct > 25 ? "#ffd54f" : "#ff5252"}"></i></div>` : "") +
       `<div class="ip-tags">${(buffs.length ? buffs : [info.specials[0]]).map(s => `<div>${s}</div>`).join("")}</div>`,
       spec.color
     );
@@ -2146,6 +2388,7 @@ function soundEvents() {
     const zb = zoomGain("boom", b.r, s); // 0.19.1: zoomed out, only the big blasts carry
     if (b.color === C.UNITS.apc.color && b.r < 2) snd.event("autocannon", pan, near, zoomGain("event", 0, s)); // the APC's 25 mm
     else if (b.color === C.UNITS.tank.color) { snd.event("tankgun", pan, near, zoomGain("event", 0, s)); snd.boom(b.r, pan, near, zb); } // 120 mm
+    else if (b.color === "#ffcc80" && b.r < 1.2) snd.event("autocannon", pan, near, zoomGain("event", 0, s)); // 0.46: the AC-130's 40 mm
     else if (b.r >= 1.2) snd.boom(b.r, pan, near, zb);
   }
   for (const b of sim.blasts) lastBlastT = Math.max(lastBlastT, b.t);
@@ -2154,6 +2397,14 @@ function soundEvents() {
     for (const tr of sim.transports) if (!ackedTransports.has(tr)) {
       ackedTransports.add(tr); // order received: radio reply right away, even paused (not the automatic drones / evac lift)
       if (tr.kind !== "drone_supply" && tr.label !== "EVAC LIFT") snd.radio();
+    }
+    for (const o of sim.orbits) { // 0.46: the AC-130 has no delivery flight: radio when ordered, engines as it arrives
+      if (!ackedTransports.has(o)) { ackedTransports.add(o); snd.radio(); }
+      if (!heardTransports.has(o) && o.inbound && Math.hypot(o.x - o.fx, o.y - o.fy) - C.GUNSHIP_RADIUS * 1.15 < C.GUNSHIP_SPEED * 2.5 * Math.max(speed, 0.5)) {
+        heardTransports.add(o);
+        const [pan, near] = where(o.x, o.y);
+        snd.event("plane", pan, Math.max(0.4, near), zoomGain("air", 0, s));
+      }
     }
     for (const tr of sim.transports) if (!heardTransports.has(tr)) {
       const lbl = tr.label ?? "";
@@ -2209,10 +2460,11 @@ function frame(now: number) {
   if (++tutTick % 10 === 0) stepTut();
   // keyboard panning
   const pan = 600 * real * devicePixelRatio;
-  if (keys.has("a") || keys.has("arrowleft")) cam.x += pan;
-  if (keys.has("d") || keys.has("arrowright")) cam.x -= pan;
-  if (keys.has("w") || keys.has("arrowup")) cam.y += pan;
-  if (keys.has("s") || keys.has("arrowdown")) cam.y -= pan;
+  const ord = orderable().length > 0, held = (k: string) => keys.has(k) && cameraKeysActive(k, ord); // 0.45: A/S/D are commands while units are selected
+  if (held("a") || held("arrowleft")) cam.x += pan;
+  if (held("d") || held("arrowright")) cam.x -= pan;
+  if (held("w") || held("arrowup")) cam.y += pan;
+  if (held("s") || held("arrowdown")) cam.y -= pan;
   if (following && ["a", "d", "w", "s", "arrowleft", "arrowright", "arrowup", "arrowdown"].some(k => keys.has(k))) following = false; // 0.39: panning by hand stops a follow
   if (mode === "game" && !following && !stack.length && save.settings.edgeScroll && mouse && document.hasFocus()) {
     const m = 6;
@@ -2239,7 +2491,7 @@ function frame(now: number) {
   }
   const d0 = performance.now();
   try { soundEvents(); } catch { /* sound must never break the game */ }
-  try { draw(now); hud(now); } catch (err) {
+  try { draw(now); hud(now); minimap(now); } catch (err) {
     if (drawErrors++ < 5) log("error", "frame-error", { stack: String((err as Error)?.stack ?? err), phase: sim.phase, t: sim.time });
   }
   if (mode === "game") {
@@ -2488,6 +2740,13 @@ $("startbtn").addEventListener("click", () => {
 $("heatmapbtn").addEventListener("click", () => { showHeatmap = !showHeatmap; refreshUi(); });
 $("end-heatmap").addEventListener("click", () => { showHeatmap = true; $("end").hidden = true; refreshUi(); say("Showing kill heatmap. Press H or Menu when done.", 5000); });
 $("closegates").addEventListener("click", () => { const n = sim.closeAllGates(); buildZone(); log("info", "close-all-gates", { closed: n, t: +sim.time.toFixed(1), phase: sim.phase }); say(n ? (sim.phase === "battle" ? `Closing ${n} gate cells (${C.GATE_CLOSE_S}s).` : "All gates closed.") : "No open gates left."); });
+$("selbar").addEventListener("click", e => { // 0.44/0.45
+  const b = (e.target as HTMLElement).closest<HTMLButtonElement>("[data-sel]"); if (!b) return;
+  const k = b.dataset.sel!;
+  if (k === "remove") removeSelected(); else if (k === "target") cycleSelected();
+  else if (k === "amove" || k === "patrol" || k === "escort") runIntent({ k: "arm", cmd: k });
+  else if (k === "stop" || k === "standby") runIntent({ k, queue: false });
+});
 $("clear").addEventListener("click", () => { if (sim.phase === "plan") { sim.clearZone(); draft = []; buildZone(); refreshUi(); } });
 $("end-retry").addEventListener("click", () => newSim(true));
 $("end-continue").addEventListener("click", () => { $("end").hidden = true; speed = pausedSpeed || 1; log("info", "round-continue", { t: +sim.time.toFixed(1) }); refreshUi(); });

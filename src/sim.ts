@@ -1,6 +1,8 @@
 import { buildCity } from "./cities/build";
 import type { CityRecipe } from "./cities/recipe";
 import * as C from "./config";
+import type { Order } from "./orders";
+import { nextOrder, arrived, ESCORT_R } from "./orders";
 import { EV_SAFE, EV_EVAC, EV_TURNED, EV_CRUSHED, EV_KILLED_BY_US, EV_FRIENDLY_FIRE, EV_SHOT, hash32, isEnding, personOf, placeFor, PL_HOME, PL_WORK, PL_SCHOOL, PL_STORE, PL_ROAD, PL_VENUE,
   rallyFor, RALLY_HOME, RALLY_ZONE, PLAN_STRAIGHT, PLAN_GATHER, PLAN_MEET, PLAN_HOME_WAIT, PLAN_FOLLOW, PLAN_NONE,
   EV_HEAD_HOME, EV_HOME_WAIT, EV_FAMILY_TOGETHER, EV_ZONE_WAIT, EV_GAVE_UP, EV_TO_ZONE, EV_CLASS, PLAN_CLASS,
@@ -72,9 +74,16 @@ export interface Unit {
   movedT?: number; // 0.33: when it last moved
   lastX?: number; lastY?: number; headX?: number; headY?: number; // 0.32: where a vehicle is heading (people clear its path)
   goal?: number; nav?: Uint16Array; thinkT?: number; reloadT?: number;
+  // 0.45: orders. cmd: the player has commanded it (it no longer hunts on its own); holdAt: where it holds once its
+  // queue is empty; standby: holds fire; recallOrders: its queue while Recall has it.
+  orders?: Order[]; cmd?: boolean; standby?: boolean; holdAt?: [number, number];
+  recallOrders?: { orders: Order[]; holdAt?: [number, number]; standby?: boolean };
+  planOrders?: { orders: Order[]; standby: boolean }; // 0.45: its orders as planned, kept at the battle's start (Retry replays these)
 }
 
 export type Phase = "plan" | "battle" | "over";
+/** 0.44: something the player can click and select. */
+export type Entity = { unit: Unit } | { support: Support } | { orbit: Orbit };
 
 /** Something scheduled to happen at battle time `at` (airstrike bombs, fire landing, a para drop). */
 interface Pending { kind: C.AbilityKind | "bomb" | "shell"; at: number; x: number; y: number; x2: number; y2: number; chuteSpawned?: boolean }
@@ -84,6 +93,13 @@ export interface Blast { x: number; y: number; r: number; t: number; color: stri
 /** 0.28: what a round looks like in flight: small arms, sniper, cannon, shell, rocket. */
 export const SHOT_SMALL = 0, SHOT_SNIPER = 1, SHOT_CANNON = 2, SHOT_SHELL = 3, SHOT_ROCKET = 4;
 /** 0.28: one round in the air, for the renderer: fired at t from (x0,y0), arrives at `land` at (x1,y1). */
+/** 0.46: one AC-130. `fx/fy`: the plane while it flies in, to a new spot or home (not while circling).
+ *  `stationLeft`: station time it brings when it next arrives. `g*`: gun cooldowns (s). `shots*`: rounds fired. */
+export interface Orbit {
+  x: number; y: number; until: number; angle: number; away?: boolean; inbound?: boolean; leaving?: boolean;
+  fx: number; fy: number; stationLeft: number; arrived?: boolean;
+  g25: number; g40: number; g105: number; shots25: number; shots40: number; shots105: number;
+}
 export interface Shot { x0: number; y0: number; x1: number; y1: number; t: number; land: number; cls: number; kind: C.UnitKind | "ac130" }
 /** 0.28: a shell or rocket on its way; it explodes (damage, craters, blast) when it lands. */
 interface Impact { x: number; y: number; r: number; dmg: number; maxHits?: number; sDmg: number; u: Unit; t: number; color: string }
@@ -146,6 +162,13 @@ export interface SimOpts {
   mutators?: C.MutatorId[];
   difficulty?: C.Difficulty;
 }
+
+/** 0.45: cell offsets for spreading a group order, nearest first (ties in a fixed order: deterministic). */
+const SPREAD: [number, number][] = (() => {
+  const out: [number, number][] = [];
+  for (let dy = -4; dy <= 4; dy++) for (let dx = -4; dx <= 4; dx++) if (dx * dx + dy * dy <= 16) out.push([dx, dy]);
+  return out.sort((a, b) => (a[0] ** 2 + a[1] ** 2) - (b[0] ** 2 + b[1] ** 2) || a[1] - b[1] || a[0] - b[0]);
+})();
 
 export class Sim {
   /** Developer switches (see the dev panel). safeBiteMul: people inside a zone barricade indoors and are harder to bite. */
@@ -388,7 +411,7 @@ export class Sim {
   charges: Record<C.AbilityKind, number> = { airstrike: 0, firebomb: 0, para: 0, supply_drop: 0, barrage: 0, moab: 0, nuke: 0, a10: 0, cluster: 0, tomahawk: 0, gunship: 0 };
   bought: Record<C.AbilityKind, number> = { airstrike: 0, firebomb: 0, para: 0, supply_drop: 0, barrage: 0, moab: 0, nuke: 0, a10: 0, cluster: 0, tomahawk: 0, gunship: 0 };
   fallout: Fallout[] = [];
-  orbits: { x: number; y: number; until: number; gunT: number; howT: number; angle: number; away?: boolean }[] = []; // AC-130s: on station until `until`, or away refueling until `until`
+  orbits: Orbit[] = []; // AC-130s: inbound, on station until `until`, away refueling until `until`, or leaving for good
   nukesUsed = 0;
   bridges: number[][] = []; // cells of each bridge
   c4 = new Set<number>(); // bridge ids with a charge planted
@@ -552,7 +575,11 @@ export class Sim {
   /** Cycle what a unit at x,y shoots first. Returns the new mode, or null when there is no unit there. */
   cycleTarget(x: number, y: number): C.TargetMode | null {
     const u = this.units.find(u => Math.abs(u.x + 0.5 - x) <= 1.5 && Math.abs(u.y + 0.5 - y) <= 1.5);
-    if (!u) return null;
+    return u ? this.cycleTargetOf(u) : null;
+  }
+
+  /** 0.44: the next target priority for one unit (nearest, closest to the walls, chasing civilians). */
+  cycleTargetOf(u: Unit): C.TargetMode {
     const m = C.TARGET_MODES;
     u.mode = m[(m.indexOf(u.mode ?? "near") + 1) % m.length];
     return u.mode;
@@ -1502,10 +1529,32 @@ export class Sim {
   }
 
   /** Mid-battle sale: the unit or support building stops working until it is extracted, then refunds. Returns seconds, or an error. */
+  /** 0.44: the unit (first) or support building under (x, y), same hit box as selling. Units being pulled out are skipped. */
+  entityAt(x: number, y: number): Entity | null {
+    const u = this.units.find(u => u.extractT === undefined && Math.abs(u.x + 0.5 - x) <= 1.5 && Math.abs(u.y + 0.5 - y) <= 1.5);
+    if (u) return { unit: u };
+    const b = this.supports.find(b => b.extractT === undefined && Math.abs(b.x + 0.5 - x) <= 1.5 && Math.abs(b.y + 0.5 - y) <= 1.5);
+    if (b) return { support: b };
+    // 0.46: an AC-130, by its plane or the middle of its orbit
+    const o = this.orbits.find(o => { if (o.leaving) return false; const [px, py] = this.orbitPos(o); return hyp(px - x, py - y) <= 3 || hyp(o.x - x, o.y - y) <= 3; });
+    return o ? { orbit: o } : null;
+  }
+
   sellAt(x: number, y: number): number | string {
     if (this.phase !== "battle") return "Nothing to sell.";
     const u = this.units.find(u => Math.abs(u.x + 0.5 - x) <= 1.5 && Math.abs(u.y + 0.5 - y) <= 1.5);
-    if (u) {
+    if (u) return this.sellEntity({ unit: u });
+    const b = this.supports.find(b => Math.abs(b.x + 0.5 - x) <= 1.5 && Math.abs(b.y + 0.5 - y) <= 1.5);
+    if (!b) return "No unit or building there.";
+    return this.sellEntity({ support: b });
+  }
+
+  /** 0.44: pull one unit or building out mid-battle (helicopter extraction, refund when it is out). Seconds, or why not. */
+  sellEntity(e: Entity): number | string {
+    if (this.phase !== "battle") return "Nothing to sell.";
+    if ("orbit" in e) return this.sendHome(e.orbit) ? 0 : "Already heading home.";
+    if ("unit" in e) {
+      const u = e.unit;
       if (u.kind === "para") return "Paratroopers can't be sold. They walk home when out of ammo.";
       if (u.kind === "police" || u.kind === "militia") return "Squads from support buildings or APCs can't be sold directly.";
       if (u.extractT !== undefined) return "Already being pulled out.";
@@ -1515,8 +1564,7 @@ export class Sim {
       }
       return u.extractT;
     }
-    const b = this.supports.find(b => Math.abs(b.x + 0.5 - x) <= 1.5 && Math.abs(b.y + 0.5 - y) <= 1.5);
-    if (!b) return "No unit or building there.";
+    const b = e.support;
     if (b.extractT !== undefined) return "Already being pulled out.";
     b.extractT = Math.max(5, C.SUPPORTS[b.kind].deploy * C.EXTRACT_MUL);
     this.spawnHelo("helo_extract", b.x + 0.5, b.y + 0.5, b.extractT + 1.2, b.extractT * 0.4, "#cfd8dc", `EVAC: ${C.SUPPORTS[b.kind].name}`);
@@ -1526,28 +1574,40 @@ export class Sim {
 
   removeAt(x: number, y: number) {
     if (this.phase !== "plan") return false;
-    const k = this.units.findIndex(u => Math.abs(u.x - x) <= 1 && Math.abs(u.y - y) <= 1);
-    if (k >= 0) { this.units.splice(k, 1); return true; }
-    const sk = this.supports.findIndex(b => Math.abs(b.x - x) <= 1 && Math.abs(b.y - y) <= 1);
-    if (sk >= 0) {
-      const removed = this.supports.splice(sk, 1)[0];
-      if (removed.kind === "evac" && this.phase === "plan") for (const b of this.supports) if (b.kind === "evac") b.paid = this.supportCost(b.kind, b.x, b.y); // pads move up the price line
-      if (removed.kind === "budget") {
-        // Recompute prices of anything that was discounted by this Budget Office; if removing it would put
-        // the plan in debt, put it back and refuse.
-        for (const u of this.units) u.paid = this.unitCost(u.kind, u.x, u.y);
-        for (const b of this.supports) b.paid = this.supportCost(b.kind, b.x, b.y);
-        if (this.remaining() < 0) {
-          this.supports.splice(sk, 0, removed);
-          for (const u of this.units) u.paid = this.unitCost(u.kind, u.x, u.y);
-          for (const b of this.supports) b.paid = this.supportCost(b.kind, b.x, b.y);
-          return false;
-        }
-      }
-      this.refreshAuras();
+    const u = this.units.find(u => Math.abs(u.x - x) <= 1 && Math.abs(u.y - y) <= 1);
+    if (u) return this.removeEntity({ unit: u });
+    const b = this.supports.find(b => Math.abs(b.x - x) <= 1 && Math.abs(b.y - y) <= 1);
+    return b ? this.removeEntity({ support: b }) : false;
+  }
+
+  /** 0.44: remove one unit or building in planning, full refund. False if it is not there, or (a Budget Office)
+   *  removing it would put the plan in debt. */
+  removeEntity(e: Entity): boolean {
+    if (this.phase !== "plan" || "orbit" in e) return false;
+    if ("unit" in e) {
+      const k = this.units.indexOf(e.unit);
+      if (k < 0) return false;
+      this.units.splice(k, 1);
       return true;
     }
-    return false;
+    const sk = this.supports.indexOf(e.support);
+    if (sk < 0) return false;
+    const removed = this.supports.splice(sk, 1)[0];
+    if (removed.kind === "evac" && this.phase === "plan") for (const b of this.supports) if (b.kind === "evac") b.paid = this.supportCost(b.kind, b.x, b.y); // pads move up the price line
+    if (removed.kind === "budget") {
+      // Recompute prices of anything that was discounted by this Budget Office; if removing it would put
+      // the plan in debt, put it back and refuse.
+      for (const u of this.units) u.paid = this.unitCost(u.kind, u.x, u.y);
+      for (const b of this.supports) b.paid = this.supportCost(b.kind, b.x, b.y);
+      if (this.remaining() < 0) {
+        this.supports.splice(sk, 0, removed);
+        for (const u of this.units) u.paid = this.unitCost(u.kind, u.x, u.y);
+        for (const b of this.supports) b.paid = this.supportCost(b.kind, b.x, b.y);
+        return false;
+      }
+    }
+    this.refreshAuras();
+    return true;
   }
 
   buyAbility(k: C.AbilityKind): string | null {
@@ -1773,7 +1833,7 @@ export class Sim {
     if (nf) return nf;
     this.charges[k]--; this.abilitiesUsed++;
     const delay = C.ABILITIES[k].delay;
-    this.pending.push({ kind: k, at: this.time + delay, x, y, x2, y2 });
+    if (k !== "gunship") this.pending.push({ kind: k, at: this.time + delay, x, y, x2, y2 });
     if (k === "airstrike") {
       const ang = Math.atan2(y2 - y, x2 - x);
       this.spawnFlyover("jet_strike", (x + x2) / 2, (y + y2) / 2, delay * 1.35, "#ff5252", ang, "F-15E Airstrike");
@@ -1790,7 +1850,11 @@ export class Sim {
     } else if (k === "tomahawk") {
       this.spawnMissile(x, y, delay, "#e0e0e0", "TOMAHAWK INBOUND");
     } else if (k === "gunship") {
-      this.spawnFlyover("c130_para", x, y, delay * 1.2, "#ce93d8", undefined, "AC-130J Ghostrider", "ac130");
+      // 0.46: no C-130 delivers it: the gunship itself flies in from the nearest map edge and joins its orbit
+      // at the point facing that edge.
+      const [fx, fy] = this.edgeEntry(x, y);
+      this.orbits.push({ x, y, until: 0, angle: Math.atan2(fy - y, fx - x), inbound: true, fx, fy, stationLeft: C.GUNSHIP_S,
+        g25: 0, g40: 0, g105: 1, shots25: 0, shots40: 0, shots105: 0 });
     } else if (k === "moab") {
       this.spawnFlyover("c130_supply", x, y, delay * 1.2, "#ffcc80", undefined, "MC-130J: GBU-43 MOAB", "mc130");
     } else if (k === "nuke") {
@@ -1901,8 +1965,6 @@ export class Sim {
           this.damageTerrain(p.x, p.y, C.TOMAHAWK_RADIUS, 255);
           this.hurtWalls(p.x, p.y, C.TOMAHAWK_RADIUS, 6000);
           this.blasts.push({ x: p.x, y: p.y, r: C.TOMAHAWK_RADIUS + 2, t: this.time, color: "#ffffff" });
-        } else if (p.kind === "gunship") {
-          this.orbits.push({ x: p.x, y: p.y, until: this.time + C.GUNSHIP_S, gunT: 0, howT: 1, angle: 0 });
         } else if (p.kind === "barrage") { // a fire mission: shells land scattered over a few seconds
           const rr = rng((this.tick * 2246822519 + (p.x * 131 | 0)) >>> 0);
           for (let i = 0; i < C.BARRAGE_SHELLS; i++) {
@@ -1946,49 +2008,140 @@ export class Sim {
     this.stepTransports(dt);
   }
 
-  /** AC-130 on station: circles the spot, 30 mm on single infected, 105 mm on packs. Precise: infected only. */
+  /** 0.46: the point on the map border nearest (x, y): where an AC-130 comes in and goes home. */
+  edgeEntry(x: number, y: number): [number, number] {
+    const l = x, r = this.w - 1 - x, t = y, b = this.h - 1 - y, m = Math.min(l, r, t, b);
+    return m === l ? [0, y] : m === r ? [this.w - 1, y] : m === t ? [x, 0] : [x, this.h - 1];
+  }
+  /** 0.46: where the AC-130's plane is now: flying (in, to a new spot, home), circling, or out refueling (as drawn). */
+  orbitPos(o: Orbit): [number, number] {
+    if (o.inbound || o.leaving) return [o.fx, o.fy];
+    const [jx, jy] = this.orbitEntry(o);
+    if (!o.away) return [jx, jy];
+    const left = o.until - this.time, gone = C.GUNSHIP_REFUEL_S - left, fly = 14, v = C.GUNSHIP_RADIUS * 1.15 * 0.5;
+    const d = gone < fly ? gone * v : left < fly ? -left * v : fly * v, h = o.angle - Math.PI / 2;
+    return [jx + Math.cos(h) * d, jy + Math.sin(h) * d];
+  }
+  /** 0.46: still under the player's command (not gone, not heading home). */
+  orbitAlive(o: Orbit) { return !o.leaving && this.orbits.includes(o); }
+  /** 0.46: send an AC-130 to circle (x, y). On station it keeps the station time it had left (flying there costs
+   *  none); refueling, it just comes back to the new spot when done; inbound, it turns for the new spot. */
+  redeployOrbit(o: Orbit, x: number, y: number): string | null {
+    if (!this.orbitAlive(o)) return "That AC-130 is heading home.";
+    if (x < 0 || y < 0 || x >= this.w || y >= this.h) return "Off the map.";
+    if (o.away) { o.x = x; o.y = y; return null; }
+    const [px, py] = this.orbitPos(o);
+    if (!o.inbound) o.stationLeft = Math.max(0, o.until - this.time);
+    o.x = x; o.y = y; o.fx = px; o.fy = py;
+    o.angle = Math.atan2(py - y, px - x); // joins the new circle at the point facing it
+    o.inbound = true;
+    return null;
+  }
+  /** 0.46: what to tell the player after a redeploy (a refueling plane only comes back when it's done). */
+  redeployNote(o: Orbit): string {
+    return o.away ? `AC-130 refueling: back over the new spot in ${Math.ceil(o.until - this.time)} s.` : "AC-130 moving to the new spot.";
+  }
+  /** 0.46: send an AC-130 home: it flies off the nearest edge and is gone. Before it ever reached station the charge
+   *  comes back. False if it is already leaving. */
+  sendHome(o: Orbit): boolean {
+    if (!this.orbitAlive(o)) return false;
+    if (!o.arrived) { this.charges.gunship++; this.abilitiesUsed = Math.max(0, this.abilitiesUsed - 1); }
+    if (o.away) { this.orbits = this.orbits.filter(p => p !== o); o.leaving = true; return true; } // already off the map
+    [o.fx, o.fy] = this.orbitPos(o);
+    o.inbound = false; o.leaving = true;
+    return true;
+  }
+  /** Where an inbound AC-130 joins its circle (the plane's spot on the orbit at its current angle). */
+  private orbitEntry(o: Orbit): [number, number] {
+    return [o.x + Math.cos(o.angle) * C.GUNSHIP_RADIUS * 1.15, o.y + Math.sin(o.angle) * C.GUNSHIP_RADIUS * 1.15];
+  }
+
+  /** 0.46: an infected in the orbit for one gun. Samples `tries` spots (seeded), takes the nearest infected to each
+   *  and classifies it by how many infected stand within 2.5 cells: 1-2 suits the 25 mm, 3-9 the 40 mm. The 25 mm
+   *  falls back to any infected, the 40 mm to packs (never stragglers). -1 when none found. */
+  private gunTarget(o: Orbit, gun: 25 | 40, tries: number): number {
+    const rr = rng((this.tick * 69069 + gun * 40503 + (o.shots25 + o.shots40) * 2654435761) >>> 0);
+    let fallback = -1;
+    for (let i = 0; i < tries; i++) {
+      const a = rr() * 6.2832, d = Math.sqrt(rr()) * C.GUNSHIP_RADIUS;
+      const t = this.nearest(o.x + Math.cos(a) * d, o.y + Math.sin(a) * d, 8, INF, 255, 60);
+      if (t < 0) continue;
+      const n = this.countInf(this.ax[t], this.ay[t], 2.5, 10);
+      if (gun === 25 ? n <= 2 : n >= 3 && n <= 9) return t;
+      if (fallback < 0 && (gun === 25 || n >= 3)) fallback = t;
+    }
+    return fallback;
+  }
+
+  /** AC-130 on station: circles the spot with the AC-130U's three guns. Precise: infected only. */
   private stepOrbits(dt: number) {
+    let gone: Orbit[] | null = null;
     for (const o of this.orbits) {
+      if (o.inbound || o.leaving) { // 0.46: flying in, to a new spot, or home
+        const [tx, ty] = o.inbound ? this.orbitEntry(o) : this.edgeEntry(o.fx, o.fy);
+        const d = hyp(tx - o.fx, ty - o.fy), step = C.GUNSHIP_SPEED * dt;
+        if (d > step) { o.fx += (tx - o.fx) / d * step; o.fy += (ty - o.fy) / d * step; continue; }
+        o.fx = tx; o.fy = ty;
+        if (o.leaving) { (gone ??= []).push(o); continue; }
+        o.inbound = false; o.arrived = true; o.away = false;
+        o.until = this.time + o.stationLeft;
+        o.g25 = 0; o.g40 = 0; o.g105 = 1;
+      }
       if (this.time >= o.until) { // 0.32: 40 s on station, off the map to refuel, back to the same spot, repeat
         o.away = !o.away;
         o.until = this.time + (o.away ? C.GUNSHIP_REFUEL_S : C.GUNSHIP_S);
-        o.gunT = 0; o.howT = 1;
+        o.g25 = 0; o.g40 = 0; o.g105 = 1;
       }
       if (o.away) continue;
       o.angle -= dt * 0.5; // a left-hand orbit: the guns point out the left side, at the middle
-      o.gunT -= dt;
-      while (o.gunT <= 0) {
-        o.gunT += 1 / C.GUNSHIP_GUN_RATE;
-        const rr = rng((this.tick * 69069 + (o.gunT * 1e4 | 0)) >>> 0);
-        const a = rr() * 6.2832, d = Math.sqrt(rr()) * C.GUNSHIP_RADIUS;
-        const t = this.nearest(o.x + Math.cos(a) * d, o.y + Math.sin(a) * d, 8, INF, 255, 60);
-        if (t < 0) continue;
-        const gx = o.x + Math.cos(o.angle) * C.GUNSHIP_RADIUS * 1.15, gy = o.y + Math.sin(o.angle) * C.GUNSHIP_RADIUS * 1.15;
-        if (this.shots.length < 4000) this.shots.push({ x0: gx, y0: gy, x1: this.ax[t], y1: this.ay[t], t: this.time - 0.2, land: this.time, cls: SHOT_CANNON, kind: "ac130" }); // 0.32: 30 mm tracers from the plane
-        this.hp[t] -= C.GUNSHIP_GUN_DMG;
+      const [gx, gy] = this.orbitEntry(o);
+      // 0.46: the AC-130U's three guns, each on its own cooldown, each picking the targets it suits.
+      // 25 mm GAU-12 Gatling: stragglers (1-2 together), else whatever it finds.
+      o.g25 -= dt;
+      while (o.g25 <= 0) {
+        o.g25 += 1 / C.G25_RATE;
+        const t = this.gunTarget(o, 25, 1);
+        if (t < 0) continue; // like the old 30 mm: each round looks once, and a miss is a round spent
+        o.shots25++;
+        if (this.shots.length < 4000) this.shots.push({ x0: gx, y0: gy, x1: this.ax[t], y1: this.ay[t], t: this.time - 0.2, land: this.time, cls: SHOT_SMALL, kind: "ac130" });
+        this.hp[t] -= C.G25_DMG;
         if (this.hp[t] <= 0) { this.state[t] = DEAD; this.recordKill(t); }
       }
-      o.howT -= dt;
-      if (o.howT <= 0) {
-        o.howT = C.GUNSHIP_HOW_EVERY;
-        // the densest pack in the orbit
-        let best = -1, bn = 2;
+      // 40 mm L/60 Bofors: small groups (3-9), or packs when there are none; a small splash, infected only.
+      o.g40 -= dt;
+      if (o.g40 <= 0) {
+        o.g40 = 1 / C.G40_RATE;
+        const t = this.gunTarget(o, 40, 1);
+        if (t >= 0) {
+          const sx = this.ax[t], sy = this.ay[t];
+          o.shots40++;
+          if (this.shots.length < 4000) this.shots.push({ x0: gx, y0: gy, x1: sx, y1: sy, t: this.time - 0.25, land: this.time, cls: SHOT_CANNON, kind: "ac130" });
+          this.areaDamage(sx, sy, C.G40_SPLASH, C.G40_DMG, false);
+          this.blasts.push({ x: sx, y: sy, r: C.G40_SPLASH, t: this.time, color: "#ffcc80" });
+        }
+      }
+      // 105 mm M102 howitzer: the densest pack in the orbit with at least G105_MIN inside its splash.
+      o.g105 -= dt;
+      if (o.g105 <= 0) {
+        o.g105 = C.GUNSHIP_HOW_EVERY;
+        let best = -1, bn = C.G105_MIN - 1;
         const rr = rng((this.tick * 1103515245) >>> 0);
         for (let s = 0; s < 24; s++) {
           const a = rr() * 6.2832, d = Math.sqrt(rr()) * C.GUNSHIP_RADIUS, x = o.x + Math.cos(a) * d, y = o.y + Math.sin(a) * d;
           const n = this.countInf(x, y, C.GUNSHIP_HOW_SPLASH, 40);
-          if (n > bn) { bn = n; best = this.nearest(x, y, C.GUNSHIP_HOW_SPLASH, INF, 255, 40); }
+          if (n > bn) { const k = this.nearest(x, y, C.GUNSHIP_HOW_SPLASH, INF, 255, 40); if (k >= 0) { bn = n; best = k; } }
         }
         if (best >= 0 && this.clearOfZone(this.ax[best], this.ay[best], C.GUNSHIP_HOW_SPLASH) && !this.strikeBlocked(this.ax[best], this.ay[best], C.GUNSHIP_HOW_SPLASH)) {
           const sx = this.ax[best], sy = this.ay[best];
-          const gx = o.x + Math.cos(o.angle) * C.GUNSHIP_RADIUS * 1.15, gy = o.y + Math.sin(o.angle) * C.GUNSHIP_RADIUS * 1.15;
-          if (this.shots.length < 4000) this.shots.push({ x0: gx, y0: gy, x1: sx, y1: sy, t: this.time - 0.35, land: this.time, cls: SHOT_CANNON, kind: "ac130" }); // the 105 mm round
+          o.shots105++;
+          if (this.shots.length < 4000) this.shots.push({ x0: gx, y0: gy, x1: sx, y1: sy, t: this.time - 0.35, land: this.time, cls: SHOT_SHELL, kind: "ac130" });
           this.areaDamage(sx, sy, C.GUNSHIP_HOW_SPLASH, C.GUNSHIP_HOW_DMG, false);
           this.damageTerrain(sx, sy, C.GUNSHIP_HOW_SPLASH * 0.7, 60);
           this.blasts.push({ x: sx, y: sy, r: C.GUNSHIP_HOW_SPLASH, t: this.time, color: "#ce93d8" });
-        }
+        } else if (best < 0) o.g105 = 0.5; // no pack yet: look again soon
       }
     }
+    if (gone) this.orbits = this.orbits.filter(o => !gone!.includes(o)); // flown off the map for good
   }
 
   /** Walls and gates within r take dmg (a breach once they drop to 0). */
@@ -2020,12 +2173,69 @@ export class Sim {
   }
 
   /** Strike order: send a mobile unit to clear and hold a spot (land units on streets, boats on the river). */
-  orderUnit(u: Unit, x: number, y: number): string | null {
+  /** Why unit u can't be sent to cell (x, y), or null. */
+  orderTargetError(u: Unit, x: number, y: number): string | null {
     const mob = C.UNITS[u.kind].mobile;
     if (!mob) return "Only mobile units take orders (APCs, squads, paratroopers, boats).";
     if (x < 0 || y < 0 || x >= this.w || y >= this.h) return "Off the map.";
     const t = this.map.tile[this.idx(x, y)];
     if (mob.nav !== "air" && (mob.nav === "water" ? t !== WATER : !walkable(t))) return mob.nav === "water" ? "Boats go on the river." : "Send it to a street or park.";
+    return null;
+  }
+
+  /** 0.45: can the player give this unit orders? (mobile, not an APC's own squad, not being pulled out) */
+  canOrder(u: Unit): boolean { return !!C.UNITS[u.kind].mobile && !u.parentUnit && u.extractT === undefined; }
+
+  /** 0.45: give unit u an order; queue = add it after the ones it has (Shift). Error message, or null. */
+  issue(u: Unit, o: Order, queue: boolean): string | null {
+    if (!this.canOrder(u)) return "This unit can't take orders.";
+    let q: Order = { ...o, x: Math.floor(o.x), y: Math.floor(o.y) };
+    if (o.k === "escort") {
+      const k = o.who ?? -1;
+      if (k < 0 || k >= this.civN || (this.state[k] !== CIV && this.state[k] !== SAFE_CIV)) return "Click a living person to escort.";
+      q = { k: "escort", x: Math.floor(this.ax[k]), y: Math.floor(this.ay[k]), who: k };
+    } else {
+      const e = this.orderTargetError(u, q.x, q.y);
+      if (e) return e;
+    }
+    const list = queue ? (u.orders ?? []) : [];
+    if (q.k === "patrol") {
+      const last = list[list.length - 1];
+      if (last && last.k !== "escort") { q.px = last.x; q.py = last.y; } else { q.px = u.x; q.py = u.y; }
+    }
+    u.orders = [...list, q]; u.cmd = true; u.standby = false; u.recallOrders = undefined; // a new order takes it off the recall
+    return null;
+  }
+
+  /** 0.45: one order for several units. The first gets the clicked cell, the rest the nearest free cells around it
+   *  they can go to (same order, so the group doesn't pile onto one spot). Error only if nobody could take it. */
+  issueGroup(us: Unit[], o: Order, queue: boolean): string | null {
+    const taken = new Set<number>();
+    let err: string | null = null, ok = 0;
+    for (const u of us) {
+      if (o.k === "escort") { const e = this.issue(u, o, queue); if (e) err ??= e; else ok++; continue; }
+      let placed = false;
+      for (const [dx, dy] of SPREAD) {
+        const x = Math.floor(o.x) + dx, y = Math.floor(o.y) + dy;
+        if (x < 0 || y < 0 || x >= this.w || y >= this.h || taken.has(this.idx(x, y)) || this.orderTargetError(u, x, y)) continue;
+        const e = this.issue(u, { ...o, x, y }, queue);
+        if (e) { err ??= e; break; }
+        taken.add(this.idx(x, y)); placed = true; ok++; break;
+      }
+      if (!placed && !err) err = this.orderTargetError(u, Math.floor(o.x), Math.floor(o.y)) ?? "No room there.";
+    }
+    return ok ? null : err;
+  }
+
+  /** 0.45: S: drop its orders and hold right here, shooting what comes in range. */
+  stopUnit(u: Unit) { u.orders = []; u.cmd = true; u.standby = false; u.holdAt = [u.x, u.y]; u.recallOrders = undefined; }
+
+  /** 0.45: D: stay put and hold fire. */
+  standBy(u: Unit) { u.orders = []; u.cmd = true; u.standby = true; u.holdAt = [u.x, u.y]; u.recallOrders = undefined; }
+
+  orderUnit(u: Unit, x: number, y: number): string | null {
+    const err = this.orderTargetError(u, x, y);
+    if (err) return err;
     u.post = [x, y]; u.goal = undefined; u.thinkT = 0; u.recallFrom = undefined;
     if (u.ai !== "reload") u.ai = "hunt";
     return null;
@@ -2038,6 +2248,10 @@ export class Sim {
     let n = 0;
     if (this.recalled) {
       for (const u of this.units) if (u.recallFrom) { u.post = u.recallFrom; u.recallFrom = undefined; u.goal = undefined; u.thinkT = 0; n++; }
+      for (const u of this.units) if (u.recallOrders) { // 0.45: commanded units get their exact orders back
+        u.orders = u.recallOrders.orders; u.holdAt = u.recallOrders.holdAt; u.standby = u.recallOrders.standby;
+        u.recallOrders = undefined; u.goal = undefined; u.thinkT = 0; n++;
+      }
       this.recalled = false;
       return n;
     }
@@ -2049,6 +2263,12 @@ export class Sim {
       if (!mob || mob.nav === "water" || !u.post || u.extractT !== undefined) continue;
       let best = -1, bd = Infinity;
       for (const i of cells) { const dx = (i % this.w) - u.x, dy = ((i / this.w) | 0) - u.y, d = dx * dx + dy * dy; if (d < bd) { bd = d; best = i; } }
+      if (u.cmd) { // 0.45: keep its orders for Send back; hold in the zone meanwhile
+        u.recallOrders = { orders: u.orders ?? [], holdAt: u.holdAt, standby: u.standby };
+        u.orders = []; u.holdAt = [best % this.w, (best / this.w) | 0]; u.standby = false; u.goal = undefined; u.thinkT = 0;
+        if (u.ai !== "reload" && u.ai !== "leave") u.ai = "hunt";
+        n++; continue;
+      }
       u.recallFrom = u.post;
       u.post = [best % this.w, (best / this.w) | 0]; u.goal = undefined; u.thinkT = 0;
       if (u.ai !== "reload" && u.ai !== "leave") u.ai = "hunt";
@@ -2282,6 +2502,7 @@ export class Sim {
   }
 
   startBattle() {
+    for (const u of this.units) if (u.cmd) u.planOrders = { orders: (u.orders ?? []).map(o => ({ ...o })), standby: !!u.standby }; // 0.45: for Retry
     if (this.phase !== "plan") return;
     const r = rng(this.layoutHash());
     const wanted = Math.max(1, Math.round(this.sitesN * this.diff.sitesMul));
@@ -3915,6 +4136,7 @@ export class Sim {
         u.hp -= this.countInf((x0 + x1 + 1) / 2, (y0 + y1 + 1) / 2, spec.foot * 0.7 + 1.2, 16) * C.MOBILE_HURT_DPS * dt * 4; // footprint plus the ring of cells around it
       }
       if (spec.mobile) { this.think(u, dt); if (u.ai === "home" || u.ai === "reload" || u.ai === "leave") continue; }
+      if (u.standby) continue; // 0.45: stand by = hold fire
       while (u.cooldown <= 0 && u.ammo >= 1) {
         const t = spec.minRange ? this.farTarget(u, spec.minRange) : this.pickTarget(u);
         if (t < 0) { u.cooldown = 0; break; }
@@ -3987,6 +4209,59 @@ export class Sim {
   }
 
   /** Distance field to `goal` over what this unit can travel: roads (through our own gates) or the river. */
+  /** 0.45: the middle of person `who`'s family members still out in the city (CIV), or of everyone alive (CIV or
+   *  safe) when none is out; null when nobody is left alive. */
+  escortCenter(who: number): [number, number] | null {
+    if (who < 0 || who >= this.civN) return null;
+    const lead = this.famLead[who], a = lead >= 0 ? lead : who, b = lead >= 0 ? lead + this.famSize[lead] : who + 1;
+    let x = 0, y = 0, n = 0;
+    for (let m = a; m < b; m++) if (this.state[m] === CIV || this.state[m] === SAFE_CIV) { x += this.ax[m]; y += this.ay[m]; n++; }
+    return n ? [x / n, y / n] : null;
+  }
+  /** 0.45: an escort is over once nobody in the family is still out in the city. */
+  private escortDone(who: number): boolean {
+    if (who < 0 || who >= this.civN) return true;
+    const lead = this.famLead[who], a = lead >= 0 ? lead : who, b = lead >= 0 ? lead + this.famSize[lead] : who + 1;
+    for (let m = a; m < b; m++) if (this.state[m] === CIV) return false;
+    return true;
+  }
+
+  /** 0.45: messages for the player about orders (main.ts shows and empties it). */
+  orderLog: string[] = [];
+
+  /** 0.45: point a commanded unit at its current order (or where it holds). */
+  private planOrders(u: Unit) {
+    const fx = u.x + 0.5, fy = u.y + 0.5;
+    const had = u.orders?.[0];
+    u.orders = nextOrder(u.orders ?? [], fx, fy);
+    while (u.orders[0]?.k === "escort" && this.escortDone(u.orders[0].who!)) { u.orders = u.orders.slice(1); if (!u.orders.length) u.holdAt = [u.x | 0, u.y | 0]; }
+    if (had && had.k !== "escort" && !u.orders.length) u.holdAt = [had.x, had.y]; // the queue just ran out: hold at the last point
+    const o = u.orders[0];
+    if (o?.k === "escort") { const c = this.escortCenter(o.who!)!; o.x = Math.floor(c[0]); o.y = Math.floor(c[1]); } // follows the family
+    const air = C.UNITS[u.kind].mobile!.nav === "air";
+    const at = o ? [o.x, o.y] : u.holdAt ?? [u.x | 0, u.y | 0];
+    const goal = this.idx(Math.max(0, Math.min(this.w - 1, at[0] | 0)), Math.max(0, Math.min(this.h - 1, at[1] | 0)));
+    if (goal === u.goal && (air || u.nav)) return;
+    if (air) { u.goal = goal; return; }
+    this.navTo(u, goal);
+    if (o && o.k !== "escort" && this.cutOff(u)) { // walled off, a blown bridge, another stretch of water: drop it, say so, go on
+      this.orderLog.push(`${C.UNITS[u.kind].name} can't get there.`);
+      u.orders = u.orders.slice(1);
+      if (!u.orders.length) u.holdAt = [u.x | 0, u.y | 0];
+      u.goal = undefined;
+      this.planOrders(u);
+    }
+  }
+  /** 0.45: no route from the unit's cell (or any cell next to it) to its goal. */
+  private cutOff(u: Unit): boolean {
+    const cx = (u.x + 0.5) | 0, cy = (u.y + 0.5) | 0;
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+      const x = cx + dx, y = cy + dy;
+      if (x >= 0 && y >= 0 && x < this.w && y < this.h && u.nav![this.idx(x, y)] !== 65535) return false;
+    }
+    return true;
+  }
+
   private navTo(u: Unit, goal: number) {
     const water = C.UNITS[u.kind].mobile!.nav === "water";
     const f = u.nav ?? (u.nav = new Uint16Array(this.w * this.h));
@@ -4072,6 +4347,9 @@ export class Sim {
           if (sc < bs) { bs = sc; best = this.idx(x, y); }
         }
         if (best >= 0) this.navTo(u, best);
+      } else if (u.cmd) {
+        this.planOrders(u); // 0.45: the player's orders, not its own hunting
+        u.ai = "hunt";
       } else {
         // Hunt: sample spots within the leash; infected chasing civilians count triple.
         const r = rng((this.tick * 7919 + u.post![1] * 31) >>> 0);
@@ -4106,8 +4384,17 @@ export class Sim {
     const sp = mob.speed * (mInfra === INFRA_HIGHWAY ? C.HIGHWAY_SPEED_MUL : 1) * (mob.nav === "water" ? 1 : this.roughMul(mIdx)) * dt // 0.23: rough ground (air returns above)
       * (u.crushT && u.crushT > 0 ? spec.crushSlow ?? 1 : 1) * (u.yieldMul ?? 1); // 0.25: crushing slows it; people around it, it creeps
     let d: [number, number] | null = null;
+    if (u.cmd && u.ai === "hunt") { // 0.45: arrived at an order point: the next one right away (not at the next re-plan)
+      if (u.standby) return;
+      const o = u.orders?.[0];
+      if (o && o.k !== "escort" && arrived(o, fx, fy)) { this.planOrders(u); u.thinkT = 1.5; }
+    }
+    const ordMove = !!u.cmd && u.orders?.[0]?.k === "move"; // 0.45: a plain move never stops or dodges
     if (mob.nav === "air") { // flies straight to its goal (or home to its post to rearm)
-      if (u.ai === "hunt" && hyp(fx - u.post![0], fy - u.post![1]) < mob.leash * 0.6 && this.nearest(fx, fy, u.range * 0.75, INF, 255, 120) >= 0) return;
+      if (u.cmd) { if (u.ai === "hunt" && !ordMove && this.nearest(fx, fy, u.range * 0.75, INF, 255, 120) >= 0) return; }
+      else if (u.ai === "hunt" && hyp(fx - u.post![0], fy - u.post![1]) < mob.leash * 0.6 && this.nearest(fx, fy, u.range * 0.75, INF, 255, 120) >= 0) return;
+      const ea = u.cmd ? u.orders?.[0] : undefined;
+      if (ea?.k === "escort") { const c = this.escortCenter(ea.who!); if (c && hyp(fx - c[0], fy - c[1]) < ESCORT_R) return; }
       const g = u.ai === "home" ? this.idx(u.post![0], u.post![1]) : u.goal;
       if (g === undefined) return;
       const gx = (g % this.w) + 0.5 - fx, gy = ((g / this.w) | 0) + 0.5 - fy, l = hyp(gx, gy);
@@ -4128,9 +4415,9 @@ export class Sim {
       }
     } else {
       // In transit to a far post (a strike order): keep driving, shoot on the move, only dodge what is right on it.
-      const transit = hyp(fx - u.post![0], fy - u.post![1]) > mob.leash * 0.6;
+      const transit = u.cmd ? ordMove : hyp(fx - u.post![0], fy - u.post![1]) > mob.leash * 0.6;
       // Kite: infected closing in, back off while shooting, never into a corner.
-      if (u.ai === "hunt" && mob.hp !== Infinity) {
+      if (u.ai === "hunt" && mob.hp !== Infinity && !ordMove) {
         const near = this.nearest(fx, fy, transit ? 2.5 : u.range * C.KITE_R, INF, 255, 120);
         if (near >= 0) { const k = this.kiteStep(fx, fy, near, sp); if (k) { u.x += k[0]; u.y += k[1]; u.kiting = true; } return; }
       }
@@ -4138,6 +4425,8 @@ export class Sim {
       // Hold still while there is something to shoot (and nothing about to swarm it).
       if (u.ai === "hunt" && !transit && this.nearestSeen(fx, fy, u.range * 0.75, this.blockedByWalls(u.kind), this.sightLine(u.kind) ? this.eyeOf(u) : -1) >= 0) return; // 0.33: only what it can see
       if (u.nav && u.goal !== undefined) d = this.downhill(u.nav, cx, cy);
+      const eo = u.cmd ? u.orders?.[0] : undefined; // 0.45: close enough to the family it guards: stand with them
+      if (eo?.k === "escort") { const c = this.escortCenter(eo.who!); if (c && hyp(fx - c[0], fy - c[1]) < ESCORT_R) d = null; }
     }
     if (!d && u.nav && u.goal !== undefined && u.nav[this.idx(cx, cy)] === 65535) d = this.unstick(u.nav, cx, cy); // knocked off its route
     if (!d) return;

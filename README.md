@@ -8,6 +8,8 @@ every release, and Settings can install updates automatically. Your save is back
 
 ## How it plays
 
+- **Pick a time.** The hour the sirens go off decides where people are: home at night, at work by day, on the roads
+  at rush hour.
 - **Plan.** Draw a safe zone around city blocks, set gates and walls, place units on rooftops and streets, and build
   Evac Points (rooftop helipads) inside the zone. Each extra pad costs twice the last.
 - **Pick a difficulty.** Easy, Medium, Hard or Insane. Harder means more outbreak sites and bigger, more frequent
@@ -18,6 +20,13 @@ every release, and Settings can install updates automatically. Your save is back
 - **Hordes.** Then hordes walk in from outside the city on real land routes (highways, rail, bridges; swimmers use
   the river). They come almost on a rhythm, but not quite, and grow bigger and more frequent as time passes and the
   city empties.
+- **Command.** Select units with a click or a dragged box and give orders like an RTS: right-click to move (they
+  shoot what's in range on the way and never get dragged off chasing), attack-move, patrol, escort a family, stop,
+  stand by, Shift to queue. A minimap sits in the top right, and the cursor label tells you what's under it and what
+  things cost. The AC-130 flies in from the map edge, picks its 25 mm, 40 mm or 105 mm gun by target, and can be sent
+  to a new spot or home.
+- **People.** Every dot is a person with a family and a story: some go home first to gather their kids, some carry
+  guns, a few refuse to leave until a unit talks them out.
 - **Round end.** The round ends when everyone left alive is out. You get a score out of 100 (people saved, speed,
   city intact, zombies killed) and a medal. Then keep fighting endless, harder hordes for a Mayhem score, or end there.
 

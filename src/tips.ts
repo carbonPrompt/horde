@@ -4,8 +4,8 @@ export const TIPS = {
   horde: "Hordes walk in along highways, rail lines, bridges and the river. The amber arrow shows where the next one comes in.",
   ammo: "Units outside your zone run out of ammo. Supply drops and a Supply depot keep them firing.",
   people: "Move/Aim selected: click a white dot to see who that person is. Follow keeps the camera on them.",
-  targeting: "Move/Aim: click one of your units to change what it shoots first (nearest, closest to the walls, or chasers).",
-  mobile: "Order sends an APC, tank, squad or boat to a spot. Q (Recall) pulls mobile units into the zone; Q again sends them back.",
+  targeting: "Move/Aim: click one of your units to select it, then press T to change what it shoots first (nearest, closest to the walls, or chasers).",
+  mobile: "Mobile units take orders: select them with Move/Aim and right-click where to send them. Q (Recall) pulls them into the zone; Q again sends them back.",
   sell: "Selling mid-battle sends a helicopter to pull the unit out first. You get its cost back when it's out.",
   padCost: "Each extra Evac Point costs double the last one. Spread them where the crowd will be.",
   waveOff: "A lift waved off: infected were too close to the pad. Keep the area around Evac Points clear.",
@@ -13,7 +13,9 @@ export const TIPS = {
   endRound: "Only stragglers are left. End round (top bar) scores the round now; people in the zone count as saved.",
   views: "J shows building heights, R shows unit ranges, H shows where your kills happen.",
   quickbar: "Drag a tool onto the quick bar (Z to M) to keep it one key away.",
-  refuse: "Some people refuse to leave (amber rings). Park a unit next to them for a while to talk them out.",
+  orders: "Right-click sends them. A attack-move, P patrol, E escort a person, S stop, D stand by (hold fire). Shift queues orders. Arrows move the camera while units are selected.",
+  gunship: "AC-130 on station. Click the plane with Move/Aim: right-click sends it to a new spot, Delete sends it home (before it arrives: charge back).",
+  refuse: "This person refuses to leave. Park a unit next to them for a while to talk them out.",
 } as const;
 export type TipId = keyof typeof TIPS;
 export const TIP_IDS = Object.keys(TIPS) as TipId[];

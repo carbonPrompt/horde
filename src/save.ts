@@ -1,8 +1,10 @@
 // Progress and settings, kept in the browser/app's local storage. Every access is guarded:
 // storage can be blocked or empty, and the game must still run.
 import type * as C from "./config";
+import { cleanOrders, type Order } from "./orders";
 
-export interface Plan { poly: [number, number][]; zones?: [number, number][][]; walls: number[]; units: [C.UnitKind, number, number, C.TargetMode?][]; supports?: [C.SupportKind, number, number][]; abilities?: Partial<Record<C.AbilityKind, number>>; c4?: number[]; demo?: number[]; start?: number }
+// 0.45: Plan.units entries: 5th = the unit's orders (present = commanded), 6th = stand by
+export interface Plan { poly: [number, number][]; zones?: [number, number][][]; walls: number[]; units: [C.UnitKind, number, number, C.TargetMode?, Order[]?, boolean?][]; supports?: [C.SupportKind, number, number][]; abilities?: Partial<Record<C.AbilityKind, number>>; c4?: number[]; demo?: number[]; start?: number }
 export interface Settings { fullscreen: boolean; edgeScroll: boolean; showRanges: boolean; devMode?: boolean; crowd?: number; vol?: { master: number; sfx: number; music: number }; quickbar?: (string | null)[]; difficulty?: C.Difficulty;
   autoUpdate?: boolean; checkUpdates?: boolean; updatePin?: string; speed?: number; tips?: boolean; tipsSeen?: string[] } // 0.26 updater: install by itself / look on start / stay on a picked older version
 export interface Best { pct: number; medal: string | null; mayhem?: number } // pct: round score 0..100 since 0.20 ("% evacuated" before)
@@ -43,6 +45,11 @@ export function clean(s: SaveData): SaveData {
   if (s.plans && typeof s.plans === "object") for (const [k, v] of Object.entries(s.plans)) if (BEST_KEY.test(k) && v && typeof v === "object" && Array.isArray((v as Plan).poly)) {
     const pl = { ...(v as Plan) };
     if (!(Number.isInteger(pl.start) && pl.start! >= 0 && pl.start! < 1440)) delete pl.start; // 0.39: clock start, minutes since midnight
+    if (Array.isArray(pl.units)) pl.units = pl.units.map(u => { // 0.45: orders checked; a bad list is dropped, the unit kept
+      if (!Array.isArray(u) || u.length <= 4) return u;
+      const ord = cleanOrders(u[4]);
+      return ord ? [u[0], u[1], u[2], u[3], ord, ...(u[5] === true ? [true] : [])] as Plan["units"][number] : [u[0], u[1], u[2], u[3]] as Plan["units"][number];
+    });
     plans[k] = pl;
   }
   const settings = { ...s.settings };

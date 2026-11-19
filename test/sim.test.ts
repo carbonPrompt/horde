@@ -1837,3 +1837,68 @@ test("0.38: wider outbreak spread rolls per difficulty", () => {
   expect([C.DIFFICULTY.hard.spreadMin, C.DIFFICULTY.hard.spreadMax, C.DIFFICULTY.hard.spreadS]).toEqual([5, 9, 80]);
   expect([C.DIFFICULTY.insane.spreadMin, C.DIFFICULTY.insane.spreadMax, C.DIFFICULTY.insane.spreadS]).toEqual([8, 12, 100]);
 });
+
+// 0.44: select a unit or building and remove / sell exactly that one
+function placeTurret(s: Sim): [number, number] {
+  for (let i = 0; i < s.inZone.length; i++) {
+    const x = i % s.w, y = (i / s.w) | 0;
+    if (s.inZone[i] === 1 && s.canPlace("turret", x, y) === null && !s.entityAt(x + 0.5, y + 0.5)) { expect(s.place("turret", x, y)).toBeNull(); return [x, y]; }
+  }
+  throw new Error("no turret cell");
+}
+
+test("0.44: entityAt + removeEntity in planning refunds exactly that unit", () => {
+  const s = new Sim(42);
+  expect(s.setZone(zoneAroundCenter(s, 20))).toBeNull();
+  const m0 = s.remaining();
+  const [x, y] = placeTurret(s);
+  const e = s.entityAt(x + 0.5, y + 0.5)!;
+  expect("unit" in e && e.unit).toBe(s.units[0]);
+  expect(s.removeEntity(e)).toBe(true);
+  expect(s.units.length).toBe(0);
+  expect(s.remaining()).toBe(m0);
+  expect(s.entityAt(x + 0.5, y + 0.5)).toBeNull();
+});
+
+test("0.44: removeEntity refuses a Budget Office whose removal would go into debt", () => {
+  const s = new Sim(7, { budget: 70_000_000 });
+  expect(s.setZone(zoneAroundCenter(s))).toBeNull();
+  const bld: [number, number][] = [];
+  for (let i = 0; i < s.inZone.length; i++) {
+    if (s.inZone[i] === 1 && s.map.tile[i] === BUILDING) {
+      const x = i % s.w, y = (i / s.w) | 0;
+      if (bld.every(([bx, by]) => Math.hypot(bx - x, by - y) >= 3)) bld.push([x, y]);
+    }
+  }
+  expect(s.placeSupport("budget", bld[0][0], bld[0][1])).toBeNull();
+  const office = s.supports[0];
+  for (const [x, y] of bld.slice(1)) { if (s.remaining() < 960_000) break; s.place("garrison", x, y); }
+  const discounted = s.units.filter(u => u.paid! < C.UNITS[u.kind].cost).reduce((a, u) => a + (C.UNITS[u.kind].cost - u.paid!), 0);
+  expect(discounted).toBeGreaterThan(s.remaining()); // removing it would cost more than is left
+  expect(s.removeEntity({ support: office })).toBe(false);
+  expect(s.supports).toContain(office);
+});
+
+test("0.44: sellEntity in battle starts the extraction; removeEntity does nothing in battle", () => {
+  const s = new Sim(42);
+  expect(s.setZone(zoneAroundCenter(s, 20))).toBeNull();
+  const [x, y] = placeTurret(s);
+  s.startBattle();
+  const e = s.entityAt(x + 0.5, y + 0.5)!;
+  expect(s.removeEntity(e)).toBe(false);
+  const r = s.sellEntity(e);
+  expect(typeof r).toBe("number");
+  expect(s.units[0].extractT).toBeDefined();
+  expect(s.entityAt(x + 0.5, y + 0.5)).toBeNull(); // being pulled out: not selectable
+  expect(s.sellEntity(e)).toBe("Already being pulled out.");
+});
+
+test("0.44: cycleTargetOf goes nearest, walls, civilians, nearest", () => {
+  const s = new Sim(42);
+  expect(s.setZone(zoneAroundCenter(s, 20))).toBeNull();
+  placeTurret(s);
+  const u = s.units[0];
+  expect(s.cycleTargetOf(u)).toBe("wall");
+  expect(s.cycleTargetOf(u)).toBe("civ");
+  expect(s.cycleTargetOf(u)).toBe("near");
+});

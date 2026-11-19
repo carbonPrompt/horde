@@ -18,10 +18,10 @@ export function tutorialSteps(target: Stand): TutStep[] {
   return [
     // planning
     { id: "look", text: "Right-drag or WASD moves the map; the mouse wheel zooms. Press Next when you're ready.", done: () => false },
-    { id: "zone", text: "Draw your safe zone around the highlighted park: pick Safe Zone and click its corners, taking in the rooftops around it. Click the first corner again (or press Enter) to close it.", highlight: { kind: "rect", rect: park }, done: s => s.zoneOverlap >= 0.6 },
+    { id: "zone", text: "Draw your safe zone around the highlighted park: pick Safe Zone and click its corners, taking in the rooftops around it (the cost shows next to the cursor). Click the first corner again (or press Enter) to close it.", highlight: { kind: "rect", rect: park }, done: s => s.zoneOverlap >= 0.6 },
     { id: "wall", text: "Blue crossings are gates: people get in, infected don't, but gates break sooner. White is wall: stronger, and nobody passes, your own tanks included. Pick Gate and click a blue crossing to wall it off.", highlight: { kind: "tool", tool: "gate" }, done: s => s.toWall >= 1 },
     { id: "reopen", text: "Click it again to open it. You can flip gates any time, even mid-battle (they take a few seconds to swing).", highlight: { kind: "tool", tool: "gate" }, done: s => s.toGate >= 1 },
-    { id: "garrison", text: "Put a Garrison on a rooftop next to the zone. Soldiers on roofs shoot over the crowd.", highlight: { kind: "tool", tool: "garrison" }, done: s => s.garrisons >= 1 },
+    { id: "garrison", text: "Put a Garrison on a rooftop next to the zone. Soldiers on roofs shoot over the crowd. Wrong spot? Click it with Move/Aim and press Delete for a full refund.", highlight: { kind: "tool", tool: "garrison" }, done: s => s.garrisons >= 1 },
     { id: "sniper", text: "Snipers see farther from tall buildings. Press J to see building heights, then put one on a high roof.", highlight: { kind: "tool", tool: "sniper" }, done: s => s.snipers >= 1 },
     { id: "evac", text: "Place an Evac Point inside the zone. Helicopters fly people out from it.", highlight: { kind: "tool", tool: "evac" }, done: s => s.evacs >= 1 },
     { id: "start", text: "Press START BATTLE when you're ready.", highlight: { kind: "button", button: "startbtn" }, done: s => s.phase !== "plan" },

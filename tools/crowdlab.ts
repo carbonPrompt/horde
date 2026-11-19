@@ -1,5 +1,5 @@
 // Crowd lab (0.30): headless test maps that measure how natural the crowd is, against numbers from real crowds.
-//   bun tools/crowdlab.ts [street|gate|horde|evac|perf|all]
+//   bun tools/crowdlab.ts [street|gate|horde|evac|perf|align|all]
 // street: a 16 m wide street, 2000 people walking to a zone. Measures wall-hugging (share of people within 30 cm
 //         of a building), rows (how much people's positions across the street bunch into lines; 1.0 = random) and
 //         walking speed against density (real: about 1.3 m/s free, slower as it packs, Weidmann 1993).
@@ -196,9 +196,49 @@ function perf() {
   }
 }
 
+/** 0.44: do infected line up on open ground? An open plaza, a zone on the far side (straight) or in the far corner
+ *  (diagonal), 1500 infected released opposite. For each infected, the direction to its nearest infected neighbor:
+ *  the share within 5 degrees of one of the 8 field directions (random about 22%). Lines along the field's straight
+ *  or diagonal steps push it up. `rows` = how much positions bunch across the heading (1.00 = random). */
+function align(diag: boolean) {
+  const W = 140, H = 100;
+  const tile = new Uint8Array(W * H).fill(ROAD), height = new Uint8Array(W * H);
+  for (let x = 0; x < W; x++) { tile[x] = BUILDING; tile[(H - 1) * W + x] = BUILDING; height[x] = 3; height[(H - 1) * W + x] = 3; }
+  for (let y = 0; y < H; y++) { tile[y * W] = BUILDING; tile[y * W + W - 1] = BUILDING; height[y * W] = 3; height[y * W + W - 1] = 3; }
+  const s = new Sim(1, { customMap: { w: W, h: H, seed: 1, tile, height }, civilians: 10, budget: 500_000_000 } as any);
+  s.dev.bites = false; s.dev.waves = false; s.dev.wallDamage = false;
+  const err = diag ? s.setZone([[112, 72], [138, 72], [138, 98], [112, 98]]) : s.setZone([[118, 2], [138, 2], [138, 97], [118, 97]]);
+  if (err) throw new Error(err);
+  s.startBattle();
+  (s as any).outbreak = true;
+  for (let k = 0; k < s.civN; k++) s.state[k] = DEAD;
+  const r = (() => { let a = 13; return () => ((a = (a * 1103515245 + 12345) >>> 0) / 4294967296); })();
+  for (let j = 0; j < 1500; j++) diag ? s.spawnInfected(2 + r() * 30, 2 + r() * 30, 1e9, false) : s.spawnInfected(2 + r() * 25, 5 + r() * 90, 1e9, false);
+  const hx = diag ? Math.SQRT1_2 : 1, hy = diag ? Math.SQRT1_2 : 0; // heading toward the zone
+  let near = 0, tot = 0; const bins = new Float64Array(200); let bcnt = 0;
+  for (let t = 0; t < 40 * C.TICK_HZ; t++) {
+    s.step();
+    if (t < 10 * C.TICK_HZ || t % (2 * C.TICK_HZ)) continue;
+    const xs: number[] = [], ys: number[] = [];
+    for (let k = s.civN; k < s.n; k++) if (s.state[k] === INF && s.inZone[(s.ay[k] | 0) * W + (s.ax[k] | 0)] === 0) { xs.push(s.ax[k]); ys.push(s.ay[k]); }
+    for (let a = 0; a < xs.length; a++) {
+      let bd = Infinity, bx = 0, by = 0;
+      for (let b = 0; b < xs.length; b++) { if (a === b) continue; const dx = xs[b] - xs[a], dy = ys[b] - ys[a], d = dx * dx + dy * dy; if (d < bd) { bd = d; bx = dx; by = dy; } }
+      if (bd > 4) continue; // only real neighbors (within 2 cells)
+      const ang = ((Math.atan2(by, bx) * 180 / Math.PI) % 45 + 45) % 45;
+      tot++; if (ang < 5 || ang > 40) near++;
+      const cross = -xs[a] * hy + ys[a] * hx; // position across the heading, in cells
+      bins[Math.floor(((cross % 2) + 2) % 2 / 0.01)]++; bcnt++;
+    }
+  }
+  let sum2 = 0; for (const b of bins) sum2 += (b / bcnt) ** 2;
+  console.log(`align ${diag ? "diagonal" : "straight"}: ${(100 * near / Math.max(1, tot)).toFixed(1)}% of neighbor pairs on a field direction (random about 22.2%), sub-cell rows ${(sum2 * bins.length).toFixed(2)} (1.00 = random), ${tot} pairs`);
+}
+
 const what = process.argv[2] ?? "all";
 if (what === "street" || what === "all") street();
 if (what === "gate" || what === "all") { gate(false); gate(true); }
 if (what === "horde" || what === "all") horde();
 if (what === "evac" || what === "all") evac();
 if (what === "perf" || what === "all") perf();
+if (what === "align" || what === "all") { align(false); align(true); }

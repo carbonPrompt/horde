@@ -112,7 +112,7 @@ export const AIRFRAMES: Record<string, Airframe> = {
   },
   c130: { res: 0.5, len: 29.8, alt: 7, pal: PAL.cargo, shapes: C130_BODY, edge: C130_PROPS },
   mc130: { res: 0.5, len: 29.8, alt: 7, pal: PAL.ghost, shapes: C130_BODY, edge: C130_PROPS },
-  ac130: { // AC-130J Ghostrider: the C-130 with a 30 mm cannon and a 105 mm howitzer out the left side
+  ac130: { // AC-130U: the C-130 with 25 mm, 40 mm and 105 mm guns out the left side
     res: 0.5, len: 29.8, alt: 7, pal: PAL.ghost, edge: C130_PROPS,
     shapes: [...C130_BODY, R("n", 5.0, -3.6, 5.5, -2.1), R("n", -4.4, -4.8, -3.6, -2.1), R("m", -4.6, -2.6, -3.4, -2.1)],
   },

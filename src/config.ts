@@ -479,7 +479,7 @@ export function cityGunProfile(cityId?: string): CityGunProfile {
   return { country: "US", avgHousehold: 2.5, armedRate: CIV_ARMED_BASE, cityFactor: 1.0, mix: US_MIX, militiaFactor: 1.0 };
 }
 
-export const VERSION = "0.43.0";
+export const VERSION = "0.46.1";
 
 /** The campaign: fixed cities that unlock in order (a medal on one opens the next). */
 export interface CityDef { id: string; name: string; seed: number; budget: number; waveMul: number; sites: number; speedMul: number; blurb: string; real?: boolean; trial?: string; recipe?: CityRecipe; clearXp?: number; intro?: string[]; areas?: AreaDef[]; realArea?: string } // 0.36: areas = a real city's battle areas; realArea = this def is one area ("<city>/<area>") // 0.35: recipe = designed campaign map; clearXp = one-time bonus for the first medal; intro = lines shown the first time // trial: hardware this city lends you before you unlock it
@@ -618,7 +618,7 @@ export const ABILITIES: Record<AbilityKind, AbilitySpec> = {
   tomahawk: { name: "Tomahawk", cost: 2_000_000, max: 4, delay: 10, color: "#e0e0e0",
     hint: "Click a spot. A Tomahawk cruise missile from a destroyer offshore hits it 10 s later: a precise 14 m blast that destroys whatever is there, building included." },
   gunship: { name: "AC-130 Gunship", cost: 1_600_000, max: 3, delay: 5, color: "#ce93d8",
-    hint: "Click a spot. An AC-130J Ghostrider orbits it for 40 s at a time (it leaves to refuel and comes back, all battle), firing its 30 mm cannon and 105 mm howitzer at infected within 60 m. Precise: it only shoots infected." },
+    hint: "Click a spot. An AC-130 flies in from the nearest edge and circles it 40 s at a time (it leaves to refuel and comes back, all battle) with a 25 mm Gatling, 40 mm Bofors and 105 mm howitzer, firing only at infected. Select it with Move/Aim: right-click sends it somewhere new, Delete sends it home (cancel before it arrives to get the charge back)." },
   nuke: { name: "Tactical Nuke", cost: 28_000_000, max: 1, delay: 15, color: "#76ff03",
     hint: "LAST RESORT. Click a spot. 15 s later a tactical nuclear warhead erases everything within 160 m: infected, civilians (even inside a zone), walls and buildings. Fallout lingers 90 s and kills anything that stays in it. Costs 500 XP." },
 };
@@ -630,7 +630,11 @@ export let A10_WIDTH = 1.6, A10_DMG = 3000, A10_LEN = 80;
 export let CLUSTER_RADIUS = 16, CLUSTER_BOMBLETS = 50, CLUSTER_SPLASH = 1.6, CLUSTER_DMG = 900;
 export let TOMAHAWK_RADIUS = 7;
 export let PARA_LIVE_MAX = 6; // 0.32: paratrooper squads on the ground (or inbound) at once
-export let GUNSHIP_RADIUS = 30, GUNSHIP_S = 40, GUNSHIP_GUN_DMG = 350, GUNSHIP_GUN_RATE = 6, GUNSHIP_HOW_DMG = 2200, GUNSHIP_HOW_EVERY = 3, GUNSHIP_HOW_SPLASH = 4;
+export let GUNSHIP_RADIUS = 30, GUNSHIP_S = 40, GUNSHIP_HOW_DMG = 2200, GUNSHIP_HOW_EVERY = 3, GUNSHIP_HOW_SPLASH = 4;
+// 0.46: AC-130U guns. 25 mm GAU-12 Gatling on stragglers, 40 mm L/60 Bofors on small groups, 105 mm (above) on packs
+// of at least G105_MIN. 25 mm + 40 mm = 2100 damage/s on single targets, the old 30 mm's total.
+export let G25_DMG = 50, G25_RATE = 30, G40_DMG = 300, G40_RATE = 2, G40_SPLASH = 1.0, G105_MIN = 10;
+export let GUNSHIP_SPEED = 60; // 0.46: cells/s flying in, to a new spot or home (AC-130 cruise about 130 m/s)
 export let GUNSHIP_REFUEL_S = 45; // 0.32: after each 40 s on station it flies off the map to refuel and comes back, for the rest of the battle
 export let AIRSTRIKE_LEN = 70; // cells, longest run
 export let AIRSTRIKE_RADIUS = 3.5;
@@ -1129,12 +1133,17 @@ export const TUNABLE: Record<string, [() => number, (v: number) => void]> = {
   PARA_LIVE_MAX: [() => PARA_LIVE_MAX, v => { PARA_LIVE_MAX = v; }],
   GUNSHIP_RADIUS: [() => GUNSHIP_RADIUS, v => { GUNSHIP_RADIUS = v; }],
   GUNSHIP_S: [() => GUNSHIP_S, v => { GUNSHIP_S = v; }],
-  GUNSHIP_GUN_DMG: [() => GUNSHIP_GUN_DMG, v => { GUNSHIP_GUN_DMG = v; }],
-  GUNSHIP_GUN_RATE: [() => GUNSHIP_GUN_RATE, v => { GUNSHIP_GUN_RATE = v; }],
+  G25_DMG: [() => G25_DMG, v => { G25_DMG = v; }],
+  G25_RATE: [() => G25_RATE, v => { G25_RATE = v; }],
+  G40_DMG: [() => G40_DMG, v => { G40_DMG = v; }],
+  G40_RATE: [() => G40_RATE, v => { G40_RATE = v; }],
+  G40_SPLASH: [() => G40_SPLASH, v => { G40_SPLASH = v; }],
+  G105_MIN: [() => G105_MIN, v => { G105_MIN = v; }],
   GUNSHIP_HOW_DMG: [() => GUNSHIP_HOW_DMG, v => { GUNSHIP_HOW_DMG = v; }],
   GUNSHIP_HOW_EVERY: [() => GUNSHIP_HOW_EVERY, v => { GUNSHIP_HOW_EVERY = v; }],
   GUNSHIP_HOW_SPLASH: [() => GUNSHIP_HOW_SPLASH, v => { GUNSHIP_HOW_SPLASH = v; }],
   GUNSHIP_REFUEL_S: [() => GUNSHIP_REFUEL_S, v => { GUNSHIP_REFUEL_S = v; }],
+  GUNSHIP_SPEED: [() => GUNSHIP_SPEED, v => { GUNSHIP_SPEED = v; }],
   AIRSTRIKE_LEN: [() => AIRSTRIKE_LEN, v => { AIRSTRIKE_LEN = v; }],
   AIRSTRIKE_RADIUS: [() => AIRSTRIKE_RADIUS, v => { AIRSTRIKE_RADIUS = v; }],
   FIRE_RADIUS: [() => FIRE_RADIUS, v => { FIRE_RADIUS = v; }],
