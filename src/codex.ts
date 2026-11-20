@@ -1,0 +1,179 @@
+// 0.47: the Codex. How to Play as data: sections, entries, media and keys. The screen (codexui.ts) renders it;
+// unit, ability and support pages come from config (codexStats.ts); test/codex.test.ts keeps it honest.
+import { statEntries } from "./codexStats";
+
+export type SectionId = "start" | "battle" | "people" | "units" | "strikes" | "support" | "destruction" | "controls" | "more" | "credits";
+export const SECTIONS: { id: SectionId; title: string }[] = [
+  { id: "start", title: "Start Here" },
+  { id: "battle", title: "The Battle" },
+  { id: "people", title: "People" },
+  { id: "units", title: "Units" },
+  { id: "strikes", title: "Strikes and Abilities" },
+  { id: "support", title: "Support Buildings" },
+  { id: "destruction", title: "Destruction" },
+  { id: "controls", title: "Controls" },
+  { id: "more", title: "More" },
+  { id: "credits", title: "Credits" },
+];
+
+export type Callout = { n: number; x: number; y: number; text: string }; // x, y: 0..1 of the picture
+export type Media = { kind: "shot" | "clip" | "diagram"; id: string; alt: string; callouts?: Callout[] };
+export type CodexEntry = {
+  id: string; section: SectionId; title: string;
+  summary: string; // one line, shown while the entry is closed
+  body: string; // mini markup: **bold**, `key`, blank line = new paragraph
+  media?: Media; keys?: string[];
+  since: string; // version the entry first appeared
+  updated: string; // version its text or media last changed (badges and staleness)
+  stats?: string; // a unit, ability or support kind: the screen adds its stats table
+};
+
+const OLD = "0.43.0", NOW = "0.47.0";
+const e = (id: string, section: SectionId, title: string, summary: string, body: string, x: Partial<CodexEntry> = {}): CodexEntry =>
+  ({ id, section, title, summary, body, since: OLD, updated: NOW, ...x });
+
+export const ENTRIES: CodexEntry[] = [
+  // ---------- Start Here ----------
+  e("intro", "start", "What is Horde?", "An outbreak is about to hit the city. Plan a defense, then hold out while people get to safety.",
+    "An outbreak is about to hit the city. You pick when it starts, plan your defense, then hold out while people get to safety.\n\nThe round goes in two parts: **planning** (draw a safe zone, set gates, place units, all at full refund) and **the battle** (the alert goes out, people run for your zone, the infected spread)."),
+  e("pick-time", "start", "Pick a time", "The hour the sirens go off decides where everyone is.",
+    "After you choose a city you pick the hour the sirens go off (or Random). Where people are depends on it: home at night, at work in the day, on the roads in the rush hours. The clock in the top bar runs about 30 times faster than real life."),
+  e("move-around", "start", "Move around", "Right-drag or WASD to move, wheel to zoom, minimap to jump.",
+    "Right-drag or WASD moves the map, the wheel zooms; click or drag on the minimap (top right) to jump there. Left-click uses the tool you picked; right-click or Esc puts it down.\n\nThe label next to the cursor says what is under it (a building's floors and roof height, a street, a unit) and, while you place something or draw a zone, what it costs and the money left.",
+    { keys: ["Right-drag", "W A S D", "Wheel", "Esc"] }),
+  e("safe-zone", "start", "1. Draw a safe zone", "Click corners to outline the zone people run to. Bigger zones cost more.",
+    "Pick Safe Zone and click its corners, then click the first corner again (or press Enter) to close it. Right-click removes the last corner. Bigger zones cost more.\n\nPlaced something in the wrong spot? Click it with Move/Aim (or drag a box around mobile units) and press Delete for a full refund.",
+    { keys: ["Enter", "Right-click", "Delete", "K"] }),
+  e("gates-walls", "start", "2. Gates and walls", "Gates let people in and keep infected out; walls are stronger but nobody passes.",
+    "Every street that crosses your zone's edge starts as a **gate** (blue): people get in, infected don't, but gates break sooner. Pick Gate and click one to make it a **wall** (white): stronger, but nobody passes. Click again to open it. You can flip gates in battle too; they take a few seconds to swing. Lock Gates (L) shuts them all.",
+    { keys: ["G", "L"] }),
+  e("walls-fire", "start", "What walls block", "Walls stop your vehicles and direct fire; artillery, rooftop units and aircraft fire over.",
+    "Walls also stop your own tanks, APCs and squads (they use gates or breaches), and turrets, tanks, APCs, squads and the gunboat can't shoot through a wall or the buildings on your zone's edge. Mortars, howitzers, HIMARS, the battleship, rooftop units and aircraft fire over them."),
+  e("units-basics", "start", "3. Units", "Garrisons and Snipers go on buildings, Turrets on streets. Hover anything for its stats.",
+    "Garrisons and Snipers go on buildings, Turrets on streets. Taller buildings give snipers more range (press J to see heights). Units inside the zone never run out of ammo; outside, they do. Hover over any button or placed unit to see its stats.",
+    { keys: ["J", "R"] }),
+  e("evacuate", "start", "4. Evacuate", "Evac Points fly people out every 12 s; each extra pad costs double the last.",
+    "Build Evac Points inside your zone: every 12 s a lift flies people out, and trains carry people out on the rails. Each extra pad costs double the last ($3M, $6M, $12M...). A lift waves off if infected crowd the pad. Each person flown out brings $24,000 in federal evacuation funding."),
+  // ---------- The Battle ----------
+  e("alert", "battle", "The alert", "START BATTLE sends the phone alert; families decide where to go.",
+    "When you press START BATTLE everyone gets the phone alert. Families decide what to do: some go straight to your zone, some go home first to gather the family, some meet at the zone and wait there for the rest. The first cases turn somewhere outside your zones after 20 seconds."),
+  e("close-gates", "battle", "Close the gates in time", "Once most people are in, close the gates before the hordes reach them.",
+    "Once most people are in, close the gates before the hordes reach them.", { keys: ["L"] }),
+  e("hordes", "battle", "Hordes", "Hordes walk in from outside along highways, rails, bridges and the river.",
+    "Hordes walk in from outside the city along highways, rail lines, bridges and the river (an amber arrow shows where the next one comes in). Each is bigger and comes sooner."),
+  e("money", "battle", "Money", "You earn for every person safe and every infected killed. Spend it any time.",
+    "Every 10 seconds you earn money for each person safe, plus a little for every infected killed. Spend it any time: units (they take a few seconds to set up), strikes, C4, even extra safe zones (those cost a lot more).\n\nSelling a unit mid-battle (Sell / Evac) sends a helicopter to pull it out first; then you get its cost back. Prices are real-world US dollars; ordnance is limited per battle, like a real stockpile."),
+  e("strikes-rules", "strikes", "How strikes work", "Strikes land a few seconds after you call them and hurt civilians too.",
+    "Airstrike and the A-10 take two clicks (where the run starts, where it ends); the rest take one. Each lands a few seconds later and hurts civilians too (the AC-130 only shoots infected).\n\nCratering strikes and shelling can't land within 20 to 30 m of your people (the cursor turns red: NO-FIRE); the nuke and MOAB are allowed but warn you first."),
+  e("speed", "battle", "Speed", "1, 2 and 3 set the speed; Space pauses.",
+    "1, 2 and 3 set the speed (half, normal, double); Space pauses.", { keys: ["1", "2", "3", "Space"] }),
+  e("round-score", "battle", "The round and your score", "The round ends when the city is empty. Score 0 to 100, medals from Bronze to Platinum.",
+    "The round ends when nobody is left in the city, or when only a few stuck stragglers remain. End round (top bar) scores it right away: people in the zone count as saved.\n\nYour score (0 to 100) is mostly people saved, plus how fast, how intact the city is and how many infected you killed: Bronze 10, Silver 30, Gold 50, Platinum 75, and at least 5% saved for any medal.\n\nThen Keep fighting: endless, harder hordes scored as Mayhem until you pull out (Pause menu: Pull out)."),
+  // ---------- People ----------
+  e("every-dot", "people", "Every dot is a person", "Click a white dot with Move/Aim to see who they are and what happened to them.",
+    "Every dot is a person with a name, an age, a family and a home. Pick Move/Aim and click a white dot to see who they are, where they were when the sirens went off and everything that has happened to them since. **Follow** keeps the camera on them.\n\nSome carry guns and defend their family; panicked crowds can crush; anyone can be carrying the infection."),
+  e("refusers", "people", "Age, refusers and grief", "Some households refuse to leave. Park a unit beside them to talk them out.",
+    "The elderly walk slower, teens a bit faster, and some teens head for the zone on their own. A few households refuse to leave and shelter at home (click a person to see if they are one). Some are bluffing and run once the infected come close. Park a unit beside them for a while to talk them out. People who stay cost the score a little.\n\nSeeing someone they love turn can stop a person in their tracks, send them back for them, or make them refuse to go on."),
+  // ---------- Units ----------
+  e("mobile-orders", "units", "Mobile units and orders", "Select mobile units and right-click to send them. A, P, E, S and D give orders.",
+    "The APC, the Gunboat (on the river) and Paratroopers think for themselves: they hunt crowds near where you put them, go after infected chasing civilians first, back off before they get swarmed, and go home to reload.\n\nSelect mobile units with Move/Aim (click, Shift-click, or drag a box) and right-click where to send them: they go straight there, shooting what is in range, and hold. A then click: attack-move (they stop to fight on the way). P: patrol between here and there. E then click a person: escort their family. S: stop and hold. D: stand by (hold fire). Shift queues orders; the minimap moves the camera and right-click on it sends units.\n\nWhile units are selected, the arrow keys move the camera (A, S and D are commands). Units you never order still fight on their own. Recall (Q) pulls mobile units into the zone, Q again sends them back.",
+    { keys: ["Right-click", "A", "P", "E", "S", "D", "Shift", "Q"] }),
+  e("target-delete", "units", "Target priority and removing units", "Select a unit, then T changes what it shoots first and Delete removes it.",
+    "Click one of your units with Move/Aim to select it, then press T to change what it shoots first (nearest, closest to the walls, or infected chasing civilians) or Delete to remove it.",
+    { keys: ["T", "Delete"] }),
+  e("ac130", "units", "AC-130 gunship", "It flies in by itself, circles 40 s at a time and fires three guns at infected only.",
+    "It flies in by itself from the nearest edge of the map and circles the spot 40 s at a time (it leaves to refuel and comes back, all battle). Its 25 mm Gatling takes stragglers, the 40 mm Bofors small groups and the 105 mm howitzer packs of 10 or more, firing only at infected.\n\nClick the plane with Move/Aim to select it: right-click sends it to a new spot, Delete sends it home (before it arrives, that cancels it and gives the charge back).",
+    { keys: ["Right-click", "Delete"] }),
+  // ---------- Support ----------
+  e("support-buildings", "support", "Support buildings", "Built on buildings inside your zone: discounts, repairs, range, ammo, fire rate, police, militia.",
+    "Support buildings go on buildings inside your zone: Budget office (20% off nearby), Repair yard (walls, gates, vehicles), Radio tower (+40% range nearby), Supply depot (ammo by cargo drone to units outside the walls), Command post (+30% fire rate), Precinct (police squads), Armory (militia on the walls)."),
+  // ---------- Destruction ----------
+  e("c4", "destruction", "C4 and destruction", "Plant C4 on a bridge or building, then click it in battle to blow it.",
+    "Plant C4 on a bridge or a building, then click it again in battle to blow it: a bridge drops into the river, a building collapses into rubble that slows everyone. Heavy weapons crater streets and bring buildings down too. Fuel tanks blow during the battle."),
+  // ---------- Controls ----------
+  e("controls-all", "controls", "All controls", "Every key and mouse action in one list.",
+    "Right-drag or WASD move the map (arrow keys while units are selected), wheel zooms, minimap jumps the camera.\n\nMove/Aim: click to select, Shift-click to add, drag a box for mobile units, Esc to deselect; right-click sends them (Shift queues).\n\nWith units selected: A attack-move, P patrol, E escort, S stop, D stand by, T target priority, Delete remove (planning) or pull out (battle).\n\nSpace pauses, 1/2/3 speed, G gate tool, Q recall, L lock gates, K clear zone, Z X C V B N M quick bar slots 1 to 7 (drag a tool onto a slot), J heights, R unit ranges, H kill heatmap, Esc menu, F5 quick save (pick a save slot first), F11 fullscreen (Windows app)."),
+  // ---------- More ----------
+  e("real-cities", "more", "Real cities, mutators and the daily challenge", "13 real OpenStreetMap cities, any city live when online, mutators and a daily challenge.",
+    "Play 13 real OpenStreetMap cities (Boston, Castle Rock, Chicago, Denver, Los Angeles, New York, Miami, Omaha, Paris, Pittsburgh, Portland, San Francisco, Washington), or search any city live when online. Mutators and the Daily Challenge are on the Cities screen. H shows where your kills happened.",
+    { keys: ["H"] }),
+  e("tips-tutorial", "more", "Tips and the tutorial", "Tips show the first time something happens; the tutorial runs on the first city.",
+    "Tips appear in the ticker the first time something new happens (Settings: Tips). The tutorial runs on the first city; you can replay it from the Pause menu."),
+  // ---------- Credits ----------
+  e("credits", "credits", "Credits", "Map data, music, sound effects and who built it.",
+    "Map data © OpenStreetMap contributors, available under the Open Database License (ODbL).\n\nMusic made with ACE-Step 1.5 (MIT license). Sound effects made with Stable Audio Open 1.0, Powered by Stability AI (Stability AI Community License).\n\nBuilt by AI agents (Claude and Gemini) and a human."),
+];
+
+// ---------- Media: pictures (tools/shots/recipes.ts), clips, diagrams (codexDiagrams.ts). One per entry. ----------
+const shot = (id: string, alt: string, callouts?: Callout[]): Media => ({ kind: "shot", id, alt, ...(callouts ? { callouts } : {}) });
+const clip = (id: string, alt: string, callouts?: Callout[]): Media => ({ kind: "clip", id, alt, ...(callouts ? { callouts } : {}) });
+const diagram = (id: string, alt: string): Media => ({ kind: "diagram", id, alt });
+const c = (n: number, x: number, y: number, text: string): Callout => ({ n, x, y, text });
+
+export const ENTRY_MEDIA: Record<string, Media> = {
+  "intro": shot("battle-overview", "Fairhaven a minute into a battle: the safe zone full of people, infected spreading through the streets", [c(1, 0.5, 0.42, "Your safe zone"), c(2, 0.2, 0.8, "Crowds crossing the bridges toward the zone")]),
+  "move-around": shot("start-cursor-label", "The cursor over a building with the Sniper tool: the label shows the building's floors, roof height and the price", [c(1, 0.6, 0.22, "The label follows the cursor")]),
+  "safe-zone": clip("clip-draw-zone", "A safe zone being drawn corner by corner and closed on the first corner"),
+  "gates-walls": diagram("gate-wall", "A gate lets people in and stops infected; a wall stops everyone"),
+  "walls-fire": diagram("line-of-fire", "Direct fire stops at walls; mortars, artillery, rooftop units and aircraft fire over them"),
+  "units-basics": shot("start-heights", "Building heights shown with J: taller buildings are lighter; a sniper and a garrison sit on rooftops by the zone"),
+  "evacuate": clip("clip-evac-lift", "A helicopter lands on an evac pad inside the zone and lifts people out"),
+  "alert": diagram("timeline", "Timeline from START BATTLE to the first cases and the hordes"),
+  "close-gates": clip("clip-gate-to-wall", "In battle, gates are clicked shut and turn from blue gates to white walls"),
+  "hordes": shot("battle-horde-arrow", "A horde marching in from the edge of the city along a road"),
+  "money": shot("battle-money-bar", "The top bar in battle: money and income, people outside, safe, evacuated, infected, killed and the clock", [c(1, 0.72, 0.25, "Money and income every 10 s"), c(2, 0.35, 0.72, "Who is where")]),
+  "strikes-rules": diagram("no-fire", "The no-fire rings around your people and which strikes each ring blocks"),
+  "round-score": diagram("medals", "Score bar from 0 to 100 with the medal thresholds"),
+  "every-dot": shot("people-person-window", "A person's window: name, age, family, where they were when the sirens went off and what happened since"),
+  "mobile-orders": clip("clip-box-select-move", "Two mobile units are box-selected, then sent across the map with a right-click"),
+  "target-delete": shot("units-selected-card", "A selected sniper with its selection bar: target priority (T) and remove (Delete)", [c(1, 0.5, 0.2, "Selection bar: T changes the target, Delete removes it"), c(2, 0.8, 0.45, "Its card: range, damage, ammo and kills")]),
+  "ac130": shot("units-ac130-orbit", "The AC-130 circling its spot and firing on infected below"),
+  "support-buildings": shot("support-radius", "Placing a Radio Tower inside the zone: the circle shows the area it boosts"),
+  "c4": clip("clip-c4-bridge", "C4 on a bridge is blown in battle and the bridge drops into the river"),
+  "controls-all": shot("controls-quickbar", "The bottom bar: tool classes, the Z to M quick bar, abilities, gates and speed controls", [c(1, 0.12, 0.5, "Tool classes"), c(2, 0.36, 0.5, "Quick bar Z X C V B N M"), c(3, 0.95, 0.5, "Speed and pause")]),
+};
+export const STAT_MEDIA: Record<string, Media> = {
+  "unit-sniper": shot("units-ranges", "Unit ranges shown with R: each unit's circle is how far it reaches"),
+  "unit-apc": clip("clip-attack-move", "An APC on attack-move: it stops to fight infected on the way to where it was sent"),
+  "ability-airstrike": clip("clip-airstrike", "An airstrike called with two clicks: the jet bombs the line from the first click to the second"),
+  "ability-gunship": clip("clip-ac130-arrives", "The AC-130 flies in from the nearest edge and starts circling"),
+  "support-evac": diagram("evac-cost", "Each extra evac pad costs double the last"),
+};
+
+/** Hand-written entries plus the generated unit, ability and support pages, with their media attached. */
+export function allEntries(): CodexEntry[] {
+  return [...ENTRIES, ...statEntries()].map(e => (ENTRY_MEDIA[e.id] ?? STAT_MEDIA[e.id]) ? { ...e, media: ENTRY_MEDIA[e.id] ?? STAT_MEDIA[e.id] } : e);
+}
+
+const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+/** Mini markup to HTML: escapes everything, then **bold**, `key`, blank line = paragraph. */
+export function renderBody(md: string): string {
+  return md.split(/\n\s*\n/).map(p => "<p>" + esc(p.trim()).replace(/\*\*(.+?)\*\*/g, "<b>$1</b>").replace(/`([^`]+)`/g, "<kbd>$1</kbd>") + "</p>").join("");
+}
+
+export function verCmp(a: string, b: string): number {
+  const x = a.split(".").map(Number), y = b.split(".").map(Number);
+  for (let i = 0; i < 3; i++) if ((x[i] ?? 0) !== (y[i] ?? 0)) return (x[i] ?? 0) - (y[i] ?? 0);
+  return 0;
+}
+
+/** Literal, case-insensitive search over title, summary, body and keys. Blank = everything. */
+export function filterEntries(q: string, list: CodexEntry[] = allEntries()): CodexEntry[] {
+  const n = q.trim().toLowerCase();
+  if (!n) return list;
+  return list.filter(e => [e.title, e.summary, e.body, ...(e.keys ?? [])].some(s => s.toLowerCase().includes(n)));
+}
+
+/** NEW / UPDATED against the version the player last opened the Codex in (none yet = no badges). */
+export function badgeFor(e: CodexEntry, seen: string | undefined): "new" | "updated" | null {
+  if (!seen) return null;
+  if (verCmp(e.since, seen) > 0) return "new";
+  if (verCmp(e.updated, seen) > 0) return "updated";
+  return null;
+}
+
+/** The version badges compare against: the last Codex visit, else the version that last wrote the save (a save from
+ * before 0.47 sees what changed since), else nothing (a brand-new player gets no badges). */
+export function seenFor(codexSeen: string | undefined, prevGameVersion: string | undefined): string | undefined {
+  return codexSeen ?? prevGameVersion;
+}

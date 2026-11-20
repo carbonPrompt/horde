@@ -2,10 +2,12 @@
 // storage can be blocked or empty, and the game must still run.
 import type * as C from "./config";
 import { cleanOrders, type Order } from "./orders";
+import { SECTIONS } from "./codex";
+const CODEX_SECTIONS: string[] = SECTIONS.map(s => s.id);
 
 // 0.45: Plan.units entries: 5th = the unit's orders (present = commanded), 6th = stand by
 export interface Plan { poly: [number, number][]; zones?: [number, number][][]; walls: number[]; units: [C.UnitKind, number, number, C.TargetMode?, Order[]?, boolean?][]; supports?: [C.SupportKind, number, number][]; abilities?: Partial<Record<C.AbilityKind, number>>; c4?: number[]; demo?: number[]; start?: number }
-export interface Settings { fullscreen: boolean; edgeScroll: boolean; showRanges: boolean; devMode?: boolean; crowd?: number; vol?: { master: number; sfx: number; music: number }; quickbar?: (string | null)[]; difficulty?: C.Difficulty;
+export interface Settings { fullscreen: boolean; edgeScroll: boolean; showRanges: boolean; devMode?: boolean; crowd?: number; vol?: { master: number; sfx: number; music: number }; quickbar?: (string | null)[]; difficulty?: C.Difficulty; codexSeen?: string; codexOpen?: string[]; /* 0.47: last version the Codex was opened in, open sections */
   autoUpdate?: boolean; checkUpdates?: boolean; updatePin?: string; speed?: number; tips?: boolean; tipsSeen?: string[] } // 0.26 updater: install by itself / look on start / stay on a picked older version
 export interface Best { pct: number; medal: string | null; mayhem?: number } // pct: round score 0..100 since 0.20 ("% evacuated" before)
 /** 0.33: the battle frozen in this slot (the file itself sits beside the profile). */
@@ -20,7 +22,7 @@ export const desktop: { setFullscreen(on: boolean): void; quit(): void; readSave
   battleWrite?(n: number, bytes: Uint8Array): Promise<boolean>; battleRead?(n: number): Promise<Uint8Array | null>; battleDelete?(n: number): void; openSaves?(): void; restoreOffer?(saveVersion: string | undefined): { name: string; version: string; stamp: string } | null; restoreBackup?(name: string): boolean; openReleases?(): void } | undefined =
   (globalThis as any).hordeDesktop;
 
-function defaults(): SaveData {
+export function defaults(): SaveData {
   return { settings: { fullscreen: true, edgeScroll: !!desktop, showRanges: false }, best: {}, plans: {}, daily: {} };
 }
 
@@ -62,6 +64,8 @@ export function clean(s: SaveData): SaveData {
   if (typeof settings.autoUpdate !== "boolean") delete settings.autoUpdate;
   if (typeof settings.checkUpdates !== "boolean") delete settings.checkUpdates;
   if (typeof settings.updatePin !== "string" || !VER.test(settings.updatePin)) delete settings.updatePin;
+  if (typeof settings.codexSeen !== "string" || !VER.test(settings.codexSeen)) delete settings.codexSeen; // 0.47
+  if (settings.codexOpen !== undefined) { const co = settings.codexOpen as unknown; settings.codexOpen = Array.isArray(co) ? co.filter((x): x is string => typeof x === "string" && CODEX_SECTIONS.includes(x)).slice(0, 16) : []; }
   if (settings.speed !== 0.5 && settings.speed !== 1 && settings.speed !== 2) delete settings.speed; // 0.32: last game speed
   const b = s.battle as any;
   const battle = b && typeof b === "object" && typeof b.version === "string" && VER.test(b.version) && typeof b.savedAt === "string" && typeof b.label === "string"

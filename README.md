@@ -29,6 +29,8 @@ every release, and Settings can install updates automatically. Your save is back
   guns, a few refuse to leave until a unit talks them out.
 - **Round end.** The round ends when everyone left alive is out. You get a score out of 100 (people saved, speed,
   city intact, zombies killed) and a medal. Then keep fighting endless, harder hordes for a Mayhem score, or end there.
+- **Codex.** How to Play is a searchable codex: every rule, key and unit with pictures, short clips and diagrams.
+  Unit, strike and building pages come straight from the game's stats, so they stay current (mods included).
 
 Units take up real space: tanks and turrets block streets, infected claw at them like walls, and tanks and APCs
 crush infected they drive over. Shelling leaves craters that slow everyone crossing them, buildings collapse into

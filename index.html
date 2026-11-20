@@ -263,8 +263,42 @@
   #mut-badges span { padding: 3px 8px; border-radius: 5px; background: #181f2c; border: 1px solid var(--line); }
   #daily { border-color: #f472b6 !important; flex-direction: column; gap: 2px; }
 
-  .howto p { max-width: 680px; color: #d6d8dc; line-height: 1.55; margin: 9px 0; }
+  .howto { width: min(940px, 94vw); }
+  .howto p { max-width: 720px; color: #d6d8dc; line-height: 1.55; margin: 9px 0; }
   .howto b { color: #fff; }
+  #codex-q { width: 100%; box-sizing: border-box; padding: 9px 12px; margin: 0 0 12px; font-size: 15px; border-radius: 8px; border: 1px solid var(--line-bright); background: rgba(0,0,0,0.35); color: #fff; }
+  .cx-sec { border-top: 1px solid var(--line-bright); }
+  .cx-sec > summary { cursor: pointer; padding: 11px 2px; font-size: 17px; font-weight: 800; letter-spacing: 1px; color: #fff; text-transform: uppercase; }
+  .cx-count { color: #ffd54f; font-size: 13px; letter-spacing: 0; text-transform: none; }
+  .cx-entry { margin: 0 0 6px 10px; border-radius: 8px; background: rgba(255,255,255,0.04); }
+  .cx-entry > summary { cursor: pointer; padding: 9px 12px; display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline; }
+  .cx-entry > summary b { color: #fff; font-size: 15px; }
+  .cx-sum { color: #9aa4b2; font-size: 13.5px; flex: 1 1 260px; }
+  .cx-badge { font-size: 10.5px; font-weight: 800; letter-spacing: 1px; padding: 1px 6px; border-radius: 4px; }
+  .cx-new { background: #ffd54f; color: #111; } .cx-updated { background: #4fc3f7; color: #111; }
+  .cx-body { padding: 2px 14px 12px; }
+  .cx-fig { margin: 8px 0 10px; }
+  .cx-frame { position: relative; display: inline-block; max-width: 100%; }
+  .cx-shot, .cx-clip { display: block; max-width: 100%; height: auto; border-radius: 6px; border: 1px solid var(--line-bright); }
+  .cx-clip { cursor: pointer; }
+  .cx-svg { width: min(640px, 82vw); }
+  .cx-svg svg { display: block; width: 100%; height: auto; --fg: #e8ecf1; --muted: #8a94a3; --accent: #ffd54f; }
+  .cx-dot { position: absolute; transform: translate(-50%, -50%); width: 22px; height: 22px; border-radius: 50%; background: #ffd54f; color: #111; font: 800 12.5px/22px sans-serif; text-align: center; box-shadow: 0 0 0 2px #111, 0 2px 6px rgba(0,0,0,0.6); pointer-events: none; }
+  .cx-calls { margin: 6px 0 0; padding-left: 22px; color: #d6d8dc; font-size: 13.5px; }
+  .cx-alt { padding: 14px; border: 1px dashed var(--line-bright); border-radius: 6px; color: #9aa4b2; font-style: italic; }
+  .cx-stats { border-collapse: collapse; margin: 8px 0; font-size: 13.5px; }
+  .cx-stats th { text-align: left; color: #9aa4b2; font-weight: 600; padding: 2px 16px 2px 0; }
+  .cx-stats td { color: #fff; }
+  .cx-keys { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .howto kbd { display: inline-block; padding: 1px 7px; border-radius: 4px; border: 1px solid #64748b; background: #1e2633; color: #fff; font: 600 12.5px monospace; }
+  .cx-none { color: #9aa4b2; }
+  body.shots #ticker, body.shots #tut, body.shots #timepick, body.shots #msg { display: none !important; }
+  #shot-cursor { position: fixed; z-index: 50; pointer-events: none; transform: translate(-2px, -2px); } /* 0.47: shot mode */
+  .cx-flash > summary { animation: cxflash 1.6s ease-out; }
+  @keyframes cxflash { from { background: rgba(255, 213, 79, 0.45); } to { background: transparent; } }
+  .cx-link { display: inline-block; margin-left: 8px; width: 18px; height: 18px; line-height: 18px; text-align: center; border-radius: 50%; border: 1px solid #64748b; color: #fff; font-weight: 800; font-size: 12px; cursor: pointer; text-decoration: none; }
+  .cx-link:hover { background: #334155; }
+  @media (max-width: 700px) { .screen.howto { padding: 18px 14px; min-width: 0; } .cx-entry { margin-left: 0; } .cx-sum { flex-basis: 100%; } }
   .opt { display: flex; align-items: center; gap: 10px; margin: 10px 0; font-size: 14.5px; }
   .opt input { width: 18px; height: 18px; }
   .opt input[type=range] { width: 200px; height: auto; }
@@ -642,7 +676,7 @@
       </div>
       <button data-go="record">Service Record</button>
       <button data-go="slots" id="title-slots">Save Slots</button>
-      <button data-go="howto">How to Play</button>
+      <button data-go="howto">Codex: How to Play</button>
       <button data-go="settings">Settings</button>
       <button id="quit" hidden>Quit to Desktop</button>
     </div>
@@ -691,36 +725,9 @@
     <div class="row"><button data-back>Back</button></div>
   </div>
   <div class="screen howto" id="s-howto" hidden>
-    <h2>HOW TO PLAY</h2>
-    <p>An outbreak is about to hit the city. You pick when it starts, plan your defense, then hold out while people get to safety.</p>
-    <h3>Basics</h3>
-    <p><b>Pick a time.</b> After you choose a city you pick the hour the sirens go off (or Random). Where people are depends on it: home at night, at work in the day, on the roads in the rush hours. The clock in the top bar runs about 30 times faster than real life.</p>
-    <p><b>Move around.</b> Right-drag or WASD moves the map, the wheel zooms; click or drag on the minimap (top right) to jump there. Left-click uses the tool you picked; right-click or Esc puts it down. The label next to the cursor says what is under it (a building's floors and roof height, a street, a unit) and, while you place something or draw a zone, what it costs and the money left.</p>
-    <p><b>1. Draw a safe zone.</b> Pick Safe Zone and click its corners, then click the first corner again (or press Enter) to close it. Right-click removes the last corner. Bigger zones cost more. Placed something in the wrong spot? Click it with Move/Aim (or drag a box around mobile units) and press Delete for a full refund.</p>
-    <p><b>2. Gates and walls.</b> Every street that crosses your zone's edge starts as a <b>gate</b> (blue): people get in, infected don't, but gates break sooner. Pick Gate and click one to make it a <b>wall</b> (white): stronger, but nobody passes. Click again to open it. You can flip gates in battle too; they take a few seconds to swing. Lock Gates (L) shuts them all. Walls also stop your own tanks, APCs and squads (they use gates or breaches), and turrets, tanks, APCs, squads and the gunboat can't shoot through a wall or the buildings on your zone's edge. Mortars, howitzers, HIMARS, the battleship, rooftop units and aircraft fire over them.</p>
-    <p><b>3. Units.</b> Garrisons and Snipers go on buildings, Turrets on streets. Taller buildings give snipers more range (press J to see heights). Units inside the zone never run out of ammo; outside, they do. Hover over any button or placed unit to see its stats.</p>
-    <p><b>4. Evacuate.</b> Build Evac Points inside your zone: every 12 s a lift flies people out, and trains carry people out on the rails. Each extra pad costs double the last ($3M, $6M, $12M...). A lift waves off if infected crowd the pad. Each person flown out brings $24,000 in federal evacuation funding.</p>
-    <h3>The battle</h3>
-    <p><b>The alert.</b> When you press START BATTLE everyone gets the phone alert. Families decide what to do: some go straight to your zone, some go home first to gather the family, some meet at the zone and wait there for the rest. The first cases turn somewhere outside your zones after 20 seconds.</p>
-    <p><b>Close the gates in time.</b> Once most people are in, close the gates before the hordes reach them.</p>
-    <p><b>Hordes</b> walk in from outside the city along highways, rail lines, bridges and the river (an amber arrow shows where the next one comes in). Each is bigger and comes sooner.</p>
-    <p><b>Money.</b> Every 10 seconds you earn money for each person safe, plus a little for every infected killed. Spend it any time: units (they take a few seconds to set up), strikes, C4, even extra safe zones (those cost a lot more). Selling a unit mid-battle (Sell / Evac) sends a helicopter to pull it out first; then you get its cost back. Prices are real-world US dollars; ordnance is limited per battle, like a real stockpile.</p>
-    <p><b>Strikes.</b> Airstrike and the A-10 take two clicks (where the run starts, where it ends); the rest take one. Each lands a few seconds later and hurts civilians too (the AC-130 only shoots infected). Cratering strikes and shelling can't land within 20 to 30 m of your people (the cursor turns red: NO-FIRE); the nuke and MOAB are allowed but warn you first.</p>
-    <p><b>Speed.</b> 1, 2 and 3 set the speed (half, normal, double); Space pauses.</p>
-    <p><b>The round</b> ends when nobody is left in the city, or when only a few stuck stragglers remain. End round (top bar) scores it right away: people in the zone count as saved. Your score (0 to 100) is mostly people saved, plus how fast, how intact the city is and how many infected you killed: Bronze 10, Silver 30, Gold 50, Platinum 75, and at least 5% saved for any medal. Then Keep fighting: endless, harder hordes scored as Mayhem until you pull out (Pause menu: Pull out).</p>
-    <h3>People</h3>
-    <p>Every dot is a person with a name, an age, a family and a home. Pick Move/Aim and click a white dot to see who they are, where they were when the sirens went off and everything that has happened to them since. <b>Follow</b> keeps the camera on them. Some carry guns and defend their family; panicked crowds can crush; anyone can be carrying the infection.</p>
-    <p>The elderly walk slower, teens a bit faster, and some teens head for the zone on their own. A few households refuse to leave and shelter at home (click a person to see if they are one). Some are bluffing and run once the infected come close. Park a unit beside them for a while to talk them out. People who stay cost the score a little. Seeing someone they love turn can stop a person in their tracks, send them back for them, or make them refuse to go on.</p>
-    <h3>Units and support</h3>
-    <p><b>Mobile units.</b> The APC, the Gunboat (on the river) and Paratroopers think for themselves: they hunt crowds near where you put them, go after infected chasing civilians first, back off before they get swarmed, and go home to reload. Select mobile units with Move/Aim (click, Shift-click, or drag a box) and right-click where to send them: they go straight there, shooting what is in range, and hold. A then click: attack-move (they stop to fight on the way). P: patrol between here and there. E then click a person: escort their family. S: stop and hold. D: stand by (hold fire). Shift queues orders; the minimap moves the camera and right-click on it sends units. While units are selected, the arrow keys move the camera (A, S and D are commands). Units you never order still fight on their own. Recall (Q) pulls mobile units into the zone, Q again sends them back. Click one of your units with Move/Aim to select it, then press T to change what it shoots first (nearest, closest to the walls, or infected chasing civilians) or Delete to remove it.</p>
-    <p><b>AC-130 gunship.</b> It flies in by itself from the nearest edge of the map and circles the spot 40 s at a time (it leaves to refuel and comes back, all battle). Its 25 mm Gatling takes stragglers, the 40 mm Bofors small groups and the 105 mm howitzer packs of 10 or more, firing only at infected. Click the plane with Move/Aim to select it: right-click sends it to a new spot, Delete sends it home (before it arrives, that cancels it and gives the charge back).</p>
-    <p><b>Support buildings</b> go on buildings inside your zone: Budget office (20% off nearby), Repair yard (walls, gates, vehicles), Radio tower (+40% range nearby), Supply depot (ammo by cargo drone to units outside the walls), Command post (+30% fire rate), Precinct (police squads), Armory (militia on the walls).</p>
-    <p><b>C4 and destruction.</b> Plant C4 on a bridge or a building, then click it again in battle to blow it: a bridge drops into the river, a building collapses into rubble that slows everyone. Heavy weapons crater streets and bring buildings down too. Fuel tanks blow during the battle.</p>
-    <h3>More</h3>
-    <p><b>Real cities, mutators and the daily challenge.</b> Play 13 real OpenStreetMap cities (Boston, Castle Rock, Chicago, Denver, Los Angeles, New York, Miami, Omaha, Paris, Pittsburgh, Portland, San Francisco, Washington), or search any city live when online. Mutators and the Daily Challenge are on the Cities screen. H shows where your kills happened.</p>
-    <p><b>Tips</b> appear in the ticker the first time something new happens (Settings: Tips). The tutorial runs on the first city; you can replay it from the Pause menu.</p>
-    <p><b>Controls.</b> Right-drag or WASD move the map (arrow keys while units are selected), wheel zooms, minimap jumps the camera. Move/Aim: click to select, Shift-click to add, drag a box for mobile units, Esc to deselect; right-click sends them (Shift queues). With units selected: A attack-move, P patrol, E escort, S stop, D stand by, T target priority, Delete remove (planning) or pull out (battle). Space pauses, 1/2/3 speed, G gate tool, Q recall, L lock gates, K clear zone, Z X C V B N M quick bar slots 1 to 7 (drag a tool onto a slot), J heights, R unit ranges, H kill heatmap, Esc menu, F5 quick save (pick a save slot first), F11 fullscreen (Windows app).</p>
-    <p><b>Credits.</b> Map data &copy; OpenStreetMap contributors, available under the Open Database License (ODbL). Music made with ACE-Step 1.5 (MIT license). Sound effects made with Stable Audio Open 1.0, Powered by Stability AI (Stability AI Community License). Built by AI agents (Claude and Gemini) and a human.</p>
+    <h2>CODEX</h2>
+    <input id="codex-q" type="search" placeholder="Search the Codex (units, keys, rules...)" autocomplete="off">
+    <div id="codex"></div>
     <div class="row"><button data-back>Back</button></div>
   </div>
   <div class="screen" id="s-settings" hidden>
@@ -771,7 +778,7 @@
       <button id="p-tutorial" hidden>Replay tutorial</button>
       <button id="p-reset">Restart city (clear plan)</button>
       <button id="p-restart">Restart city (keep plan)</button>
-      <button data-go="howto">How to play</button>
+      <button data-go="howto">Codex: How to play</button>
       <button data-go="settings">Settings</button>
       <button id="p-endround">End round (score it now; the zone counts as saved)</button>
       <button id="p-withdraw">Pull out (end battle, keep who got out)</button>

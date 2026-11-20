@@ -33,6 +33,10 @@ import { drawDepot, drawModel, drawSquad, drawSupport, drawWrecks, hasModel, has
 import { clockSpan, START_CHOICES, randomStart, needsTimePick, formatClock } from "./people";
 import { personHtml, followable, followEndLine, endStatsLines } from "./personui";
 import { TIPS, shouldTip, type TipId } from "./tips";
+import { mountCodex, stripCodexLinks } from "./codexui";
+import { seenFor } from "./codex";
+import { DIAGRAMS } from "./codexDiagrams";
+import { runOps, shotsAllowed, type ShotOp } from "./shotmode";
 
 installErrorHooks();
 initSprites();
@@ -61,6 +65,7 @@ addEventListener("keydown", () => snd.unlock());
 document.addEventListener("click", e => { if ((e.target as HTMLElement).closest("button")) snd.click(); }); // map + agents on the graphics card; 2D canvas on top for the rest
 
 let save = Save.load();
+const prevGameVersion = save.gameVersion; // 0.47: read before the updater stamps the current version (Codex badges)
 if (save.xp == null) { save.xp = P.grandfatherXp(save.best); Save.store(save); } // players from before XP keep their access
 /** Unlocked by XP, lent by the current campaign city, or everything in developer mode. */
 const isOpen = (t: string) => P.unlocked(t, save.xp ?? 0, city?.trial, !!save.settings.devMode);
@@ -275,8 +280,30 @@ function show(id: string | null) {
   if (id === "settings") { syncSettings(); renderMods(); const vb = document.getElementById("versions-btn") as HTMLButtonElement | null; if (vb) { vb.disabled = mode === "game"; $("ver-ingame").hidden = mode !== "game"; } }
   if (id === "record") renderRecord();
   if (id === "slots") renderSlots();
+  if (id === "howto") codexShown();
 }
 function go(id: string) { stack.push(id); show(id); }
+// ---------- 0.47: the Codex (How to Play) ----------
+let codex: ReturnType<typeof mountCodex> | null = null;
+const cxLink = (id: string) => `<a class="cx-link" data-cx="${id}" title="Open in the Codex">?</a>`;
+function codexShown() {
+  if (!codex) codex = mountCodex($("codex"), $<HTMLInputElement>("codex-q"), {
+    media: (window as any).HORDE_CODEX ?? {}, diagrams: DIAGRAMS,
+    seen: seenFor(save.settings.codexSeen, prevGameVersion), open: save.settings.codexOpen,
+    onOpenChange: ids => { save.settings.codexOpen = ids; Save.store(save); },
+    log: (what, d) => log("warn", "codex", { what, ...d }),
+  });
+  if (save.settings.codexSeen !== C.VERSION) { save.settings.codexSeen = C.VERSION; Save.store(save); } // badges stay for this visit
+}
+function openCodex(id: string) {
+  if (mode === "game" && !stack.length) pause();
+  if (stack[stack.length - 1] !== "howto") go("howto");
+  codex!.open(id);
+}
+document.addEventListener("click", e => {
+  const a = (e.target as HTMLElement).closest?.(".cx-link") as HTMLElement | null;
+  if (a?.dataset.cx) { e.preventDefault(); e.stopPropagation(); openCodex(a.dataset.cx); }
+}, true);
 function renderRecord() {
   const xp = save.xp ?? 0, rk = P.rankFor(xp), have = save.achievements ?? {};
   $("rec-rank").textContent = `${rk.name} · ${xp.toLocaleString()} XP${rk.next ? ` · ${rk.next[0]} at ${rk.next[1].toLocaleString()} XP` : " · top rank"}`;
@@ -2041,7 +2068,7 @@ function setInfoPanel(html: string | null, accent = "#7cfc9a") {
   }
   box.hidden = false;
   box.style.borderLeftColor = accent;
-  if (html !== lastInfoHtml) { box.innerHTML = html; lastInfoHtml = html; }
+  if (html !== lastInfoHtml) { box.innerHTML = stripCodexLinks(html); lastInfoHtml = html; } // the hover panel takes no clicks
 }
 
 /** Info HTML for a tool: used by the picker detail column and by hovering a bottom-bar control (0.19). */
@@ -2059,7 +2086,7 @@ function toolInfoHtml(t: string): { html: string; accent: string } | null {
     const ammoStr = spec.ammo === Infinity ? "Unlimited" : `${spec.ammo.toLocaleString()} rds${spec.reloadsInZone ? " (∞ in Zone)" : ""}`;
     const spUrl = SPRITE_URL[k];
     return out(
-      `<div class="ip-top">${spUrl ? `<img class="ip-portrait" src="${spUrl}" alt="" />` : ""}<div class="ip-meta"><div class="ip-head"><span class="ip-title">${spec.name}</span><span class="ip-cost">${C.money(cost)}</span></div>` +
+      `<div class="ip-top">${spUrl ? `<img class="ip-portrait" src="${spUrl}" alt="" />` : ""}<div class="ip-meta"><div class="ip-head"><span class="ip-title">${spec.name}${cxLink("unit-" + k)}</span><span class="ip-cost">${C.money(cost)}</span></div>` +
       `<div class="ip-role" style="color:${spec.color}">${info.role} · ${placeStr}</div></div></div>` +
       `<div class="ip-desc">${info.desc}</div>` +
       `<div class="ip-grid">` +
@@ -2083,7 +2110,7 @@ function toolInfoHtml(t: string): { html: string; accent: string } | null {
     const count = sim.supports.filter(b => b.kind === k).length;
     const spUrl = SPRITE_URL[supportSpriteKey(k)];
     return out(
-      `<div class="ip-top">${spUrl ? `<img class="ip-portrait" src="${spUrl}" alt="" />` : ""}<div class="ip-meta"><div class="ip-head"><span class="ip-title">${spec.name}</span><span class="ip-cost">${C.money(cost)}</span></div>` +
+      `<div class="ip-top">${spUrl ? `<img class="ip-portrait" src="${spUrl}" alt="" />` : ""}<div class="ip-meta"><div class="ip-head"><span class="ip-title">${spec.name}${cxLink("support-" + k)}</span><span class="ip-cost">${C.money(cost)}</span></div>` +
       `<div class="ip-role" style="color:${spec.color}">${info.role} · Safe Zone Building</div></div></div>` +
       `<div class="ip-desc">${spec.hint}</div>` +
       `<div class="ip-grid">` +
@@ -2127,7 +2154,7 @@ function toolInfoHtml(t: string): { html: string; accent: string } | null {
     };
     const spUrl = SPRITE_URL[k];
     return out(
-      `<div class="ip-top">${spUrl ? `<img class="ip-portrait" src="${spUrl}" alt="" />` : ""}<div class="ip-meta"><div class="ip-head"><span class="ip-title">${spec.name}</span><span class="ip-cost">${C.money(spec.cost)} (${sim.charges[k]} ready)</span></div>` +
+      `<div class="ip-top">${spUrl ? `<img class="ip-portrait" src="${spUrl}" alt="" />` : ""}<div class="ip-meta"><div class="ip-head"><span class="ip-title">${spec.name}${cxLink("ability-" + k)}</span><span class="ip-cost">${C.money(spec.cost)} (${sim.charges[k]} ready)</span></div>` +
       `<div class="ip-role" style="color:${spec.color}">Tactical Air Support · ${platforms[k]}</div></div></div>` +
       `<div class="ip-desc">${spec.hint}</div>` +
       `<div class="ip-grid">` +
@@ -2479,7 +2506,7 @@ function frame(now: number) {
     while (acc >= C.DT && n++ < 4) { sim.step(C.DT); acc -= C.DT; }
     if (n >= 4) acc = 0;
     if (sim.phase !== "battle" || sim.time > 170) { seed = Math.floor(Math.random() * 1e9); sim = new Sim(seed); sim.startBattle(); buildBase(); buildZone(); fitCamera(); }
-  } else if (sim.phase === "battle" && speed) {
+  } else if (sim.phase === "battle" && speed && !SHOTS) { // 0.47: shot mode steps the sim itself
     // Big crowds step 10 times a second instead of 20; fast speeds take fewer, longer steps.
     const base = sim.civN >= 50000 ? C.DT * 2 : C.DT;
     const tickDt = speed >= 8 ? base * 4 : speed >= 4 ? base * 2 : base;
@@ -3112,4 +3139,66 @@ $("tut-skip").addEventListener("click", () => { if (tut) { tut.on = false; log("
 requestAnimationFrame(frame);
 
 // Exposed for automated checks.
-(window as any).horde = { get sim() { return sim; }, get mode() { return mode; }, get save() { return save; }, get tut() { return tut; }, cities: C.CITIES, recentLog, click, closeDraft, startBattle, setTool, setSpeed, cam, playCity, startAttract, pause, resume, saveGame, loadBattle, get startMin() { return startMin; }, get selPerson() { return selPerson; }, get following() { return following; } };
+// ---------- 0.47: shot mode (?shots=1) for tools/shots: scripted scenes, frame-exact stepping, no overlays ----------
+const SHOTS = typeof location !== "undefined" && shotsAllowed(location.href); // local file only (final review #1)
+if (SHOTS) {
+  let rs = 1;
+  const seedRandom = (n: number) => { rs = n >>> 0 || 1; Math.random = () => { rs = (rs + 0x6d2b79f5) >>> 0; let t = rs; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; };
+  const px = (x: number, y: number): [number, number] => [cam.x + x * cam.scale, cam.y + y * cam.scale];
+  const key = (k: string) => { dispatchEvent(new KeyboardEvent("keydown", { key: k })); dispatchEvent(new KeyboardEvent("keyup", { key: k })); };
+  // a drawn mouse pointer: headless screenshots have none, and clips need to show where the clicks land
+  const cur = document.createElement("div");
+  cur.id = "shot-cursor"; cur.hidden = true;
+  cur.innerHTML = `<svg width="22" height="28" viewBox="0 0 22 28"><path d="M2 2 L2 23 L8 17.5 L12 26 L15.5 24.5 L11.5 16 L19 16 Z" fill="#fff" stroke="#000" stroke-width="2" stroke-linejoin="round"/></svg>`;
+  document.body.appendChild(cur);
+  const pointAt = (x: number, y: number) => {
+    const [mx, my] = px(x + 0.5, y + 0.5), r = canvas.getBoundingClientRect();
+    hover = [x + 0.5, y + 0.5]; mouse = [r.left + mx / devicePixelRatio, r.top + my / devicePixelRatio];
+    cur.style.left = mouse[0] + "px"; cur.style.top = mouse[1] + "px"; cur.hidden = false;
+  };
+  const apply = (op: ShotOp) => {
+    // the pointer shows only for what a player would point at; placements in a setup leave no cursor behind
+    if (op.op === "click" || op.op === "select" || op.op === "hover" || op.op === "person") pointAt(op.x, op.y);
+    if (op.op === "click") hover = null; // a click shows the pointer but not the hover panel (clips stay readable)
+    else if (op.op === "place" || op.op === "gate" || op.op === "zone") { cur.hidden = true; hover = null; mouse = null; }
+    switch (op.op) {
+      case "zone": setTool("zone"); for (const [x, y] of op.pts) click(x + 0.5, y + 0.5); click(op.pts[0][0] + 0.5, op.pts[0][1] + 0.5); cur.hidden = true; break;
+      case "place": setTool(op.kind as Tool); click(op.x + 0.5, op.y + 0.5); break;
+      case "gate": setTool("gate"); click(op.x + 0.5, op.y + 0.5); break;
+      case "ability": { const e = sim.buyAbility(op.kind as C.AbilityKind); if (e) throw new Error(`ability ${op.kind}: ${e}`); refreshUi(); break; }
+      case "time": startMin = op.min; sim.setStartTime(op.min); buildZone(); refreshUi(); break;
+      case "battle": startBattle(); speed = 1; break;
+      case "select": setTool("pan"); click(op.x + 0.5, op.y + 0.5); break;
+      case "boxselect": { setTool("pan"); const [a, b] = px(op.x0, op.y0), [c, d] = px(op.x1, op.y1); boxSelect([a, b, c, d]); break; }
+      case "key": key(op.key); break;
+      case "click":
+        if (op.button === "left") click(op.x + 0.5, op.y + 0.5);
+        else if (armedCmd) { armedCmd = null; renderSelbar(); }
+        else if (tool === "pan" && (orderable().length || selOrbits().length)) moveOrder(op.x + 0.5, op.y + 0.5);
+        else setTool("pan");
+        break;
+      case "tool": setTool(op.tool as Tool); break;
+      case "hover": break; // pointAt above
+      case "cursor": cur.hidden = true; hover = null; mouse = null; break;
+      case "person": { const k = sim.civAt(op.x, op.y, 14); if (k < 0) throw new Error(`no person near ${op.x},${op.y}`); setTool("pan"); selectPerson(k); pointAt(sim.ax[k] - 0.5, sim.ay[k] - 0.5); break; }
+      case "camera": cam.scale = op.scale; centerOn(op.x, op.y); following = false; break;
+    }
+  };
+  const step = (s: number) => { const n = Math.round(s / C.DT); for (let i = 0; i < n && sim.phase === "battle"; i++) sim.step(C.DT); };
+  document.body.classList.add("shots");
+  save.settings.tips = false; save.settings.edgeScroll = false; save.xp = 1e9; // every tool unlocked (memory only)
+  (window as any).hordeShot = {
+    load(cityId: string, seedN: number, min: number) {
+      const c = C.CITIES.find(x => x.id === cityId);
+      if (!c) throw new Error(`unknown city ${cityId}`);
+      save.plans = {}; save.battle = undefined; // every recipe starts clean: no plan saved by an earlier recipe in this profile
+      seedRandom(seedN); playCityNow(c, seedN);
+      tut = null; showTut(); $("timepick").hidden = true; clearTicker();
+      startMin = min; sim.setStartTime(min); buildZone(); setTool("pan"); refreshUi();
+    },
+    run(ops: string[]) { runOps({ apply, step }, ops); },
+    step,
+    ready: () => mode === "game",
+  };
+}
+(window as any).horde = { openCodex, get codex() { return codex; }, get sim() { return sim; }, get mode() { return mode; }, get save() { return save; }, get tut() { return tut; }, cities: C.CITIES, recentLog, click, closeDraft, startBattle, setTool, setSpeed, cam, playCity, startAttract, pause, resume, saveGame, loadBattle, get startMin() { return startMin; }, get selPerson() { return selPerson; }, get following() { return following; } };

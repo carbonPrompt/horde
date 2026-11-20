@@ -407,9 +407,7 @@ import * as UC from "../src/config";
 import { PL_SCHOOL as UPL_SCHOOL } from "../src/people";
 
 test("0.41: How to Play is current (J for heights, people and Follow, the no-fire band, the time pick)", async () => {
-  const html = await Bun.file("index.html").text();
-  const a = html.indexOf('id="s-howto"'), b = html.indexOf("data-back", a);
-  const page = html.slice(a, b);
+  const page = (await import("../src/codex")).allEntries().map(e => e.title + " " + e.body).join("\n"); // 0.47: the Codex
   expect(page).not.toContain("press V");
   expect(page).toContain("press J");
   expect(page).toContain("Follow");
@@ -432,9 +430,7 @@ test("0.41: a kid at school reads right, and their walk with the class shows in 
 import { planWords as uPlanWords, personState as uPersonState } from "../src/personui";
 import { endStatsLines } from "../src/personui";
 test("0.42: How to Play explains refusers and age", async () => {
-  const html = await Bun.file("index.html").text();
-  const a = html.indexOf('id="s-howto"'), b = html.indexOf("data-back", a);
-  const page = html.slice(a, b);
+  const page = (await import("../src/codex")).allEntries().map(e => e.title + " " + e.body).join("\n"); // 0.47: the Codex
   expect(page).toContain("refuse to leave");
   expect(page).toContain("talk them out");
   expect(page).toContain("elderly");

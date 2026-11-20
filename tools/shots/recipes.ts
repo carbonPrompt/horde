@@ -1,0 +1,49 @@
+// 0.47: one recipe per Codex picture or clip. Coordinates are map cells. Edit a recipe (or bump rev) and the Codex
+// test fails until `bun tools/shots/run.ts` reshoots it. Every picture is checked by eye before it ships.
+import type { Recipe } from "./stale";
+
+// Fairhaven (400 x 300, seed 101). Town Green stand centered 191,106; north-south streets near x 157, 178, 200, 223;
+// the river runs along y ~172 with bridges at 60,172 / 200,178 / 330,170.
+const FH = { city: "fairhaven", seed: 101, startMin: 600, size: [960, 540] as [number, number], rev: 1 };
+const MAP: [number, number, number, number] = [0, 76, 960, 372]; // the map, without the top and bottom bars
+const ZONE = "zone 165,82 217,82 217,130 165,130";
+const BASE = [ZONE, "gate 217,98", "place sniper 186,78", "place garrison 172,78", "place turret 178,72", "place evac 191,106"];
+const BATTLE = (s: number) => [...BASE, "battle", `advance ${s}`];
+
+export const RECIPES: Recipe[] = [
+  // ---------- stills ----------
+  { ...FH, id: "battle-overview", kind: "shot", camera: { x: 191, y: 118, scale: 2.4 }, crop: MAP, setup: BATTLE(60) },
+  { ...FH, id: "start-cursor-label", kind: "shot", camera: { x: 186, y: 92, scale: 6 }, crop: MAP, setup: [ZONE, "tool sniper", "hover 186,78"] },
+  { ...FH, id: "start-heights", kind: "shot", camera: { x: 191, y: 100, scale: 4.5 }, crop: MAP, setup: [...BASE, "key j"] },
+  { ...FH, id: "units-ranges", kind: "shot", camera: { x: 182, y: 84, scale: 6 }, crop: MAP, setup: [...BASE, "key r"] },
+  { ...FH, id: "battle-horde-arrow", kind: "shot", camera: { x: 200, y: 150, scale: 1.55 }, crop: MAP, setup: BATTLE(50) },
+  { ...FH, id: "battle-money-bar", kind: "shot", camera: { x: 191, y: 106, scale: 4 }, crop: [0, 0, 700, 76], setup: BATTLE(30) },
+  { ...FH, id: "people-person-window", kind: "shot", camera: { x: 191, y: 106, scale: 5 }, setup: [...BATTLE(12), "person 178,140", "cursor off"] },
+  { ...FH, id: "units-selected-card", kind: "shot", camera: { x: 186, y: 92, scale: 6 }, setup: [...BASE, "select 186,78"] },
+  { ...FH, id: "units-ac130-orbit", kind: "shot", camera: { x: 191, y: 150, scale: 3 }, crop: MAP,
+    setup: [...BASE, "ability gunship", "battle", "advance 30", "tool gunship", "click 191,150", "advance 25", "cursor off"] },
+  { ...FH, id: "support-radius", kind: "shot", camera: { x: 191, y: 106, scale: 3.5 }, crop: MAP,
+    setup: ["zone 150,66 234,66 234,142 150,142", "tool radio", "hover 160,78"] },
+  { ...FH, id: "controls-quickbar", kind: "shot", camera: { x: 191, y: 106, scale: 4 }, crop: [0, 448, 960, 92], setup: BASE },
+  // ---------- clips ----------
+  { ...FH, id: "clip-draw-zone", kind: "clip", camera: { x: 191, y: 106, scale: 4.5 }, crop: MAP, seconds: 5, setup: [],
+    action: ["tool zone", "click 165,82", "advance 0.7", "click 217,82", "advance 0.7", "click 217,130", "advance 0.7", "click 165,130", "advance 0.7", "click 165,82"] },
+  { ...FH, id: "clip-gate-to-wall", kind: "clip", camera: { x: 212, y: 108, scale: 9 }, crop: MAP, seconds: 4.5, setup: BATTLE(15),
+    action: ["tool gate", "advance 0.5", "click 217,115", "advance 2.5"] },
+  { ...FH, id: "clip-evac-lift", kind: "clip", camera: { x: 191, y: 106, scale: 6 }, crop: MAP, seconds: 7, setup: BATTLE(16) },
+  { ...FH, id: "clip-box-select-move", kind: "clip", camera: { x: 160, y: 132, scale: 6 }, crop: MAP, seconds: 6,
+    setup: [ZONE, "place apc 157,148", "place tank 157,157", "battle", "advance 40"],
+    action: ["boxselect 150,141 165,163", "advance 0.6", "click 157,110 right", "advance 5"] },
+  { ...FH, id: "clip-attack-move", kind: "clip", camera: { x: 160, y: 132, scale: 6 }, crop: MAP, seconds: 6,
+    setup: [ZONE, "place apc 157,150", "battle", "advance 40"],
+    action: ["select 157,150", "advance 0.3", "key a", "click 157,110", "advance 5"] },
+  { ...FH, id: "clip-airstrike", kind: "clip", camera: { x: 191, y: 150, scale: 3 }, crop: MAP, seconds: 6,
+    setup: [...BASE, "ability airstrike", "battle", "advance 40"],
+    action: ["tool airstrike", "click 150,150", "advance 0.4", "click 232,150", "advance 5"] },
+  { ...FH, id: "clip-ac130-arrives", kind: "clip", camera: { x: 191, y: 140, scale: 2 }, crop: MAP, seconds: 6,
+    setup: [...BASE, "ability gunship", "battle", "advance 30"],
+    action: ["tool gunship", "click 191,150", "cursor off", "advance 5.5"] },
+  { ...FH, id: "clip-c4-bridge", kind: "clip", camera: { x: 200, y: 176, scale: 5 }, crop: MAP, seconds: 5,
+    setup: [...BASE, "place c4 200,178", "battle", "advance 20"],
+    action: ["tool c4", "click 200,178", "advance 4.5"] },
+];

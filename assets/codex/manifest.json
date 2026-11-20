@@ -1,0 +1,154 @@
+{
+ "battle-horde-arrow": {
+  "version": "0.47.0",
+  "rev": 1,
+  "recipeHash": "dd4140a2548f",
+  "bytes": 60480,
+  "w": 960,
+  "h": 372
+ },
+ "battle-money-bar": {
+  "version": "0.47.0",
+  "rev": 1,
+  "recipeHash": "982c0dff80f3",
+  "bytes": 9454,
+  "w": 700,
+  "h": 76
+ },
+ "battle-overview": {
+  "version": "0.47.0",
+  "rev": 1,
+  "recipeHash": "6a4a1ca903c6",
+  "bytes": 56259,
+  "w": 960,
+  "h": 372
+ },
+ "clip-ac130-arrives": {
+  "version": "0.47.0",
+  "rev": 1,
+  "recipeHash": "89fcb58de2a5",
+  "bytes": 186737,
+  "w": 800,
+  "h": 310
+ },
+ "clip-airstrike": {
+  "version": "0.47.0",
+  "rev": 1,
+  "recipeHash": "1fdde475cb62",
+  "bytes": 225142,
+  "w": 800,
+  "h": 310
+ },
+ "clip-attack-move": {
+  "version": "0.47.0",
+  "rev": 1,
+  "recipeHash": "6a49148a9cda",
+  "bytes": 139728,
+  "w": 800,
+  "h": 310
+ },
+ "clip-box-select-move": {
+  "version": "0.47.0",
+  "rev": 1,
+  "recipeHash": "f240204bbeed",
+  "bytes": 134982,
+  "w": 800,
+  "h": 310
+ },
+ "clip-c4-bridge": {
+  "version": "0.47.0",
+  "rev": 1,
+  "recipeHash": "b51280ebfbad",
+  "bytes": 108163,
+  "w": 800,
+  "h": 310
+ },
+ "clip-draw-zone": {
+  "version": "0.47.0",
+  "rev": 1,
+  "recipeHash": "ad95c466db2a",
+  "bytes": 27852,
+  "w": 800,
+  "h": 310
+ },
+ "clip-evac-lift": {
+  "version": "0.47.0",
+  "rev": 1,
+  "recipeHash": "7a5eb18a0dc8",
+  "bytes": 342459,
+  "w": 800,
+  "h": 310
+ },
+ "clip-gate-to-wall": {
+  "version": "0.47.0",
+  "rev": 1,
+  "recipeHash": "5dfd5338a67c",
+  "bytes": 284643,
+  "w": 800,
+  "h": 310
+ },
+ "controls-quickbar": {
+  "version": "0.47.0",
+  "rev": 1,
+  "recipeHash": "b2f68bc653c1",
+  "bytes": 15792,
+  "w": 960,
+  "h": 92
+ },
+ "people-person-window": {
+  "version": "0.47.0",
+  "rev": 1,
+  "recipeHash": "42d4687d25f7",
+  "bytes": 73706,
+  "w": 960,
+  "h": 540
+ },
+ "start-cursor-label": {
+  "version": "0.47.0",
+  "rev": 1,
+  "recipeHash": "e2aba619176e",
+  "bytes": 51491,
+  "w": 960,
+  "h": 372
+ },
+ "start-heights": {
+  "version": "0.47.0",
+  "rev": 1,
+  "recipeHash": "26081c7a4e76",
+  "bytes": 46647,
+  "w": 960,
+  "h": 372
+ },
+ "support-radius": {
+  "version": "0.47.0",
+  "rev": 1,
+  "recipeHash": "ed1d2c156477",
+  "bytes": 56598,
+  "w": 960,
+  "h": 372
+ },
+ "units-ac130-orbit": {
+  "version": "0.47.0",
+  "rev": 1,
+  "recipeHash": "1f1a2aff30c0",
+  "bytes": 54661,
+  "w": 960,
+  "h": 372
+ },
+ "units-ranges": {
+  "version": "0.47.0",
+  "rev": 1,
+  "recipeHash": "6c2ca6e09f02",
+  "bytes": 48229,
+  "w": 960,
+  "h": 372
+ },
+ "units-selected-card": {
+  "version": "0.47.0",
+  "rev": 1,
+  "recipeHash": "1b4127e55fca",
+  "bytes": 64894,
+  "w": 960,
+  "h": 540
+ }
+}

@@ -16,13 +16,19 @@ for (const f of new Bun.Glob("assets/sfx/*.ogg").scanSync(".")) sfx[f.replace(/^
 // Sprites: assets/sprites/<key>.png (64 px pixel art from tools/pixelate.py), embedded as data URLs.
 const sprites: Record<string, string> = {};
 for (const f of new Bun.Glob("assets/sprites/*.png").scanSync(".")) sprites[f.replace(/^.*[\\/]/, "").replace(/\.png$/, "")] = "data:image/png;base64," + Buffer.from(await Bun.file(f).arrayBuffer()).toString("base64");
+// 0.47: Codex pictures and clips: assets/codex/<id>.png|webm (made by tools/shots/run.ts), embedded as data URLs.
+const codex: Record<string, string> = {};
+for (const f of new Bun.Glob("assets/codex/*.{png,webm}").scanSync(".")) {
+  const id = f.replace(/^.*[\\/]/, "").replace(/\.(png|webm)$/, ""), mime = f.endsWith(".webm") ? "video/webm" : "image/png";
+  codex[id] = `data:${mime};base64,` + Buffer.from(await Bun.file(f).arrayBuffer()).toString("base64");
+}
 const icon = Buffer.from(await Bun.file("desktop/favicon.png").arrayBuffer()).toString("base64");
 const html = (await Bun.file("index.html").text())
   .replace("<title>Horde</title>", `<title>Horde</title>\n<link rel="icon" href="data:image/png;base64,${icon}">`)
   .replace("/*BUNDLE*/", () => js.replace(/<\/script/g, "<\\/script"))
-  .replace("/*MUSIC*/", () => `window.HORDE_MUSIC = ${JSON.stringify(music)}; window.HORDE_SFX = ${JSON.stringify(sfx)}; window.HORDE_SPRITES = ${JSON.stringify(sprites)};`);
+  .replace("/*MUSIC*/", () => `window.HORDE_MUSIC = ${JSON.stringify(music)}; window.HORDE_SFX = ${JSON.stringify(sfx)}; window.HORDE_SPRITES = ${JSON.stringify(sprites)}; window.HORDE_CODEX = ${JSON.stringify(codex)};`);
 await Bun.write("dist/horde.html", html);
 // Keep the Windows app's version in step with the game's.
 const pkg = await Bun.file("desktop/package.json").json();
 if (pkg.version !== VERSION) { pkg.version = VERSION; await Bun.write("desktop/package.json", JSON.stringify(pkg) + "\n"); }
-console.log(`dist/horde.html ${(html.length / 1024).toFixed(0)} KB, v${VERSION}, ${Object.keys(sfx).length} sounds, ${Object.keys(sprites).length} sprites`);
+console.log(`dist/horde.html ${(html.length / 1024).toFixed(0)} KB, v${VERSION}, ${Object.keys(sfx).length} sounds, ${Object.keys(sprites).length} sprites, ${Object.keys(codex).length} codex media`);

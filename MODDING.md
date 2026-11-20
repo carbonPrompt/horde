@@ -74,3 +74,8 @@ Progress is one readable JSON file. Edit it with the game closed.
 
 Developer mode (Settings) also unlocks everything and adds a panel (F10) with unlimited money, no ordnance limits and
 XP buttons.
+
+## The Codex follows your mod
+The Codex (How to Play) builds its unit, ability and support pages from the same stats a mod changes, so a modded
+cost, range or damage shows up there without any other edit. Its diagrams (evac pad prices, medal thresholds, the
+no-fire band) are drawn from the stats too.
