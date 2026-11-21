@@ -75,8 +75,8 @@ test("badges compare against the last version the player opened the Codex in", (
   expect(badgeFor(x("0.43.0", "0.47.0"), "0.46.1")).toBe("updated");
   expect(badgeFor(x("0.43.0", "0.43.0"), "0.46.1")).toBe(null);
   expect(badgeFor(x("0.47.0", "0.47.0"), undefined)).toBe(null);
-  expect(sectionCounts(allEntries(), "0.46.1").units).toBeGreaterThan(0);
-  expect(sectionCounts(allEntries(), undefined).units ?? 0).toBe(0);
+  expect(sectionCounts(allEntries(), "0.46.1").units?.updated).toBeGreaterThan(0);
+  expect(sectionCounts(allEntries(), undefined).units).toBeUndefined();
 });
 
 test("an entry whose media file is missing shows its alt text, never a broken picture", () => {
@@ -105,8 +105,8 @@ test("save keeps a valid codexSeen and codexOpen, drops junk", () => {
 });
 
 import { seenFor } from "../src/codex";
-test("a save from before the Codex badges against the version that last wrote it; a new save badges nothing", () => {
-  expect(seenFor(undefined, "0.46.1")).toBe("0.46.1");
+test("a save from before the Codex badges against the version that last wrote it (never earlier than the Codex launch); a new save badges nothing", () => {
+  expect(seenFor(undefined, "0.47.2")).toBe("0.47.2");
   expect(seenFor(undefined, undefined)).toBe(undefined);
   expect(seenFor("0.47.0", "0.46.1")).toBe("0.47.0");
 });
@@ -203,4 +203,93 @@ test("final review #2: entry HTML names the media instead of carrying its data U
 });
 test("final review #5: the toolbar hover panel gets no Codex link (it can't be clicked)", () => {
   expect(stripCodexLinks('<span class="ip-title">Sniper<a class="cx-link" data-cx="unit-sniper" title="Open in the Codex">?</a></span>')).toBe('<span class="ip-title">Sniper</span>');
+});
+
+// ---------- 0.47.1: the eight deferred minors from the 0.47 final review ----------
+import { CODEX_EPOCH, slotPrevVersion } from "../src/codex";
+import { sectionLabel } from "../src/codexui";
+import { typingInField } from "../src/input";
+const en1 = (media?: CodexEntry["media"]) => ({ id: "z", section: "start", title: "T", summary: "S", body: "B", since: "0.47.0", updated: "0.47.0", media } as CodexEntry);
+
+test("minor #3: an entry open before a search rebuild renders open again", () => {
+  expect(renderEntry(en1(), opts(), true)).toMatch(/^<details class="cx-entry"[^>]* open>/);
+  expect(renderEntry(en1(), opts())).not.toMatch(/^<details[^>]* open>/);
+});
+
+test("minor #4: each save slot badges against the version that last wrote it, first seen this session", () => {
+  const m = new Map<number | null, string | undefined>();
+  expect(slotPrevVersion(m, null, "0.48.0")).toBe("0.48.0"); // boot profile
+  expect(slotPrevVersion(m, 2, "0.48.0")).toBe("0.48.0");    // slot 2, first pick
+  expect(slotPrevVersion(m, 1, "0.47.5")).toBe("0.47.5");
+  expect(slotPrevVersion(m, 2, "0.49.0")).toBe("0.48.0");    // re-picked later: still its first-seen version
+});
+
+test("minor #7: a browser that can't play WebM clips gets the alt text, not an empty box", () => {
+  const m = { kind: "clip", id: "clipx", alt: "Units moving" } as const;
+  const h = renderEntry(en1(m), { ...opts({ clipx: "data:video/webm;base64,AA" }), canPlayClip: false });
+  expect(h).toContain("Units moving"); expect(h).not.toContain("<video");
+  expect(renderEntry(en1(m), { ...opts({ clipx: "data:video/webm;base64,AA" }), canPlayClip: true })).toContain("<video");
+});
+
+test("minor #8: the Codex launch badges nothing for upgraders; later versions badge what changed", () => {
+  expect(CODEX_EPOCH).toBe("0.47.0");
+  expect(seenFor(undefined, "0.46.1")).toBe("0.47.0");
+  expect(seenFor("0.46.0", undefined)).toBe("0.47.0");
+  expect(seenFor("0.48.0", "0.46.1")).toBe("0.48.0");
+  expect(seenFor(undefined, undefined)).toBe(undefined);
+  // an upgrader from before the Codex sees badges only for what changed after the launch (0.48 on)
+  const after = new Set(allEntries().filter(x => verCmp(x.updated, CODEX_EPOCH) > 0).map(x => x.section));
+  expect(Object.keys(sectionCounts(allEntries(), seenFor(undefined, "0.46.1"))).sort()).toEqual([...after].sort());
+  expect(Object.keys(sectionCounts(allEntries().filter(x => verCmp(x.updated, CODEX_EPOCH) <= 0), seenFor(undefined, "0.46.1")))).toEqual([]);
+});
+
+test("minor #8: the section count says new and updated apart", () => {
+  const x = (since: string, updated: string, section = "units") => ({ since, updated, section } as CodexEntry);
+  const c = sectionCounts([x("0.48.0", "0.48.0"), x("0.43.0", "0.48.0"), x("0.43.0", "0.48.0")], "0.47.0");
+  expect(c.units).toEqual({ new: 1, updated: 2 });
+  expect(sectionLabel({ new: 1, updated: 2 })).toBe("(1 new, 2 updated)");
+  expect(sectionLabel({ new: 0, updated: 3 })).toBe("(3 updated)");
+  expect(sectionLabel({ new: 2, updated: 0 })).toBe("(2 new)");
+  expect(sectionLabel(undefined)).toBe("");
+});
+
+test("minor #9: keys typed into a text field are not game keys", () => {
+  const el = (tagName: string, type = "", editable = false) => ({ tagName, type, isContentEditable: editable }) as unknown as EventTarget;
+  expect(typingInField(el("INPUT", "search"))).toBe(true);
+  expect(typingInField(el("INPUT", "text"))).toBe(true);
+  expect(typingInField(el("TEXTAREA"))).toBe(true);
+  expect(typingInField(el("DIV", "", true))).toBe(true);
+  expect(typingInField(el("INPUT", "range"))).toBe(false);
+  expect(typingInField(el("INPUT", "checkbox"))).toBe(false);
+  expect(typingInField(el("CANVAS"))).toBe(false);
+  expect(typingInField(null)).toBe(false);
+});
+
+test("minor #11: no em dash anywhere the Codex shows text", () => {
+  for (const s of SECTIONS) expect(s.title).not.toContain("\u2014");
+  for (const e of allEntries()) {
+    for (const k of e.keys ?? []) expect(k).not.toContain("\u2014");
+    if (e.stats) for (const [k, v] of statRows(e.stats)) { expect(k).not.toContain("\u2014"); expect(v).not.toContain("\u2014"); }
+    for (const c of e.media?.callouts ?? []) expect(c.text).not.toContain("\u2014");
+  }
+  for (const e of allEntries()) expect(renderEntry(e, opts())).not.toContain("\u2014");
+});
+
+test("0.49: squad pages say how many soldiers and the one-per-building rule", () => {
+  expect(statRows("unit-garrison")).toContainEqual(["Squad", "4 soldiers, one fortified squad per building"]); // 0.50
+  expect(statRows("unit-sniper")).toContainEqual(["Squad", "Sniper + spotter, one team per building"]);
+  expect(statRows("unit-para")).toContainEqual(["Squad", "5 soldiers"]);
+  expect(statRows("unit-apc").some(r => r[0] === "Squad")).toBe(false);
+  const g = allEntries().find(e => e.id === "unit-garrison")!;
+  expect(g.updated).toBe("0.50.0"); // 0.50: Troops
+  expect(allEntries().find(e => e.id === "unit-apc")!.updated).toBe("0.47.0");
+  const sol = allEntries().find(e => e.id === "soldiers")!;
+  expect(sol.section).toBe("units"); expect(sol.since).toBe("0.49.0");
+  expect(sol.body).not.toContain("storm");
+  expect(sol.body).toContain("can't be bitten"); // 0.50: fortified
+  expect(sol.keys).toContain("U");
+});
+
+test("0.50: no Codex text shows a raw ${...} placeholder", () => {
+  for (const e of allEntries()) { expect(e.body).not.toContain("${"); expect(e.summary).not.toContain("${"); }
 });

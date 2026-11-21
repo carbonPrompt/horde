@@ -24,6 +24,12 @@ export const RECIPES: Recipe[] = [
     setup: [...BASE, "ability gunship", "battle", "advance 30", "tool gunship", "click 191,150", "advance 25", "cursor off"] },
   { ...FH, id: "support-radius", kind: "shot", camera: { x: 191, y: 106, scale: 3.5 }, crop: MAP,
     setup: ["zone 150,66 234,66 234,142 150,142", "tool radio", "hover 160,78"] },
+  { ...FH, id: "battle-minimap-alerts", kind: "shot", camera: { x: 191, y: 106, scale: 3 }, crop: [724, 76, 236, 184], setup: BATTLE(75) }, // 0.48
+  // 0.50: battle groups on the bar (bottom right), and a Troops squad walking over to fortify a roof
+  { ...FH, id: "controls-groupbar", kind: "shot", camera: { x: 191, y: 106, scale: 4 }, crop: [384, 380, 576, 72],
+    setup: [ZONE, "place garrison 172,78", "place garrison 190,106", "place sniper 186,78", "battle", "advance 3", "select 190,106", "key Ctrl+1", "select 172,78", "key Ctrl+2", "select 186,78", "key Ctrl+3", "key 1", "cursor off"] },
+  { ...FH, id: "clip-troops-fortify", kind: "clip", camera: { x: 191, y: 119, scale: 8 }, crop: MAP, seconds: 13.5,
+    setup: [ZONE, "place garrison 191,119", "battle", "advance 3", "select 191,119", "click 192,126 right"], action: ["advance 13.5"] },
   { ...FH, id: "controls-quickbar", kind: "shot", camera: { x: 191, y: 106, scale: 4 }, crop: [0, 448, 960, 92], setup: BASE },
   // ---------- clips ----------
   { ...FH, id: "clip-draw-zone", kind: "clip", camera: { x: 191, y: 106, scale: 4.5 }, crop: MAP, seconds: 5, setup: [],

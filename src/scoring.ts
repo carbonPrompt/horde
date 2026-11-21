@@ -37,6 +37,13 @@ export function medalFor(score: number, pct: number): string | null {
 export function padCost(base: number, standing: number): number {
   return Math.round(base * Math.pow(C.EVAC_COST_MUL, standing));
 }
+/** 0.48: fold a run's efficiency into a best record: the higher people-per-$1M, and the Under Budget badge once won. */
+export function mergeEfficiency<T extends { perM?: number; underBudget?: boolean }>(b: T, perM: number | undefined, underBudget: boolean | undefined): T {
+  const out = { ...b };
+  if (perM !== undefined && Number.isFinite(perM) && perM > (b.perM ?? -1)) out.perM = perM;
+  if (underBudget) out.underBudget = true;
+  return out;
+}
 export function mayhem(killsAfter: number, damageAfter: number): number {
   return killsAfter + Math.floor(Math.max(0, damageAfter) / C.MAYHEM_DAMAGE_PER_POINT);
 }
@@ -67,8 +74,8 @@ export function difficultyFor(daily: boolean, chosen: C.Difficulty | undefined):
 
 
 /** 0.36: a real city's best result over its areas at one difficulty (highest medal, then score); null if none. */
-export function bestOfAreas(best: Record<string, { pct: number; medal?: string | null; mayhem?: number }>, keys: string[], d: C.Difficulty) {
-  let top: { pct: number; medal?: string | null; mayhem?: number } | null = null;
+export function bestOfAreas(best: Record<string, { pct: number; medal?: string | null; mayhem?: number; underBudget?: boolean }>, keys: string[], d: C.Difficulty) {
+  let top: { pct: number; medal?: string | null; mayhem?: number; underBudget?: boolean } | null = null;
   for (const k of keys) {
     const b = best[bestKey(k, d)]; if (!b) continue;
     if (!top || medalRank(b.medal) > medalRank(top.medal) || (medalRank(b.medal) === medalRank(top.medal) && b.pct > top.pct)) top = b;

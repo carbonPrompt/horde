@@ -6,7 +6,7 @@
 //   bun tools/shots/run.ts --id <id>   reshoot one
 //   bun tools/shots/run.ts --changelog <version>   Codex entries new or changed in that version (release notes)
 // Build-machine tools only: google-chrome and ffmpeg. Nothing here ships in the game.
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync, unlinkSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync, writeFileSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { VERSION } from "../../src/config";
@@ -18,9 +18,15 @@ export interface Cdp { send(method: string, params?: object): Promise<any>; eval
 const FPS = 15;
 const ROOT = resolve(import.meta.dir, "../..");
 const sh = (cmd: string[]) => {
-  const p = Bun.spawnSync(cmd, { stdout: "pipe", stderr: "pipe" });
+  const p = Bun.spawnSync(cmd, { cwd: ROOT, stdout: "pipe", stderr: "pipe" }); // build.ts reads src/ relative to the repo root
   if (p.exitCode !== 0) throw new Error(`${cmd[0]} failed: ${p.stderr.toString().slice(-400)}`);
 };
+/** 0.47.1: copy next to the target, then rename over it, so a crash never leaves half a picture in assets/codex.
+ * (A plain rename can't cross disks: tmp and assets may be on different ones.) */
+export function atomicCopy(src: string, dst: string) {
+  const part = `${dst}.part`;
+  try { copyFileSync(src, part); renameSync(part, dst); } finally { rmSync(part, { force: true }); }
+}
 const frames2 = "new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))";
 
 async function capture(cdp: Cdp, r: Recipe, file: string) {
@@ -45,7 +51,7 @@ export async function runRecipe(cdp: Cdp, r: Recipe, outDir: string, pageUrl = "
       const raw = join(tmp, "raw.png"), small = join(tmp, "small.png");
       await capture(cdp, r, raw);
       sh(["ffmpeg", "-loglevel", "error", "-y", "-i", raw, "-vf", "split[a][b];[a]palettegen=max_colors=128[p];[b][p]paletteuse=dither=none", small]);
-      mkdirSync(outDir, { recursive: true }); copyFileSync(small, out); // copy: tmp and assets may be on different disks
+      mkdirSync(outDir, { recursive: true }); atomicCopy(small, out);
     } else {
       let n = 0;
       const shoot = async () => { await capture(cdp, r, join(tmp, `f${String(n++).padStart(4, "0")}.png`)); };
@@ -60,7 +66,7 @@ export async function runRecipe(cdp: Cdp, r: Recipe, outDir: string, pageUrl = "
       const webm = join(tmp, "out.webm");
       sh(["ffmpeg", "-loglevel", "error", "-y", "-framerate", String(FPS), "-i", join(tmp, "f%04d.png"),
         "-vf", "scale=800:-2", "-c:v", "libvpx-vp9", "-b:v", "0", "-crf", "47", "-row-mt", "1", "-pix_fmt", "yuv420p", "-an", webm]); // under 400 KB
-      mkdirSync(outDir, { recursive: true }); copyFileSync(webm, out);
+      mkdirSync(outDir, { recursive: true }); atomicCopy(webm, out);
     }
     const cw = r.crop ? r.crop[2] : r.size[0], ch = r.crop ? r.crop[3] : r.size[1];
     const w = r.kind === "clip" ? 800 : cw, h = r.kind === "clip" ? 2 * Math.round(ch * 800 / cw / 2) : ch; // clips are scaled to 800 wide
@@ -114,6 +120,10 @@ async function main() {
         console.log(`${r.id}\t${(manifest[r.id].bytes / 1024).toFixed(0)} KB\t${((performance.now() - t0) / 1000).toFixed(1)} s`);
       } catch (e) { failed++; console.error(String((e as Error).message)); }
       writeFileSync(mfile, JSON.stringify(sortKeys(manifest), null, 1) + "\n");
+      if (cdp.closed || chrome.exitCode !== null) { // 0.47.1: Chrome died; the rest would only time out one by one
+        const left = todo.length - todo.indexOf(r) - 1; failed += left;
+        console.error(`headless Chrome stopped; ${left} recipe(s) not shot. Run again to finish.`); break;
+      }
     }
     cdp.close();
   } finally {

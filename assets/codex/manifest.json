@@ -7,8 +7,16 @@
   "w": 960,
   "h": 372
  },
+ "battle-minimap-alerts": {
+  "version": "0.48.0",
+  "rev": 1,
+  "recipeHash": "db62bae7237b",
+  "bytes": 18753,
+  "w": 236,
+  "h": 184
+ },
  "battle-money-bar": {
-  "version": "0.47.0",
+  "version": "0.49.0",
   "rev": 1,
   "recipeHash": "982c0dff80f3",
   "bytes": 9454,
@@ -87,11 +95,27 @@
   "w": 800,
   "h": 310
  },
+ "clip-troops-fortify": {
+  "version": "0.50.0",
+  "rev": 1,
+  "recipeHash": "30a6c2333d8f",
+  "bytes": 388120,
+  "w": 800,
+  "h": 310
+ },
+ "controls-groupbar": {
+  "version": "0.50.0",
+  "rev": 1,
+  "recipeHash": "14c4e9b22aff",
+  "bytes": 9815,
+  "w": 576,
+  "h": 72
+ },
  "controls-quickbar": {
-  "version": "0.47.0",
+  "version": "0.50.0",
   "rev": 1,
   "recipeHash": "b2f68bc653c1",
-  "bytes": 15792,
+  "bytes": 15418,
   "w": 960,
   "h": 92
  },
@@ -136,10 +160,10 @@
   "h": 372
  },
  "units-ranges": {
-  "version": "0.47.0",
+  "version": "0.50.0",
   "rev": 1,
   "recipeHash": "6c2ca6e09f02",
-  "bytes": 48229,
+  "bytes": 49913,
   "w": 960,
   "h": 372
  },

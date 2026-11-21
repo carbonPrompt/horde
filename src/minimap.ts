@@ -1,5 +1,5 @@
 // 0.45: the minimap, top right of the map. Pure coordinate helpers (tested) plus the drawing.
-import type { Sim } from "./sim";
+import type { Sim, Ping, PingKind } from "./sim";
 import { INF } from "./sim";
 import * as C from "./config";
 
@@ -19,6 +19,42 @@ export function miniToWorld(mx: number, my: number, W: number, H: number, w: num
 }
 
 const UNIT_DOT = "#80cbc4", SUPPORT_DOT = "#cbd5e1", PAD_DOT = "#7cfc9a";
+
+/** 0.48: alert rings, StarCraft style. Kinds that matter most draw bigger. */
+export const PING_STYLE: Record<PingKind, { color: string; r: number; label: string }> = {
+  zone: { color: "#ff1744", r: 14, label: "Someone bitten inside a safe zone" },
+  breach: { color: "#ff1744", r: 14, label: "A wall is down" },
+  unit: { color: "#ff5252", r: 11, label: "A unit is under attack" },
+  abort: { color: "#ffab40", r: 11, label: "An evac lift waved off" },
+  wall: { color: "#ff6e40", r: 9, label: "Infected clawing at a wall or gate" },
+  bite: { color: "#ff5252", r: 7, label: "People bitten in the city" },
+};
+/** Which ring F jumps to: the newest of the most urgent kind still showing. */
+export function pickPing(pings: Ping[], now: number, life: number): Ping | null {
+  const rank: Record<PingKind, number> = { zone: 5, breach: 5, unit: 4, abort: 4, wall: 3, bite: 1 };
+  let best: Ping | null = null;
+  for (const p of pings) if (now - p.t < life && (!best || rank[p.kind] > rank[best.kind] || (rank[p.kind] === rank[best.kind] && p.t > best.t))) best = p;
+  return best;
+}
+/** Pulsing rings for live alerts on the overlay canvas (drawn every frame; the minimap itself redraws 4x a second). */
+export function drawPings(ctx: CanvasRenderingContext2D, pings: Ping[], now: number, life: number, w: number, h: number, dpr: number) {
+  const W = ctx.canvas.width, H = ctx.canvas.height, f = miniFit(W, H, w, h);
+  ctx.clearRect(0, 0, W, H);
+  for (const p of pings) {
+    const age = now - p.t;
+    if (age < 0 || age >= life) continue;
+    const st = PING_STYLE[p.kind], x = f.ox + p.x * f.scale, y = f.oy + p.y * f.scale;
+    const fade = 1 - age / life;
+    for (const off of [0, 0.5]) { // two rings a half pulse apart
+      const ph = ((age + off) % 1);
+      ctx.globalAlpha = fade * (1 - ph);
+      ctx.strokeStyle = st.color; ctx.lineWidth = 2 * dpr;
+      ctx.beginPath(); ctx.arc(x, y, (2 + ph * st.r) * dpr, 0, 7); ctx.stroke();
+    }
+    ctx.globalAlpha = fade; ctx.fillStyle = st.color; ctx.fillRect(x - 1.5 * dpr, y - 1.5 * dpr, 3 * dpr, 3 * dpr);
+  }
+  ctx.globalAlpha = 1;
+}
 
 /** Terrain (the map's base image), the zone, infected density, units, evac pads and the camera's view.
  *  view: the main canvas size in px; cam: its offset and scale (px per cell). */

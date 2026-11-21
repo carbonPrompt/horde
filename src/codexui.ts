@@ -6,6 +6,7 @@ import { statRows } from "./codexStats";
 export type CodexOpts = {
   media: Record<string, string>; // media id -> data URL (build.ts embeds assets/codex)
   seen?: string; open?: string[];
+  canPlayClip?: boolean; // false = this browser can't play WebM/VP9 (old iOS Safari): clips show their alt text
   diagrams: Record<string, () => string>;
   onOpenChange(ids: string[]): void;
   log(what: string, data: object): void;
@@ -16,11 +17,20 @@ const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replac
 /** The toolbar hover panel takes no pointer events, so a Codex link there could never be clicked. */
 export function stripCodexLinks(html: string): string { return html.replace(/<a class="cx-link"[^>]*>\?<\/a>/g, ""); }
 
-export function sectionCounts(list: CodexEntry[], seen: string | undefined): Partial<Record<SectionId, number>> {
-  const c: Partial<Record<SectionId, number>> = {};
-  for (const e of list) if (badgeFor(e, seen)) c[e.section] = (c[e.section] ?? 0) + 1;
+export type BadgeCount = { new: number; updated: number };
+export function sectionCounts(list: CodexEntry[], seen: string | undefined): Partial<Record<SectionId, BadgeCount>> {
+  const c: Partial<Record<SectionId, BadgeCount>> = {};
+  for (const e of list) { const b = badgeFor(e, seen); if (b) (c[e.section] ??= { new: 0, updated: 0 })[b]++; }
   return c;
 }
+
+/** The note after a section title: "(1 new, 2 updated)", or "" when nothing changed. */
+export function sectionLabel(n: BadgeCount | undefined): string {
+  const parts = [n?.new ? `${n.new} new` : "", n?.updated ? `${n.updated} updated` : ""].filter(Boolean);
+  return parts.length ? `(${parts.join(", ")})` : "";
+}
+
+const altBox = (alt: string) => `<div class="cx-alt">${esc(alt)}</div>`;
 
 function mediaHtml(e: CodexEntry, o: CodexOpts): string {
   const m = e.media;
@@ -32,7 +42,7 @@ function mediaHtml(e: CodexEntry, o: CodexOpts): string {
     inner = d ? `<div class="cx-svg" role="img" aria-label="${esc(m.alt)}">${d()}</div>` : `<div class="cx-alt">${esc(m.alt)}</div>`;
   } else {
     // the data URL is attached on first open (loadMedia); keeping megabytes of base64 out of innerHTML keeps search fast
-    if (!o.media[m.id]) inner = `<div class="cx-alt">${esc(m.alt)}</div>`;
+    if (!o.media[m.id] || (m.kind === "clip" && o.canPlayClip === false)) inner = altBox(m.alt);
     else if (m.kind === "clip") inner = `<video class="cx-clip" data-media="${esc(m.id)}" muted loop playsinline aria-label="${esc(m.alt)}"></video>`;
     else inner = `<img class="cx-shot" data-media="${esc(m.id)}" alt="${esc(m.alt)}">`;
   }
@@ -41,10 +51,10 @@ function mediaHtml(e: CodexEntry, o: CodexOpts): string {
   return `<figure class="cx-fig"><div class="cx-frame">${inner}${dots}</div>${list}</figure>`;
 }
 
-export function renderEntry(e: CodexEntry, o: CodexOpts): string {
+export function renderEntry(e: CodexEntry, o: CodexOpts, open = false): string {
   const b = badgeFor(e, o.seen);
   const rows = e.stats ? statRows(e.stats) : [];
-  return `<details class="cx-entry" id="cx-${esc(e.id)}" data-id="${esc(e.id)}"><summary><b>${esc(e.title)}</b>` +
+  return `<details class="cx-entry" id="cx-${esc(e.id)}" data-id="${esc(e.id)}"${open ? " open" : ""}><summary><b>${esc(e.title)}</b>` +
     (b ? `<span class="cx-badge cx-${b}">${b === "new" ? "NEW" : "UPDATED"}</span>` : "") +
     `<span class="cx-sum">${esc(e.summary)}</span></summary><div class="cx-body">` +
     mediaHtml(e, o) + renderBody(e.body) +
@@ -54,8 +64,9 @@ export function renderEntry(e: CodexEntry, o: CodexOpts): string {
 }
 
 /** Fills root (the #codex box) and wires search, lazy media, clip playback and deep links. */
-export function mountCodex(root: HTMLElement, search: HTMLInputElement, o: CodexOpts): { open(id: string): void; refresh(): void } {
+export function mountCodex(root: HTMLElement, search: HTMLInputElement, o: CodexOpts): { open(id: string): void; refresh(): void; setProfile(seen: string | undefined, open: string[] | undefined): void } {
   const all = allEntries();
+  const openEntries = new Set<string>(); // entries the reader has open; a search rebuild keeps them open
   let io: IntersectionObserver | null = null;
   const render = () => {
     const list = filterEntries(search.value, all), q = search.value.trim() !== "";
@@ -63,12 +74,14 @@ export function mountCodex(root: HTMLElement, search: HTMLInputElement, o: Codex
     root.innerHTML = list.length ? SECTIONS.map(s => {
       const es = list.filter(e => e.section === s.id);
       if (!es.length) return "";
-      const n = counts[s.id];
-      return `<details class="cx-sec" data-sec="${s.id}"${q || openSet.has(s.id) ? " open" : ""}><summary>${esc(s.title)}${n ? ` <span class="cx-count">(${n} new)</span>` : ""}</summary>${es.map(e => renderEntry(e, o)).join("")}</details>`;
+      const n = sectionLabel(counts[s.id]);
+      return `<details class="cx-sec" data-sec="${s.id}"${q || openSet.has(s.id) ? " open" : ""}><summary>${esc(s.title)}${n ? ` <span class="cx-count">${n}</span>` : ""}</summary>${es.map(e => renderEntry(e, o, openEntries.has(e.id))).join("")}</details>`;
     }).join("") : `<p class="cx-none">No entries match "${esc(search.value.trim())}".</p>`;
     wire();
   };
   const loadMedia = (d: Element) => d.querySelectorAll<HTMLImageElement | HTMLVideoElement>("[data-media]").forEach(el => {
+    const alt = el instanceof HTMLImageElement ? el.alt : el.getAttribute("aria-label") ?? "";
+    el.addEventListener("error", () => { io?.unobserve(el); el.outerHTML = altBox(alt); o.log("media-failed", { alt }); }, { once: true });
     el.src = o.media[el.dataset.media!] ?? ""; el.removeAttribute("data-media");
     if (el instanceof HTMLVideoElement) io?.observe(el);
   });
@@ -80,7 +93,9 @@ export function mountCodex(root: HTMLElement, search: HTMLInputElement, o: Codex
     })) : null;
     root.querySelectorAll<HTMLDetailsElement>("details.cx-entry").forEach(d => {
       if (d.open) loadMedia(d);
-      d.addEventListener("toggle", () => { if (d.open) loadMedia(d); });
+      d.addEventListener("toggle", () => {
+        if (d.open) { openEntries.add(d.dataset.id!); loadMedia(d); } else openEntries.delete(d.dataset.id!);
+      });
     });
     root.querySelectorAll<HTMLDetailsElement>("details.cx-sec").forEach(d => d.addEventListener("toggle", () => {
       if (search.value.trim()) return; // searching opens everything; don't save that
@@ -96,12 +111,14 @@ export function mountCodex(root: HTMLElement, search: HTMLInputElement, o: Codex
   render();
   return {
     refresh: render,
+    /** Another save slot took over: its badges and open sections; nothing the last player had open stays open. */
+    setProfile(seen, open) { o.seen = seen; o.open = open; openEntries.clear(); search.value = ""; render(); },
     open(id: string) {
       if (search.value) { search.value = ""; render(); }
       const d = root.querySelector<HTMLDetailsElement>(`#cx-${CSS.escape(id)}`);
       if (!d) { o.log("unknown-id", { id }); root.parentElement?.scrollTo?.({ top: 0 }); return; }
       (d.closest("details.cx-sec") as HTMLDetailsElement).open = true;
-      d.open = true; loadMedia(d);
+      d.open = true; openEntries.add(id); loadMedia(d);
       d.scrollIntoView({ block: "start", behavior: "smooth" });
       d.classList.add("cx-flash"); setTimeout(() => d.classList.remove("cx-flash"), 1600);
     },

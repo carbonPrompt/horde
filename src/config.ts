@@ -55,12 +55,23 @@ export interface DifficultyDef {
   xpMul: number;
   spreadMin: number; spreadMax: number; spreadS: number; // 0.24: extra outbreaks rolled after the first cases, inside spreadS seconds
   runnerPct: number; // 0.30: share of infected that sprint (the rest shamble)
+  // 0.48: difficulty reaches the wallet (playtest feedback: Hard/Insane were won by pausing and spamming one unit)
+  budgetMul: number; // starting budget
+  incomeMul: number; // all battle income: aid per sheltered person, kill bounty, evac pay, train bonus
+  priceStep: number; // each standing unit of a kind (and each Paratroopers charge bought) adds this share to the next one's price
+  supportMul: number; // 0.49 (design ruling): each standing support building of a kind multiplies the next one's price by this (Evac Points keep their own EVAC_COST_MUL line)
+  upkeepPct: number; // cost of operations: share of what each standing unit and support paid, charged every INCOME_EVERY_S
+  noPause: boolean; // once the battle starts: no pause, speed locked at 1x
 }
 export const DIFFICULTY: Record<Difficulty, DifficultyDef> = {
-  easy:   { name: "Easy",   gapMin: 30, gapMax: 45, gapFloor: 14, sizeMul: 0.6, rampPerMin: 0.15, emptyHeat: 1,   gapHeat: 0.3, toughMul: 0.6, sitesMul: 0.5, xpMul: 0.75, spreadMin: 2, spreadMax: 3, spreadS: 40, runnerPct: 5 },
-  medium: { name: "Medium", gapMin: 20, gapMax: 35, gapFloor: 10, sizeMul: 1,   rampPerMin: 0.25, emptyHeat: 1.5, gapHeat: 0.4, toughMul: 1,   sitesMul: 1,   xpMul: 1, spreadMin: 4, spreadMax: 6, spreadS: 60, runnerPct: 15 },
-  hard:   { name: "Hard",   gapMin: 15, gapMax: 26, gapFloor: 7,  sizeMul: 1.4, rampPerMin: 0.4,  emptyHeat: 2,   gapHeat: 0.5, toughMul: 1.3, sitesMul: 1.5, xpMul: 1.25, spreadMin: 5, spreadMax: 9, spreadS: 80, runnerPct: 30 },
-  insane: { name: "Insane", gapMin: 10, gapMax: 18, gapFloor: 5,  sizeMul: 2,   rampPerMin: 0.6,  emptyHeat: 3,   gapHeat: 0.6, toughMul: 1.7, sitesMul: 2,   xpMul: 1.5, spreadMin: 8, spreadMax: 12, spreadS: 100, runnerPct: 50 },
+  easy:   { name: "Easy",   gapMin: 30, gapMax: 45, gapFloor: 14, sizeMul: 0.6, rampPerMin: 0.15, emptyHeat: 1,   gapHeat: 0.3, toughMul: 0.6, sitesMul: 0.5, xpMul: 0.75, spreadMin: 2, spreadMax: 3, spreadS: 40, runnerPct: 5,
+    budgetMul: 1, incomeMul: 1, priceStep: 0, supportMul: 1, upkeepPct: 0, noPause: false },
+  medium: { name: "Medium", gapMin: 20, gapMax: 35, gapFloor: 10, sizeMul: 1,   rampPerMin: 0.25, emptyHeat: 1.5, gapHeat: 0.4, toughMul: 1,   sitesMul: 1,   xpMul: 1, spreadMin: 4, spreadMax: 6, spreadS: 60, runnerPct: 15,
+    budgetMul: 1, incomeMul: 1, priceStep: 0.03, supportMul: 1.5, upkeepPct: 0, noPause: false },
+  hard:   { name: "Hard",   gapMin: 15, gapMax: 26, gapFloor: 7,  sizeMul: 1.4, rampPerMin: 0.4,  emptyHeat: 2,   gapHeat: 0.5, toughMul: 1.3, sitesMul: 1.5, xpMul: 1.25, spreadMin: 5, spreadMax: 9, spreadS: 80, runnerPct: 30,
+    budgetMul: 0.65, incomeMul: 0.75, priceStep: 0.1, supportMul: 2, upkeepPct: 0, noPause: true },
+  insane: { name: "Insane", gapMin: 10, gapMax: 18, gapFloor: 5,  sizeMul: 2,   rampPerMin: 0.6,  emptyHeat: 3,   gapHeat: 0.6, toughMul: 1.7, sitesMul: 2,   xpMul: 1.5, spreadMin: 8, spreadMax: 12, spreadS: 100, runnerPct: 50,
+    budgetMul: 0.5, incomeMul: 0.5, priceStep: 0.15, supportMul: 2.5, upkeepPct: 0.002, noPause: true },
 };
 
 // 0.20 round score and Keep fighting. Tuned often: keep them here.
@@ -217,6 +228,27 @@ export let EXTRA_ZONE_PER_CELL = 2_200;
 export let INCOME_EVERY_S = 10;
 export let INCOME_PER_SAFE = 180; // dollars per sheltered person per 10 s (emergency aid)
 export let KILL_BOUNTY = 1_000;
+// 0.48: Under Budget badge: any medal while spending at most this share of the starting budget plus battle income
+export let UNDER_BUDGET_PCT = 0.6;
+// 0.48: minimap alerts: one per kind per PING_CELL x PING_CELL square every PING_GAP_S; a ring lives PING_LIFE_S
+export let PING_CELL = 24, PING_GAP_S = 10, PING_LIFE_S = 4;
+// 0.49: squads. Soldiers per squad; a "building" is connected rooftop cells, split into pieces of at most
+// BUILDING_MAX_CELLS (square tiles); a Sniper team's spotter carries a rifle.
+export let SQUAD_GARRISON = 4, SQUAD_SNIPER = 2, SQUAD_PARA = 5;
+export let BUILDING_MAX_CELLS = 144;
+export let SQUAD_SPREAD = 6; // cells from where it was placed that a rooftop squad spreads over
+export let SPOTTER_RATE = 2, SPOTTER_DMG = 100;
+// 0.49: soldiers in the street (Paratroopers) are bitten like people (BITE_CHANCE x SOLDIER_BITE_MUL); rooftop
+// soldiers can't be bitten (design ruling).
+export let SOLDIER_BITE_MUL = 1;
+// Design ruling: a Garrison has 4 firing points now, so each rifleman can hit softer than the old single unit did (1 = a
+// full squad fires what the old Garrison fired). Upgrades may raise it later.
+export let GARRISON_FIRE_MUL = 1;
+// 0.50: fortifying a roof (climb up, can't fire, can be bitten) and dismounting (climb down, can't fire, out of reach)
+export let FORTIFY_S = 8, DISMOUNT_S = 4;
+export let REPAIR_MAX = 3; // 0.50 stopgap: most Repair Yards per battle until engineers (0.52)
+export let SOLDIER_HP = 100; // a rooftop soldier (paratroopers split their squad HP)
+export const SOLDIER_COLOR = "#5ef07a", SNIPER_COLOR = "#ffd54f";
 export let EXTRACT_MUL = 1.5; // selling mid-battle: the unit sits out 1.5x its deploy time (at least 5 s) before it is pulled out
 export let CRUSH_SLOW_S = 0.8; // 0.25: seconds a tank or APC stays slowed after crushing infected
 export let VEH_A = 4, VEH_CLEAR = 1.5, VEH_AHEAD = 5; // 0.32: people step aside from a tank/APC: push (m/s2), clearance and look-ahead (cells)
@@ -273,12 +305,14 @@ export interface UnitSpec {
 
 export const UNITS: Record<UnitKind, UnitSpec> = {
   garrison: {
-    name: "Garrison", foot: 2, cost: 1_200_000, deploy: 5, on: "building", range: 16, roofBonus: 0.5,
+    name: "Troops", foot: 2, cost: 1_200_000, deploy: 5, on: "building", range: 16, roofBonus: 0.5,
     rate: 8, damage: 100, ammo: 800, reloadsInZone: true, color: "#4fc3f7",
+    mobile: { speed: 2.4, hp: 400, leash: 0, nav: "road", flee: 0 }, // 0.50: walks, fortifies roofs, dismounts
   },
   sniper: {
     name: "Sniper", foot: 2, cost: 800_000, deploy: 6, on: "building", range: 22, roofBonus: 2.5,
     rate: 1.2, damage: 1000, ammo: 80, reloadsInZone: true, color: "#ffd54f",
+    mobile: { speed: 2.4, hp: 200, leash: 0, nav: "road", flee: 0 }, // 0.50
   },
   turret: {
     name: "Turret", hp: 1200, foot: 2, cost: 1_100_000, deploy: 8, on: "ground", range: 14, roofBonus: 0,
@@ -479,7 +513,7 @@ export function cityGunProfile(cityId?: string): CityGunProfile {
   return { country: "US", avgHousehold: 2.5, armedRate: CIV_ARMED_BASE, cityFactor: 1.0, mix: US_MIX, militiaFactor: 1.0 };
 }
 
-export const VERSION = "0.47.0";
+export const VERSION = "0.50.0";
 
 /** The campaign: fixed cities that unlock in order (a medal on one opens the next). */
 export interface CityDef { id: string; name: string; seed: number; budget: number; waveMul: number; sites: number; speedMul: number; blurb: string; real?: boolean; trial?: string; recipe?: CityRecipe; clearXp?: number; intro?: string[]; areas?: AreaDef[]; realArea?: string } // 0.36: areas = a real city's battle areas; realArea = this def is one area ("<city>/<area>") // 0.35: recipe = designed campaign map; clearXp = one-time bonus for the first medal; intro = lines shown the first time // trial: hardware this city lends you before you unlock it
@@ -562,7 +596,7 @@ export const MUTATORS: Record<MutatorId, MutatorSpec> = {
   },
   fragile_walls: {
     id: "fragile_walls", name: "Crumbling Barricades", short: "50% wall HP, +30% roof range",
-    desc: "Walls and gates have 50% HP, but roof units (Garrisons and Snipers) gain +30% firing range and Repair Yards cost 25% less.", color: "#4dd0e1",
+    desc: "Walls and gates have 50% HP, but roof units (Troops and Snipers) gain +30% firing range and Repair Yards cost 25% less.", color: "#4dd0e1",
   },
   blood_money: {
     id: "blood_money", name: "Blood Money", short: "-25% budget, 2x battle income",
@@ -708,15 +742,15 @@ export const UNIT_INFO: Record<UnitKind, UnitInfoSpec> = {
     transport: "UH-60 Black Hawk fast-rope",
     vehicle: "helo_uh60",
     structDmg: "None (5.56mm carbines)",
-    desc: "Rapid-fire rifle squad positioned on building rooftops. Ideal for holding safe-zone perimeters and mowing down packed runners.",
-    specials: ["+1 m range per building floor", "Infinite ammo when inside Safe Zone", "Inserted by UH-60 Black Hawk mid-battle"],
+    desc: "Four riflemen who fortify a rooftop or fight in the street, each one firing on their own. Fortified, they hold safe-zone perimeters and mow down packed runners; down on the street they go where you send them. One fortified Troops squad per building.",
+    specials: ["+1 m range per building floor", "Infinite ammo when inside Safe Zone", "Lost soldiers can be replaced in battle (U)"],
   },
   sniper: {
     role: "Precision Anti-Materiel Team",
     transport: "UH-60 Black Hawk rooftop insertion",
     vehicle: "helo_uh60",
     structDmg: "None (.50 BMG precision)",
-    desc: "High-caliber marksman team placed on tall buildings. Gains massive range bonuses from skyscraper elevation and one-shots standard infected.",
+    desc: "A sniper and a spotter on a tall building. The sniper one-shots standard infected from far away; the spotter covers the roof with a rifle. One team per building.",
     specials: ["+5 m range per building floor (press J for heights)", "1,000 dmg/shot counters high-HP Swimmer mutants", "Infinite ammo when inside Safe Zone"],
   },
   turret: {
@@ -804,7 +838,7 @@ export const UNIT_INFO: Record<UnitKind, UnitInfoSpec> = {
     transport: "C-130J Hercules parachute drop",
     vehicle: "c130_para",
     structDmg: "None",
-    desc: "Elite airborne infantry dropped by parachute anywhere on the map. Fights autonomously until out of ammo, then evacuates to the Safe Zone.",
+    desc: "Five airborne soldiers dropped by parachute anywhere on the map, each firing on their own. They fight autonomously until out of ammo, then evacuate to the Safe Zone. Infected that reach them bite, and a bitten soldier turns.",
     specials: ["Deployed via the Paratroopers ability", "Can be resupplied in the field by Supply Drops or Supply Depots"],
   },
   police: {
@@ -1070,6 +1104,23 @@ export const TUNABLE: Record<string, [() => number, (v: number) => void]> = {
   INCOME_EVERY_S: [() => INCOME_EVERY_S, v => { INCOME_EVERY_S = v; }],
   INCOME_PER_SAFE: [() => INCOME_PER_SAFE, v => { INCOME_PER_SAFE = v; }],
   KILL_BOUNTY: [() => KILL_BOUNTY, v => { KILL_BOUNTY = v; }],
+  UNDER_BUDGET_PCT: [() => UNDER_BUDGET_PCT, v => { UNDER_BUDGET_PCT = v; }],
+  PING_CELL: [() => PING_CELL, v => { PING_CELL = v; }],
+  PING_GAP_S: [() => PING_GAP_S, v => { PING_GAP_S = v; }],
+  PING_LIFE_S: [() => PING_LIFE_S, v => { PING_LIFE_S = v; }],
+  SQUAD_GARRISON: [() => SQUAD_GARRISON, v => { SQUAD_GARRISON = v; }],
+  SQUAD_SNIPER: [() => SQUAD_SNIPER, v => { SQUAD_SNIPER = v; }],
+  SQUAD_PARA: [() => SQUAD_PARA, v => { SQUAD_PARA = v; }],
+  BUILDING_MAX_CELLS: [() => BUILDING_MAX_CELLS, v => { BUILDING_MAX_CELLS = v; }],
+  SQUAD_SPREAD: [() => SQUAD_SPREAD, v => { SQUAD_SPREAD = v; }],
+  SPOTTER_RATE: [() => SPOTTER_RATE, v => { SPOTTER_RATE = v; }],
+  SPOTTER_DMG: [() => SPOTTER_DMG, v => { SPOTTER_DMG = v; }],
+  SOLDIER_BITE_MUL: [() => SOLDIER_BITE_MUL, v => { SOLDIER_BITE_MUL = v; }],
+  GARRISON_FIRE_MUL: [() => GARRISON_FIRE_MUL, v => { GARRISON_FIRE_MUL = v; }],
+  FORTIFY_S: [() => FORTIFY_S, v => { FORTIFY_S = v; }],
+  DISMOUNT_S: [() => DISMOUNT_S, v => { DISMOUNT_S = v; }],
+  REPAIR_MAX: [() => REPAIR_MAX, v => { REPAIR_MAX = v; }],
+  SOLDIER_HP: [() => SOLDIER_HP, v => { SOLDIER_HP = v; }],
   EXTRACT_MUL: [() => EXTRACT_MUL, v => { EXTRACT_MUL = v; }],
   CRUSH_SLOW_S: [() => CRUSH_SLOW_S, v => { CRUSH_SLOW_S = v; }],
   VEH_A: [() => VEH_A, v => { VEH_A = v; }],
@@ -1133,17 +1184,17 @@ export const TUNABLE: Record<string, [() => number, (v: number) => void]> = {
   PARA_LIVE_MAX: [() => PARA_LIVE_MAX, v => { PARA_LIVE_MAX = v; }],
   GUNSHIP_RADIUS: [() => GUNSHIP_RADIUS, v => { GUNSHIP_RADIUS = v; }],
   GUNSHIP_S: [() => GUNSHIP_S, v => { GUNSHIP_S = v; }],
+  GUNSHIP_HOW_DMG: [() => GUNSHIP_HOW_DMG, v => { GUNSHIP_HOW_DMG = v; }],
+  GUNSHIP_HOW_EVERY: [() => GUNSHIP_HOW_EVERY, v => { GUNSHIP_HOW_EVERY = v; }],
+  GUNSHIP_HOW_SPLASH: [() => GUNSHIP_HOW_SPLASH, v => { GUNSHIP_HOW_SPLASH = v; }],
   G25_DMG: [() => G25_DMG, v => { G25_DMG = v; }],
   G25_RATE: [() => G25_RATE, v => { G25_RATE = v; }],
   G40_DMG: [() => G40_DMG, v => { G40_DMG = v; }],
   G40_RATE: [() => G40_RATE, v => { G40_RATE = v; }],
   G40_SPLASH: [() => G40_SPLASH, v => { G40_SPLASH = v; }],
   G105_MIN: [() => G105_MIN, v => { G105_MIN = v; }],
-  GUNSHIP_HOW_DMG: [() => GUNSHIP_HOW_DMG, v => { GUNSHIP_HOW_DMG = v; }],
-  GUNSHIP_HOW_EVERY: [() => GUNSHIP_HOW_EVERY, v => { GUNSHIP_HOW_EVERY = v; }],
-  GUNSHIP_HOW_SPLASH: [() => GUNSHIP_HOW_SPLASH, v => { GUNSHIP_HOW_SPLASH = v; }],
-  GUNSHIP_REFUEL_S: [() => GUNSHIP_REFUEL_S, v => { GUNSHIP_REFUEL_S = v; }],
   GUNSHIP_SPEED: [() => GUNSHIP_SPEED, v => { GUNSHIP_SPEED = v; }],
+  GUNSHIP_REFUEL_S: [() => GUNSHIP_REFUEL_S, v => { GUNSHIP_REFUEL_S = v; }],
   AIRSTRIKE_LEN: [() => AIRSTRIKE_LEN, v => { AIRSTRIKE_LEN = v; }],
   AIRSTRIKE_RADIUS: [() => AIRSTRIKE_RADIUS, v => { AIRSTRIKE_RADIUS = v; }],
   FIRE_RADIUS: [() => FIRE_RADIUS, v => { FIRE_RADIUS = v; }],

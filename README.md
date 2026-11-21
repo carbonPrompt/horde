@@ -11,16 +11,22 @@ every release, and Settings can install updates automatically. Your save is back
 - **Pick a time.** The hour the sirens go off decides where people are: home at night, at work by day, on the roads
   at rush hour.
 - **Plan.** Draw a safe zone around city blocks, set gates and walls, place units on rooftops and streets, and build
-  Evac Points (rooftop helipads) inside the zone. Each extra pad costs twice the last.
-- **Pick a difficulty.** Easy, Medium, Hard or Insane. Harder means more outbreak sites and bigger, more frequent
-  hordes. Every city keeps its own medals for each difficulty.
+  Evac Points (rooftop helipads) inside the zone. Each extra pad costs twice the last, and from Medium up every extra
+  unit or building of a kind costs a bit more than the one before.
+- **Pick a difficulty.** Easy, Medium, Hard or Insane. Harder means more outbreak sites, bigger and more frequent
+  hordes, less money, and on Hard and Insane no pause once the battle starts. Every city keeps its own medals for each
+  difficulty, plus how many people you saved per $1M.
 - **Warning.** An emergency broadcast goes out and people head for your zones. Nobody knows where it starts.
 - **Outbreak.** After 20 seconds the first cases turn somewhere outside your zones, more outbreaks pop up around the
   city over the next stretch (more on harder difficulties), and it spreads person to person.
 - **Hordes.** Then hordes walk in from outside the city on real land routes (highways, rail, bridges; swimmers use
   the river). They come almost on a rhythm, but not quite, and grow bigger and more frequent as time passes and the
   city empties.
-- **Command.** Select units with a click or a dragged box and give orders like an RTS: right-click to move (they
+- **Squads.** Troops are four riflemen, Sniper teams a sniper and a spotter, Paratroopers five soldiers, every one a
+  dot that fires on its own. Right-click a roof and Troops walk over, climb up and fortify, out of reach of the
+  infected; right-click a street and they come down and fight. Lost soldiers can be replaced mid-battle.
+- **Command.** Battle groups like StarCraft: Ctrl+1 to Ctrl+0 saves a group (or a safe zone), the number selects it
+  and twice jumps there, with a group bar in the corner. Select units with a click or a dragged box and give orders: right-click to move (they
   shoot what's in range on the way and never get dragged off chasing), attack-move, patrol, escort a family, stop,
   stand by, Shift to queue. A minimap sits in the top right, and the cursor label tells you what's under it and what
   things cost. The AC-130 flies in from the map edge, picks its 25 mm, 40 mm or 105 mm gun by target, and can be sent

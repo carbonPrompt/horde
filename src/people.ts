@@ -82,6 +82,12 @@ const JOBS = ["Nurse", "Teacher", "Cashier", "Truck driver", "Electrician", "Off
   "Warehouse worker", "Accountant", "Plumber", "Retail clerk", "Software developer", "Carpenter", "Server",
   "Mail carrier", "Bank teller", "Dental assistant", "Construction worker", "Hairdresser", "Security guard",
   "Pharmacist", "Janitor", "Sales rep", "Bus driver", "Welder", "Paralegal", "Line worker", "Real estate agent", "Barista"];
+/** 0.49: a soldier's name (soldiers are mostly men in this force mix, a fifth women), deterministic by seed and slot. */
+export function soldierName(seed: number, i: number): string {
+  const h = (k: number) => { let x = Math.imul(seed ^ 0x9e3779b9, 0x85ebca6b) ^ Math.imul(i + 1, 0xc2b2ae35) ^ Math.imul(k, 0x27d4eb2f); x ^= x >>> 15; x = Math.imul(x, 0x2c1b3c6d); x ^= x >>> 12; return ((x >>> 0) % 100000) / 100000; };
+  const first = h(1) < 0.2 ? pick(FEMALE, h(2)) : pick(MALE, h(2));
+  return `${first} ${pick(LAST, h(3))}`;
+}
 /** Index into a frequency-ordered list: squaring a uniform roll favors the common names at the front. */
 function pick<T>(list: T[], r: number): T { return list[Math.min(list.length - 1, Math.floor(list.length * r * r))]; }
 

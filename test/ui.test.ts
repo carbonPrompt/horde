@@ -454,3 +454,11 @@ test("0.42: end-of-round lines for refusers and accidents (only what happened)",
   ]);
   expect(endStatsLines({ refused: 2, refusedLost: 0, talkedOut: 0, broke: 0, civKilledByUs: 0, civFriendlyFire: 0 })).toEqual(["Refused to leave: 2 stayed home"]);
 });
+
+test("0.50: index.html has the group bar: 10 slots keyed 1-9, 0", () => {
+  const html = require("fs").readFileSync(import.meta.dir + "/../index.html", "utf8") as string;
+  const bar = /<div id="groupbar"[^>]*>([\s\S]*?)<\/div>/.exec(html);
+  expect(bar).not.toBeNull();
+  const keys = [...bar![1].matchAll(/class="gslot"[^>]*data-key="(\d)"/g)].map(m => m[1]);
+  expect(keys).toEqual(["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"]);
+});

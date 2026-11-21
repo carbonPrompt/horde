@@ -27,3 +27,22 @@ test("0.46.1: there's a tip for the AC-130 controls, and the tutorial says how t
 test("0.46.1: the gunship hint no longer promises a fixed arrival delay", () => {
   expect(C.ABILITIES.gunship.hint).toMatch(/nearest edge/);
 });
+
+test("0.50: the controls name F1-F3 speed and Ctrl+1-0 battle groups; 1/2/3 are no longer speed", () => {
+  const controls = allEntries().find(e => e.id === "controls-all")!.body;
+  expect(controls).toContain("F1");
+  expect(controls).toContain("Ctrl+1-0");
+  expect(controls).not.toContain("1/2/3 speed");
+  const speed = allEntries().find(e => e.id === "speed")!;
+  expect(speed.body).toContain("F1"); expect(speed.summary).not.toMatch(/^1, 2 and 3/);
+});
+
+test("0.50 review I7: the player never sees the old name Garrison", () => {
+  const html = require("fs").readFileSync(import.meta.dir + "/../index.html", "utf8") as string;
+  const main = require("fs").readFileSync(import.meta.dir + "/../src/main.ts", "utf8") as string;
+  expect(html).not.toMatch(/>Garrison</);
+  expect(main).not.toMatch(/"[^"\n]*\bGarrisons?\b[^"\n]*"/);
+  const steps = tutorialSteps({ x: 100, y: 100, r: 10 } as any);
+  expect(steps.find(s => s.id === "garrison")!.text).not.toMatch(/Garrison/);
+  for (const e of allEntries()) expect(e.title + e.summary + e.body).not.toMatch(/\bGarrisons?\b/);
+});

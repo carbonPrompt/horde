@@ -2,10 +2,13 @@ import * as C from "./config";
 import { BRIDGE, BUILDING, CityMap, INFRA_HIGHWAY, INFRA_RAIL, INFRA_STATION, PARK, ROAD, WATER } from "./map";
 import { fetchLiveOsmCity } from "./osm";
 import { CIV, INF, SAFE_CIV, SHOT_CANNON, SHOT_ROCKET, SHOT_SHELL, SHOT_SNIPER, Sim } from "./sim";
-import type { Score, Entity, Orbit } from "./sim";
+import type { Score, Entity, Orbit, Unit } from "./sim";
+import { groupsToPlan, groupsFromPlan, pruneGroups, assignGroup, groupUnits, groupSummary } from "./groups";
 import { describeCell, estimateAt } from "./cursorinfo";
-import { keyIntent, cameraKeysActive, pruneSelection, type ArmCmd } from "./input";
-import { drawMinimap, miniToWorld } from "./minimap";
+import { keyIntent, cameraKeysActive, pruneSelection, typingInField, groupIntent, type ArmCmd } from "./input";
+import { drawMinimap, miniToWorld, drawPings, pickPing } from "./minimap";
+import { soldierCardLines } from "./squads";
+import type { Ping } from "./sim";
 import * as Save from "./save";
 import * as Snap from "./snapshot";
 import * as P from "./progress";
@@ -22,7 +25,7 @@ import { initUpdater } from "./updaterui";
 import { Sound } from "./audio";
 import { initSprites, SPRITE_CANVAS, SPRITE_URL, SpriteKey, supportSpriteKey } from "./sprites";
 import { AlertQueue } from "./ticker";
-import { partPoints, mergeBest, bestKey, anyMedal, difficultyFor, bestOfAreas } from "./scoring";
+import { partPoints, mergeBest, mergeEfficiency, bestKey, anyMedal, difficultyFor, bestOfAreas } from "./scoring";
 import { loadRealArea, realAreaMap } from "./realcity/load";
 import { areaCardInfo, bindCityMap, cityMapModel, drawCityMap, fitView, type CityMapUi } from "./citymapui";
 import { soundDue, zoomGain } from "./audiotiming";
@@ -34,7 +37,7 @@ import { clockSpan, START_CHOICES, randomStart, needsTimePick, formatClock } fro
 import { personHtml, followable, followEndLine, endStatsLines } from "./personui";
 import { TIPS, shouldTip, type TipId } from "./tips";
 import { mountCodex, stripCodexLinks } from "./codexui";
-import { seenFor } from "./codex";
+import { seenFor, slotPrevVersion } from "./codex";
 import { DIAGRAMS } from "./codexDiagrams";
 import { runOps, shotsAllowed, type ShotOp } from "./shotmode";
 
@@ -65,7 +68,8 @@ addEventListener("keydown", () => snd.unlock());
 document.addEventListener("click", e => { if ((e.target as HTMLElement).closest("button")) snd.click(); }); // map + agents on the graphics card; 2D canvas on top for the rest
 
 let save = Save.load();
-const prevGameVersion = save.gameVersion; // 0.47: read before the updater stamps the current version (Codex badges)
+const slotVersions = new Map<number | null, string | undefined>(); // 0.47.1: per slot, the version that wrote it before this session (Codex badges)
+slotPrevVersion(slotVersions, Save.activeSlot(), save.gameVersion); // read before the updater stamps the current version
 if (save.xp == null) { save.xp = P.grandfatherXp(save.best); Save.store(save); } // players from before XP keep their access
 /** Unlocked by XP, lent by the current campaign city, or everything in developer mode. */
 const isOpen = (t: string) => P.unlocked(t, save.xp ?? 0, city?.trial, !!save.settings.devMode);
@@ -92,7 +96,11 @@ let pausedSpeed = save.settings.speed ?? 1; // 0.32: the player's last chosen sp
 let tool: Tool = "zone";
 let speed = 1; // 0 paused
 let draft: [number, number][] = []; // zone being drawn
+let selbarT = 0;
+let selSoldier: import("./squads").Soldier | null = null; // 0.49: the soldier whose dot was clicked
 let sel: Entity[] = []; // 0.44/0.45: what is selected with the Move/Aim tool (click, Shift-click, or drag a box)
+let selZone = -1; // 0.50: a safe zone selected by clicking its open ground (bindable to a group key; Troops deploy from it)
+let lastGroupKey = { n: -1, t: 0 }; // 0.50: a group key pressed twice quickly jumps the camera there
 let armedCmd: ArmCmd | null = null; // 0.45: A/P/E pressed: the next left-click aims it
 let box: [number, number, number, number] | null = null; // 0.45: selection box being dragged (canvas px)
 let hover: [number, number] | null = null; // cell under the mouse
@@ -208,16 +216,20 @@ function buildZone() {
 }
 
 // ---------- Plan save / restore ----------
+const GONE = { kind: "apc", x: -1, y: -1 } as unknown as Unit; // 0.50: a planned unit that didn't fit (its group places drop it)
 function exportPlan(): Plan {
   const walls: number[] = [];
   sim.inZone.forEach((z, i) => { if (z === 2) walls.push(i); });
+  const planned = sim.units.filter(u => u.kind !== "para" && u.kind !== "police" && u.kind !== "militia");
   return {
     poly: sim.zones[0] ?? [], zones: sim.zones.map(z => z.slice()), walls,
-    units: sim.units.filter(u => u.kind !== "para" && u.kind !== "police" && u.kind !== "militia").map(u => {
+    groups: groupsToPlan(sim.groups, planned), // 0.50
+    units: planned.map(u => {
       // 0.45: orders given in planning (after the start, the copy kept then: Retry replays the plan, not what was left)
       const po = sim.phase === "plan" ? (u.cmd ? { orders: u.orders ?? [], standby: !!u.standby } : undefined) : u.planOrders;
-      return po ? [u.kind, u.x, u.y, u.mode ?? "near", po.orders.map(o => ({ ...o })), ...(po.standby ? [true] : [])] as Plan["units"][number]
-        : [u.kind, u.x, u.y, u.mode ?? "near"] as Plan["units"][number];
+      const [ux, uy] = sim.phase !== "plan" && u.planPos ? u.planPos : [Math.floor(u.x), Math.floor(u.y)]; // 0.50: Troops walk now; Retry puts them where they were planned
+      return po ? [u.kind, ux, uy, u.mode ?? "near", po.orders.map(o => ({ ...o })), ...(po.standby ? [true] : [])] as Plan["units"][number]
+        : [u.kind, ux, uy, u.mode ?? "near"] as Plan["units"][number];
     }),
     supports: sim.supports.map(b => [b.kind, b.x, b.y]),
     abilities: { ...sim.bought }, c4: [...sim.c4], demo: [...sim.demo], start: startMin,
@@ -243,15 +255,22 @@ function importPlanInner(p: Plan) {
   sim.fieldDirty = true;
   for (const [k, x, y] of p.supports ?? []) if (k === "budget") sim.placeSupport(k, x, y);
   for (const [k, x, y] of p.supports ?? []) if (k !== "budget") sim.placeSupport(k, x, y);
+  let doubled = 0;
+  const placed: Unit[] = []; // 0.50: plan index -> unit (a placeholder where it didn't fit), for the groups
   for (const [k, x, y, m, ord, sb] of p.units) {
-    if (sim.place(k, x, y)) continue; // didn't fit: its orders go with it
+    const err = sim.place(k, x, y);
+    if (err && sim.buildingTaken(k, x, y)) doubled++; // 0.49: one Garrison / Sniper team per building
+    if (err) { placed.push(GONE); continue; } // didn't fit: its orders go with it
     const u = sim.units[sim.units.length - 1];
+    placed.push(u);
     if (m) u.mode = m;
     if (ord && sim.canOrder(u)) { u.orders = ord.map(o => ({ ...o })); u.cmd = true; u.standby = !!sb; if (sb) u.holdAt = [u.x, u.y]; } // 0.45
   }
+  sim.groups = pruneGroups(groupsFromPlan(p.groups, placed, sim.zones.length), u => u !== GONE); // 0.50
   for (const k of ABILITY_KINDS) for (let n = p.abilities?.[k] ?? 0; n > 0; n--) sim.buyAbility(k);
   for (const b of p.c4 ?? []) if (sim.bridges[b] && sim.remaining() >= C.C4_COST) sim.c4.add(b);
   for (const i of p.demo ?? []) sim.toggleDemo(i % sim.w, (i / sim.w) | 0); // 0.38
+  if (doubled) say(`${doubled === 1 ? "A Troops squad or Sniper team shared a building" : `${doubled} Troops squads or Sniper teams shared buildings`} in this plan; one per building now, the extra ${doubled === 1 ? "one was" : "ones were"} left out.`, 6000);
 }
 function newSim(keepPlan: boolean, newSeed = false) {
   openPicker(null); clearTicker(); closePerson();
@@ -262,7 +281,7 @@ function newSim(keepPlan: boolean, newSeed = false) {
   sim.setStartTime(startMin); // 0.40: people where they'd be at that hour
   if (plan) importPlan(plan);
   log("info", "restart", { ...cityTag(), keptPlan: keepPlan });
-  draft = []; speed = 1; tipGates = false; lastWave = 0; warnedWave = -1; warnShown = false; outbreakShown = false; xpGiven = 0; roundShown = false;
+  draft = []; pings = []; speed = 1; tipGates = false; lastWave = 0; warnedWave = -1; warnShown = false; outbreakShown = false; xpGiven = 0; roundShown = false;
   syncDev();
   buildBase(); buildZone(); fitCamera();
   $("end").hidden = true;
@@ -286,17 +305,28 @@ function go(id: string) { stack.push(id); show(id); }
 // ---------- 0.47: the Codex (How to Play) ----------
 let codex: ReturnType<typeof mountCodex> | null = null;
 const cxLink = (id: string) => `<a class="cx-link" data-cx="${id}" title="Open in the Codex">?</a>`;
+let codexSlot: number | null | undefined; // the save slot the Codex last showed badges for
+let codexBack: { cat: string | null } | null = null; // 0.47.1: a "?" opened from the map goes Back to the map (and its picker), not Pause
 function codexShown() {
+  const slot = Save.activeSlot();
+  const seen = () => seenFor(save.settings.codexSeen, slotPrevVersion(slotVersions, slot, save.gameVersion));
   if (!codex) codex = mountCodex($("codex"), $<HTMLInputElement>("codex-q"), {
     media: (window as any).HORDE_CODEX ?? {}, diagrams: DIAGRAMS,
-    seen: seenFor(save.settings.codexSeen, prevGameVersion), open: save.settings.codexOpen,
+    seen: seen(), open: save.settings.codexOpen,
+    canPlayClip: document.createElement("video").canPlayType('video/webm; codecs="vp9"') !== "",
     onOpenChange: ids => { save.settings.codexOpen = ids; Save.store(save); },
     log: (what, d) => log("warn", "codex", { what, ...d }),
   });
+  else if (slot !== codexSlot) codex.setProfile(seen(), save.settings.codexOpen); // another slot's badges and open sections
+  codexSlot = slot;
   if (save.settings.codexSeen !== C.VERSION) { save.settings.codexSeen = C.VERSION; Save.store(save); } // badges stay for this visit
 }
 function openCodex(id: string) {
-  if (mode === "game" && !stack.length) pause();
+  if (mode === "game" && !stack.length) {
+    const cat = pickerCat;
+    pause();
+    codexBack = { cat }; stack.length = 0; // Back closes the Codex straight into the game
+  }
   if (stack[stack.length - 1] !== "howto") go("howto");
   codex!.open(id);
 }
@@ -330,7 +360,7 @@ function cityBestHtml(cityId: string, lockedMsg: string | null, unplayed: string
   }).join("");
   const best = bestAt(cur);
   const medal = best && C.MEDALS.find(m => m[0] === best.medal);
-  const txt = best ? `${best.medal ?? "No medal"} · ${best.pct.toFixed(0)} pts${best.mayhem ? ` · Mayhem ${best.mayhem.toLocaleString()}` : ""}` : unplayed;
+  const txt = best ? `${best.medal ?? "No medal"} · ${best.pct.toFixed(0)} pts${best.underBudget ? " · Under Budget" : ""}${best.mayhem ? ` · Mayhem ${best.mayhem.toLocaleString()}` : ""}` : unplayed;
   return `<span class="best" style="color:${medal ? medal[2] : "#8a919c"}">${marks} · ${txt}</span>`;
 }
 function updateDailyButton() {
@@ -490,7 +520,7 @@ function tutState(): TutState {
   const c = sim.counts();
   return { zoneCells: sim.zoneCells, zoneOverlap: cells ? inside / cells : 0, gates, garrisons: n("garrison"), snipers: n("sniper"),
     evacs: sim.supports.filter(b => b.kind === "evac").length, phase: sim.phase === "plan" ? "plan" : sim.phase === "battle" ? "battle" : "over", lifts: sim.liftsFlown,
-    toWall: tutTrack.toWall, toGate: tutTrack.toGate, gatesOpen, strikes: tutTrack.strikes, personOpened: tutTrack.person, speedChanged: tutTrack.speed,
+    toWall: tutTrack.toWall, toGate: tutTrack.toGate, gatesOpen, strikes: tutTrack.strikes, personOpened: tutTrack.person, speedChanged: tutTrack.speed || speedLocked(), // 0.48: nothing to change on Hard/Insane
     safeShare: sim.civN ? (c.safe + sim.evacuated) / sim.civN : 0, hordeAnnounced: tutTrack.horde,
     stepT: !tut ? 0 : sim.phase === "battle" ? sim.time - tut.ts0 : (performance.now() - tut.t0) / 1000 }; // battle steps count game time (pausing stops them)
 }
@@ -552,7 +582,7 @@ function playCityNow(c: C.CityDef | null, seedOverride?: number) {
   if (!needsTimePick(!!tut, false)) startMin = 600;
   sim.setStartTime(startMin); // 0.40 (the picker re-places when a time is chosen)
   Object.assign(perf, new Perf()); // perf numbers cover play time only
-  draft = []; speed = 1; tipGates = false; lastWave = 0; warnedWave = -1; warnShown = false; outbreakShown = false; xpGiven = 0; roundShown = false;
+  draft = []; pings = []; speed = 1; tipGates = false; lastWave = 0; warnedWave = -1; warnShown = false; outbreakShown = false; xpGiven = 0; roundShown = false;
   showRanges = save.settings.showRanges;
   resize(); buildBase(); buildZone(); fitCamera();
   $("end").hidden = true;
@@ -635,15 +665,19 @@ function playDaily() {
 
 function pause() {
   if (mode !== "game") return;
+  codexBack = null;
   openPicker(null);
   log("info", "pause", { phase: sim.phase, t: +sim.time.toFixed(1) });
-  speed = 0; refreshUi();
+  if (!speedLocked()) speed = 0; // 0.48: on Hard/Insane the menu opens but the battle carries on
+  refreshUi();
   $("p-tutorial").hidden = !(city && city === C.CITIES[0] && !dailyDate); // 0.35
   stack.length = 0; go("pause");
 }
 function resume() {
   stack.length = 0; show(null);
-  if (sim.phase === "battle") speed = pausedSpeed || 1;
+  if (sim.phase === "battle") speed = battleSpeed();
+  if (codexBack?.cat) openPicker(codexBack.cat);
+  codexBack = null;
   refreshUi();
 }
 
@@ -685,6 +719,7 @@ function recordResult(r: Score) {
   // 0.20: pct holds the round score (0..100); old entries were "% evacuated" and only go when beaten
   save.best[key] = mergeBest(prev, r.score, r.medal ?? null); // never drops a medal (final review #1)
   if (r.mayhem !== undefined && r.mayhem > (save.best[key].mayhem ?? -1)) save.best[key] = { ...save.best[key], mayhem: r.mayhem };
+  save.best[key] = mergeEfficiency(save.best[key], r.perM, r.underBudget); // 0.48
   Save.store(save);
 }
 
@@ -752,8 +787,8 @@ function setTool(t: Tool) {
     gunboat: "Click the river. The gunboat patrols the water near where you put it and shoots crowds by the banks. Infected can't reach it.",
     zone: "Click corners of your safe zone. Click the first corner (or press Enter) to close it. Esc cancels.",
     gate: "Click a crossing to switch gate (blue: civilians get in, weaker) / wall (white: nobody gets in, stronger). In battle you can still close gates.",
-    garrison: "Click a building. Garrisons fire fast at short range.",
-    sniper: "Click a building. Taller buildings give snipers more range (press J to see heights).",
+    garrison: "Click a roof (they fortify there) or a street in your zone. Troops fire fast at short range. In battle they deploy from the zone.",
+    sniper: "Click a roof (they fortify there) or a street in your zone. Taller buildings give snipers more range (press J to see heights). In battle they deploy from the zone.",
     turret: "Click a street. Turrets fire very fast but never reload.",
     remove: "Planning: click a unit or support building to remove it for a full refund (or select it with Move/Aim and press Delete). Battle: it stops working and is pulled out after a while, then refunds.",
     battleship: "Click the river. A slow, heavy warship whose guns shell crowds far inland. Set its target (Move map, click it) to cover your walls or civilians on the run.",
@@ -794,15 +829,17 @@ function click(cx: number, cy: number) {
   if (tool === "pan") {
     if (armedCmd) { aimArmed(cx, cy); return; } // 0.45: A/P/E then click
     const hit = sim.entityAt(cx, cy); // 0.44: clicking a unit selects it (T changes its targeting, Delete removes it)
+    selSoldier = sim.soldierAt(cx, cy)?.soldier ?? null; // 0.49: and a soldier's dot shows their card
     const add = keys.has("shift");
     if (hit) {
       const same = (e: Entity) => entObj(e) === entObj(hit);
       sel = add ? (sel.some(same) ? sel.filter(e => !same(e)) : [...sel, hit]) : [hit];
-      renderSelbar(); return;
+      selZone = -1; renderSelbar(); return;
     }
-    if (!add) { sel = []; renderSelbar(); }
+    if (!add) { sel = []; selZone = -1; renderSelbar(); }
     const k = sim.civAt(cx, cy, Math.max(0.6, 8 / cam.scale)); // 0.39: click a white dot to see who they are
-    if (k >= 0) selectPerson(k);
+    if (k >= 0) { selectPerson(k); return; }
+    if (!add && x >= 0 && y >= 0 && x < sim.w && y < sim.h && sim.inZone[sim.idx(x, y)] === 1) { selZone = sim.zoneAt(x, y); renderSelbar(); } // 0.50: open zone ground selects the zone
     return;
   }
   if (tool === "order") {
@@ -848,6 +885,7 @@ function click(cx: number, cy: number) {
     }
     case "garrison": case "sniper": case "turret": case "mortar": case "howitzer": case "apc": case "gunboat": case "battleship": case "himars": case "tank": case "apache": case "reaper": {
       const placedTip = () => { tip("targeting"); if (tool === "apc" || tool === "tank" || tool === "gunboat") tip("mobile"); }; // 0.41
+      if (!planning && (tool === "garrison" || tool === "sniper")) { const e = sim.placeTroopsAt(tool, x, y); if (e) say(e); else { placedTip(); say(`${C.UNITS[tool].name} deploying at the zone (${C.UNITS[tool].deploy} s)${sim.map.tile[sim.idx(x, y)] === BUILDING ? ", then off to fortify that roof" : ""}.`, 2500); log("info", "bought-in-battle", { kind: tool, x, y, left: sim.remaining() }); } break; } // 0.50 review I6
       if (!planning) { const e = sim.place(tool, x, y); if (e) say(e); else { placedTip(); say(`${C.UNITS[tool].name} deploying (${C.UNITS[tool].deploy} s).`, 2000); log("info", "bought-in-battle", { kind: tool, x, y, left: sim.remaining() }); } break; } const e = sim.place(tool, x, y); if (e) say(e); else placedTip(); break; }
     case "evac": case "budget": case "repair": case "radio": case "supply": case "command": case "police": case "militia": {
       const e = sim.placeSupport(tool, x, y);
@@ -940,6 +978,28 @@ function minimap(now: number) {
   }
   drawMinimap(miniCtx, sim, baseImg, zoneImg, cam, { w: canvas.width, h: canvas.height });
 }
+// 0.48: minimap alerts (all difficulties). The sim throttles per area; the blip is throttled again here.
+const miniPings = $<HTMLCanvasElement>("minipings"), pingCtx = miniPings.getContext("2d")!;
+let pings: Ping[] = [], lastBlip = -1e9;
+function stepPings() {
+  if (mode !== "game") { sim.pingLog.length = 0; return; }
+  let urgent = false;
+  while (sim.pingLog.length) { const p = sim.pingLog.shift()!; pings.push(p); if (p.kind !== "bite" && p.kind !== "wall") urgent = true; }
+  pings = pings.filter(p => sim.time - p.t < C.PING_LIFE_S);
+  if (pings.length > 40) pings = pings.slice(-40);
+  if (urgent && performance.now() - lastBlip > 3000) { lastBlip = performance.now(); snd.play(["radio-1", "radio-2", "radio-3"], 0, 0.22, 0.04); }
+  const show = !mini.hidden;
+  if (miniPings.hidden === show) miniPings.hidden = !show;
+  if (!show) return;
+  if (miniPings.width !== mini.width || miniPings.height !== mini.height) { miniPings.width = mini.width; miniPings.height = mini.height; miniPings.style.width = mini.style.width; miniPings.style.height = mini.style.height; }
+  drawPings(pingCtx, pings, sim.time, C.PING_LIFE_S, sim.w, sim.h, devicePixelRatio);
+}
+/** F: jump the camera to the most urgent live alert. */
+function jumpToPing() {
+  const p = pickPing(pings, sim.time, C.PING_LIFE_S);
+  if (!p) { say("No alerts right now.", 1500); return; }
+  following = false; centerOn(p.x, p.y); miniT = 0;
+}
 function miniCell(e: PointerEvent | MouseEvent): [number, number] {
   const r = mini.getBoundingClientRect();
   return miniToWorld((e.clientX - r.left) * (mini.width / r.width), (e.clientY - r.top) * (mini.height / r.height), mini.width, mini.height, sim.w, sim.h);
@@ -961,14 +1021,24 @@ function boxSelect(b: [number, number, number, number]) {
   const s = cam.scale, inside: Entity[] = [];
   for (const u of sim.units) {
     if (!sim.canOrder(u) || (u.deployT && u.deployT > 0)) continue;
-    const px = cam.x + (u.x + 0.5) * s, py = cam.y + (u.y + 0.5) * s;
-    if (px >= x0 && px <= x1 && py >= y0 && py <= y1) inside.push({ unit: u });
+    const pts = u.soldiers ? u.soldiers.filter(so => so.alive).map(so => [so.x, so.y]) : [[u.x + 0.5, u.y + 0.5]]; // 0.50: any soldier of a squad
+    if (pts.some(([ux, uy]) => { const px = cam.x + ux * s, py = cam.y + uy * s; return px >= x0 && px <= x1 && py >= y0 && py <= y1; })) inside.push({ unit: u });
   }
   if (keys.has("shift")) { for (const e of inside) if (!sel.some(x => "unit" in x && "unit" in e && x.unit === e.unit)) sel.push(e); }
   else sel = inside;
-  if (inside.length) { closePerson(); tip("orders"); }
+  if (inside.length) { selZone = -1; closePerson(); tip("orders"); }
   renderSelbar();
 }
+canvas.addEventListener("dblclick", () => { // 0.50: every unit of that kind on screen
+  if (mode !== "game" || tool !== "pan" || !hover) return;
+  const hit = sim.entityAt(hover[0], hover[1]);
+  if (!hit || !("unit" in hit)) return;
+  const kind = hit.unit.kind, s = cam.scale;
+  sel = sim.units.filter(u => u.kind === kind && sim.groupAlive(u) && !(u.deployT && u.deployT > 0)).filter(u => {
+    const px = cam.x + (u.x + 0.5) * s, py = cam.y + (u.y + 0.5) * s; return px >= 0 && py >= 0 && px <= canvas.width && py <= canvas.height;
+  }).map(u => ({ unit: u }));
+  selZone = -1; renderSelbar();
+});
 canvas.addEventListener("pointerleave", () => { if (!drag) hover = null; }); // 0.44: the cursor label goes when the pointer leaves the map
 canvas.addEventListener("pointerup", e => {
   if (box) { boxSelect(box); box = null; }
@@ -993,11 +1063,13 @@ const keys = new Set<string>();
 let loggedEjects = 0;
 const QUICK_KEYS = ["z", "x", "c", "v", "b", "n", "m"]; // quick bar slots 1-7 (0.22)
 addEventListener("keydown", e => {
-  keys.add(e.key.toLowerCase());
   const k = e.key;
+  if (typingInField(e.target) && k !== "Escape" && !/^F\d+$/.test(k)) return; // 0.47.1: typing in a search box is not WASD
+  keys.add(k.toLowerCase());
   if (k === "F10") { e.preventDefault(); toggleDevPanel(); return; }
   if (k === "F11") { e.preventDefault(); save.settings.fullscreen = !save.settings.fullscreen; Save.store(save); applyFullscreen(); return; }
   if (k === "F5") { e.preventDefault(); void saveGame(); return; } // 0.33: quick save
+  if (k === "F1" || k === "F2" || k === "F3") { e.preventDefault(); if (mode === "game" && !stack.length) setSpeed(k === "F1" ? 0.5 : k === "F2" ? 1 : 2); return; } // 0.50: speed moved off 1/2/3
   if (k === "Escape") {
     if (stack.length) { const top = stack[stack.length - 1]; if (top !== "title" && !(top === "slots" && !Save.activeSlot())) back(); return; }
     if (mode === "game" && pickerCat) { openPicker(null); return; }
@@ -1014,22 +1086,29 @@ addEventListener("keydown", e => {
   if (tgt && (tgt.tagName === "INPUT" || tgt.tagName === "TEXTAREA" || tgt.tagName === "SELECT")) return; // 0.44: typing is not a command
   if ((k === "Delete" || k === "Backspace") && sel.length) { e.preventDefault(); removeSelected(); return; }
   if ((k === "t" || k === "T") && sel.length && !e.ctrlKey && !e.altKey && !e.metaKey) { cycleSelected(); return; }
+  { const gi = groupIntent(e.code, { shift: e.shiftKey, ctrl: e.ctrlKey || e.metaKey, alt: e.altKey }); // 0.50: battle groups
+    if (gi) { e.preventDefault(); runGroup(gi); return; } }
   { const it = keyIntent(k, { shift: e.shiftKey, ctrl: e.ctrlKey || e.metaKey, alt: e.altKey }, orderable().length > 0); // 0.45
     if (it) { e.preventDefault(); runIntent(it); return; } }
-  if (k === " ") { e.preventDefault(); if (sim.phase === "battle") setSpeed(speed ? 0 : pausedSpeed); }
+  if (k === " ") { e.preventDefault(); if (sim.phase === "battle") setSpeed(speed ? 0 : battleSpeed()); }
+  else if ((k === "f" || k === "F") && sim.phase === "battle" && !e.ctrlKey && !e.metaKey && !e.altKey) jumpToPing(); // 0.48
+  else if ((k === "u" || k === "U") && !e.ctrlKey && !e.metaKey && !e.altKey && sel.length) topUpSelected(); // 0.49
   else if (k === "j" || k === "J") showHeights = !showHeights; // 0.22: V went to the quick bar
   else if (k === "g" || k === "G") setTool("gate"); // 0.41: the Gate tool's key (shown on its button)
   else if (k === "r" || k === "R") showRanges = !showRanges;
   else if (k === "h" || k === "H") { showHeatmap = !showHeatmap; refreshUi(); }
   else if (k === "Enter" && tool === "zone" && draft.length) closeDraft();
-  else if (k === "1") setSpeed(0.5); else if (k === "2") setSpeed(1); else if (k === "3") setSpeed(2); // 0.30.1: half, real time, 2x
   else if (k === "q" || k === "Q") $("recall").click();
   else if (k === "l" || k === "L") $("closegates").click(); else if (k === "k" || k === "K") $("clear").click();
   else if (!e.ctrlKey && !e.metaKey && !e.altKey && QUICK_KEYS.includes(k.toLowerCase())) useSlot(QUICK_KEYS.indexOf(k.toLowerCase())); // 0.22: 7 quick bar keys
 });
 addEventListener("keyup", e => keys.delete(e.key.toLowerCase()));
 
-function setSpeed(s: number) {
+/** 0.48: Hard and Insane lock the clock once the battle starts (no pause, 1x) until the round is scored. */
+function speedLocked() { return mode === "game" && sim.phase === "battle" && sim.diff.noPause && !sim.roundResult; }
+function battleSpeed() { return speedLocked() ? 1 : pausedSpeed || 1; }
+function setSpeed(s: number, dev = false) {
+  if (speedLocked() && !dev && s !== 1) { say(`${sim.diff.name}: the battle runs in real time. No pause, no speed change.`, 2500); s = 1; }
   if (sim.phase === "battle" && s !== speed) tutTrack.speed = true; // 0.41
   speed = s === 4 ? 2 : s;
   if (speed === 0.5 || speed === 1 || speed === 2) { if (pausedSpeed !== speed) { pausedSpeed = speed; if (mode === "game") { save.settings.speed = speed; Save.store(save); } } }
@@ -1042,7 +1121,8 @@ function startBattle() {
   if (draft.length) { say("Finish or cancel (Esc) the zone you're drawing first."); return; }
   const planKey = dailyDate ? `daily:${dailyDate}` : city ? city.id : null;
   if (planKey) { save.plans[planKey] = exportPlan(); Save.store(save); }
-  sim.startBattle(); speed = pausedSpeed; setTool("pan"); refreshUi(); tip("views"); // 0.41
+  if (sim.units.filter(u => sim.canOrder(u)).length >= 2) tip("groups"); // 0.50
+  sim.startBattle(); speed = battleSpeed(); setTool("pan"); refreshUi(); tip("views"); // 0.41
   if (sim.classKids > 0) notify("Schools are walking their students to your safe zone. Parents: meet your kids there.", false, sim.time + 30); // 0.41 (Insane school day)
   snd.music("battle");
   log("info", "battle-start", { ...cityTag(), ...planSummary(), sites: sim.sites.map(([x, y]) => [Math.round(x), Math.round(y)]) });
@@ -1066,7 +1146,9 @@ function refreshUi() {
   for (const k of C.BUILDABLE) $(`cost-${k}`).textContent = C.money(sim.unitCost(k));
   for (const k of C.SUPPORT_KINDS) $(`cost-${k}`).textContent = C.money(sim.supportCost(k));
   document.querySelectorAll<HTMLButtonElement>("[data-speed]").forEach(b => {
-    b.disabled = planning; b.classList.toggle("on", !planning && Number(b.dataset.speed) === speed);
+    const lockOut = speedLocked() && Number(b.dataset.speed) !== 1; // 0.48: Hard/Insane, real time only
+    b.disabled = planning || lockOut; b.classList.toggle("on", !planning && Number(b.dataset.speed) === speed);
+    b.title = lockOut ? `${sim.diff.name}: no pause or speed change in battle` : b.dataset.speed === "0" ? "Space" : b.dataset.speed === "0.5" ? "1" : b.dataset.speed === "1" ? "2" : "3";
   });
   document.querySelectorAll<HTMLButtonElement>("[data-tool]").forEach(b => {
     const t = b.dataset.tool as Tool;
@@ -1076,7 +1158,7 @@ function refreshUi() {
     else if (t === "remove") b.disabled = sim.phase === "over";
     else if (t !== "pan" && t !== "gate") b.disabled = sim.phase === "over";
   });
-  for (const k of ABILITY_KINDS) $(`n-${k}`).textContent = `${C.money(C.ABILITIES[k].cost)}${sim.charges[k] ? ` ×${sim.charges[k]}` : ` (${C.ABILITIES[k].max - sim.bought[k]})`}`;
+  for (const k of ABILITY_KINDS) $(`n-${k}`).textContent = `${C.money(sim.abilityCost(k))}${sim.charges[k] ? ` ×${sim.charges[k]}` : ` (${C.ABILITIES[k].max - sim.bought[k]})`}`;
   document.querySelectorAll<HTMLButtonElement>("[data-tool]").forEach(b => {
     const t = b.dataset.tool!, lock = !isOpen(t);
     b.classList.toggle("locked", lock);
@@ -1101,6 +1183,7 @@ function routeNames(ids: number[]) {
 const SIREN_S = 6; // the warning siren sounds this long at battle start, then fades
 let tipGates = false, lastWave = 0, warnedWave = -1, lastBreaches = 0, lastEarned = 0, lastAlarm = 0;
 function hud(now: number) {
+  if (sel.length && now - selbarT > 250) { selbarT = now; if (sel.some(e => "unit" in e && e.unit.soldiers)) renderSelbar(); } // 0.49: squad strength and the soldier card stay live
   if (mode !== "game" || now - lastHud < 200) return;
   lastHud = now;
   runTicker(); // picks up alerts queued while the strip was hidden
@@ -1123,6 +1206,7 @@ function hud(now: number) {
     (sim.phase === "battle" && sim.outbreak && !sim.roundDone ? `<button class="endround" data-act="endround" title="Score the round now: people in the zone count as saved, the rest are left behind">End round</button>` : "");
   $("budget").textContent = C.money(sim.remaining());
   if (sim.phase === "battle" && sim.lastIncome) $("budget").textContent += `  +${C.money(sim.lastIncome)}/10s`;
+  if (sim.phase === "battle" && sim.lastUpkeep) $("budget").textContent += `  −${C.money(sim.lastUpkeep)} ops`; // 0.48: Insane upkeep
   if (tool === "zone" && draft.length) $("budget").textContent += `  (zone ≈ ${C.money(draftCost())})`;
   while (sim.orderLog.length) say(sim.orderLog.shift()!, 3000); // 0.45
   while (sim.soldLog.length) { const k = sim.soldLog.shift()!; const name = (C.UNITS[k as C.UnitKind] ?? C.SUPPORTS[k as C.SupportKind]).name; say(`${name} pulled out. Money refunded.`, 3000); log("info", "unit-sold", { kind: k, money: sim.remaining() }); }
@@ -1161,6 +1245,8 @@ function hud(now: number) {
 }
 
 let roundShown = false;
+/** 0.48: people saved per $1M, readable at any size (0.4, 12, 1,250). */
+function fmtPerM(v: number) { return v < 10 ? v.toFixed(1) : Math.round(v).toLocaleString(); }
 function showEnd(r: Score, round: boolean) {
   openPicker(null);
   $("end-round-row").hidden = !round; $("end-final-row").hidden = round;
@@ -1184,7 +1270,9 @@ function showEnd(r: Score, round: boolean) {
   $("end-tiers").textContent = C.MEDALS.map(([n, p]) => `${n} ${p}`).join("  ·  ") + ` points (needs ${C.MEDAL_MIN_SAVED_PCT}% saved)`;
   recordResult(r);
   const rk = P.rankFor(save.xp ?? 0);
-  $("end-xp").textContent = `Damage bill ${C.money(r.damage)} · spent ${C.money(r.spent)} · city ${r.intact.toFixed(0)}% intact${r.bonus ? ` · ${r.bonus} bonus +${C.BONUS_XP} XP` : ""} · ${round ? "this round" : "this battle"} +${r.xp.toLocaleString()} XP · ${rk.name}, ${(save.xp ?? 0).toLocaleString()} XP${rk.next ? ` (${rk.next[0]} at ${rk.next[1].toLocaleString()})` : ""}${lastNews ? ` · ${lastNews}` : ""}`;
+  const effBest = city && !dailyDate ? save.best[bestKey(city.id, sim.difficulty)]?.perM : undefined; // recordResult ran: includes this run
+  const eff = r.perM !== undefined ? ` · ${fmtPerM(r.perM)} saved per $1M${effBest !== undefined && effBest > r.perM + 1e-9 ? ` (best ${fmtPerM(effBest)})` : effBest !== undefined ? " (best)" : ""}${r.underBudget ? " · Under Budget" : ""}` : "";
+  $("end-xp").textContent = `Damage bill ${C.money(r.damage)} · spent ${C.money(r.spent)}${eff} · city ${r.intact.toFixed(0)}% intact${r.bonus ? ` · ${r.bonus} bonus +${C.BONUS_XP} XP` : ""} · ${round ? "this round" : "this battle"} +${r.xp.toLocaleString()} XP · ${rk.name}, ${(save.xp ?? 0).toLocaleString()} XP${rk.next ? ` (${rk.next[0]} at ${rk.next[1].toLocaleString()})` : ""}${lastNews ? ` · ${lastNews}` : ""}`;
   snd.fanfare(!!r.medal);
   if (round) { $("end").hidden = false; log("info", "round-complete", { ...cityTag(), ...r, t: +sim.time.toFixed(1) }); refreshUi(); return; }
   log("info", "battle-end", { ...cityTag(), ...r, t: +sim.time.toFixed(1), evacuated: sim.evacuated, byTrain: sim.trainsEvacuated, lifts: sim.liftsFlown, liftsAborted: sim.liftsAborted, kills: sim.kills, swimmersKilled: sim.swimmersKilled, breaches: sim.breaches, waves: sim.wave, civKilledByUs: sim.civKilledByUs, abilitiesLeft: { ...sim.charges }, bridgesBlown: sim.blown.size, unitKills: [...by].map(([k, [n, kl]]) => `${k}x${n}:${kl}`) });
@@ -1548,7 +1636,8 @@ function draw(now: number) {
     if (model || squad) {
       if (hov) { ctx.strokeStyle = spec.color; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.arc(px, py, r * 1.6, 0, 7); ctx.stroke(); }
       if (model) drawModel(ctx, u, px, py, s, frameDt, now);
-      else drawSquad(ctx, u, px, py, s, u.ammo >= 1 ? spec.color : "#777", frameDt, sim.time);
+      else drawSquad(ctx, u, px, py, s, u.ammo >= 1 ? spec.color : "#777", frameDt, sim.time,
+        u.soldiers?.filter(so => so.alive).map(so => [cam.x + so.x * s, cam.y + so.y * s] as [number, number])); // 0.49
     } else if (uSp) { // zoomed out: the sprite icon, kept big enough to read
       const sz = Math.max(7, r) * (u.kind === "battleship" ? 2.5 : u.kind === "gunboat" || u.kind === "apc" || u.kind === "howitzer" ? 2.15 : 1.9);
       ctx.fillStyle = "rgba(10,15,24,0.82)";
@@ -1615,7 +1704,7 @@ function draw(now: number) {
     ctx.strokeStyle = ok ? spec.color : "#ff4444"; ctx.setLineDash([4, 4]);
     ctx.beginPath(); ctx.arc(cam.x + (hx + 0.5) * s, cam.y + (hy + 0.5) * s, range * s, 0, 7); ctx.stroke();
     ctx.setLineDash([]);
-    label(`${spec.name} ${C.money(cost)}${cost < spec.cost ? " (-20%)" : ""} · ${Math.round(range * C.CELL_M)} m${lvl ? ` · ${lvl} floors` : ""}`, cam.x + (hx + 1) * s + 8, cam.y + hy * s);
+    label(`${spec.name} ${C.money(cost)}${sim.hasActiveSupport("budget", hx, hy) ? " (-20%)" : ""} · ${Math.round(range * C.CELL_M)} m${lvl ? ` · ${lvl} floors` : ""}`, cam.x + (hx + 1) * s + 8, cam.y + hy * s);
   } else if (hover && sim.phase !== "over" && isSupport(tool)) {
     const kind = tool;
     const [hx, hy] = [Math.floor(hover[0]), Math.floor(hover[1])];
@@ -1626,7 +1715,7 @@ function draw(now: number) {
     ctx.strokeStyle = ok ? spec.color : "#ff4444"; ctx.setLineDash([6, 4]);
     ctx.beginPath(); ctx.arc(cam.x + (hx + 0.5) * s, cam.y + (hy + 0.5) * s, spec.radius * s, 0, 7); ctx.stroke();
     ctx.setLineDash([]);
-    label(`${spec.name} ${C.money(cost)}${cost < spec.cost ? " (-20%)" : ""} · radius ${Math.round(spec.radius * C.CELL_M)} m`, cam.x + (hx + 1) * s + 8, cam.y + hy * s);
+    label(`${spec.name} ${C.money(cost)}${kind !== "budget" && sim.hasActiveSupport("budget", hx, hy) ? " (-20%)" : ""} · radius ${Math.round(spec.radius * C.CELL_M)} m`, cam.x + (hx + 1) * s + 8, cam.y + hy * s);
   }
 
   // Aiming an ability.
@@ -1672,6 +1761,7 @@ function draw(now: number) {
     ctx.fillStyle = "#7CFC9A";
     for (const [x, y] of draft) { ctx.beginPath(); ctx.arc(cam.x + x * s, cam.y + y * s, 4, 0, 7); ctx.fill(); }
   }
+  drawSoldierDots(s); // 0.49
   drawSelection(s);
   drawCursorInfo(s);
 }
@@ -1750,7 +1840,53 @@ function aimArmed(cx: number, cy: number) {
   if (!queue) armedCmd = null; // Shift keeps it armed for the next point
   renderSelbar();
 }
-/** 0.45: right-click with units selected: move there (Shift adds it to their queue). */
+/** 0.50: the group bar (1-0, bottom right above the bottom bar, design ruling): each slot shows its main unit, how many are left and their health, or its zone. */
+const GROUP_SHORT: Record<string, string> = { para: "Para", battleship: "Ship", howitzer: "Howitzer" }; // names too long for a slot
+const MOCK_GROUPS = new URLSearchParams(location.search).get("mock") === "groupbar"; // design mockup only
+function renderGroupbar() {
+  const bar = $("groupbar");
+  const show = mode === "game";
+  bar.hidden = !show;
+  if (!show) return;
+  const selUnits = new Set(sel.flatMap(e => "unit" in e ? [e.unit] : []));
+  bar.querySelectorAll<HTMLButtonElement>(".gslot").forEach((b, n) => {
+    const key = b.dataset.key!;
+    const sm = MOCK_GROUPS ? ([{ kind: "garrison", count: 4, health: 1 }, { kind: "garrison", count: 3, health: 0.62 }, { kind: "sniper", count: 2, health: 1 }, { kind: "apc", count: 2, health: 0.35 }, { zone: 0 }, null, { kind: "para", count: 5, health: 0.9 }, null, null, null] as ReturnType<typeof groupSummary>[])[n]
+      : groupSummary(sim.groups[n], u => sim.groupAlive(u), u => { const sp = C.UNITS[u.kind]; return sp.mobile?.hp ?? sp.hp ?? 1; });
+    const g = sim.groups[n], picked = !MOCK_GROUPS && g && "units" in g && g.units.some(u => selUnits.has(u)) || (!MOCK_GROUPS && g && "zone" in g && selZone === g.zone);
+    const label = !sm ? "" : "zone" in sm ? `Zone ${sm.zone + 1}` : (GROUP_SHORT[sm.kind] ?? (C.UNITS[sm.kind as C.UnitKind]?.name ?? sm.kind).split(" ")[0]).slice(0, 8);
+    const html = `<span class="gk">${key}</span>${sm && !("zone" in sm) ? `<span class="gn">${sm.count}</span>` : ""}<span class="gi">${label}</span>${sm && !("zone" in sm) ? `<span class="gh"><i style="width:${Math.round(sm.health * 100)}%;background:${sm.health > 0.6 ? "#4ade80" : sm.health > 0.3 ? "#fbbf24" : "#f87171"}"></i></span>` : ""}`;
+    if (b.innerHTML !== html) b.innerHTML = html;
+    b.classList.toggle("on", !!sm); b.classList.toggle("sel", !!picked);
+    b.title = sm ? `Group ${key}: click selects, double-click jumps there (Ctrl+${key} saves the selection here)` : `Empty: select units or a zone, then Ctrl+${key}`;
+  });
+}
+/** 0.50: battle-group keys. */
+function runGroup(gi: { k: "assign" | "add" | "select" | "addsel"; n: number }) {
+  const key = gi.n === 9 ? "0" : String(gi.n + 1);
+  if (gi.k === "assign" || gi.k === "add") {
+    sim.groups = assignGroup(sim.groups, gi.n, sel, selZone, gi.k === "add");
+    const g = sim.groups[gi.n];
+    say(!g ? `Group ${key} cleared.` : "zone" in g ? `Safe zone ${g.zone + 1} is on ${key}.` : `Group ${key}: ${g.units.length} unit${g.units.length > 1 ? "s" : ""}.`, 1600);
+    renderSelbar(); renderGroupbar(); return;
+  }
+  const g = sim.groups[gi.n], now = performance.now(), twice = lastGroupKey.n === gi.n && now - lastGroupKey.t < 350;
+  lastGroupKey = { n: gi.n, t: now };
+  if (!g) return;
+  if ("zone" in g) {
+    if (gi.k === "select") { sel = []; selZone = g.zone; }
+    if (twice && sim.zones[g.zone]) { const p = sim.zones[g.zone]; centerOn(p.reduce((a, q) => a + q[0], 0) / p.length, p.reduce((a, q) => a + q[1], 0) / p.length); following = false; }
+    renderSelbar(); return;
+  }
+  const us = groupUnits(sim.groups, gi.n, u => sim.groupAlive(u));
+  const ents: Entity[] = us.map(u => ({ unit: u }));
+  sel = gi.k === "addsel" ? [...sel, ...ents.filter(e => !sel.some(x => "unit" in x && x.unit === (e as { unit: import("./sim").Unit }).unit))] : ents;
+  selZone = -1; closePerson();
+  if (twice && us.length) { centerOn(us.reduce((a, u) => a + u.x + 0.5, 0) / us.length, us.reduce((a, u) => a + u.y + 0.5, 0) / us.length); following = false; }
+  renderSelbar();
+}
+/** 0.45: right-click with units selected: move there (Shift adds it to their queue). 0.50: Troops/Snipers sent to a
+ *  roof fortify it; a fortified squad sent to a street comes down first, then goes. */
 function moveOrder(cx: number, cy: number) {
   const us = orderable(), os = selOrbits();
   if (os.length) { // 0.46: the selected AC-130s fly over to circle the new spot
@@ -1759,12 +1895,35 @@ function moveOrder(cx: number, cy: number) {
     if (why) say(why); else { snd.radio(); say(sim.redeployNote(os[0]), 3000); log("info", "gunship-move", { n: os.length, x: Math.floor(cx), y: Math.floor(cy) }); }
   }
   if (!us.length) return;
-  const e = sim.issueGroup(us, { k: "move", x: cx, y: cy }, keys.has("shift"));
-  if (e) say(e); else log("info", "order", { k: "move", n: us.length, x: Math.floor(cx), y: Math.floor(cy), queue: keys.has("shift") });
+  const x = Math.floor(cx), y = Math.floor(cy), roof = x >= 0 && y >= 0 && x < sim.w && y < sim.h && sim.map.tile[sim.idx(x, y)] === BUILDING;
+  const troop = (u: import("./sim").Unit) => u.kind === "garrison" || u.kind === "sniper";
+  let rest = us;
+  if (roof) { // 0.50: fortify that building (one squad of a kind per building: the rest get "per building")
+    let why: string | null = null, ok = 0;
+    for (const u of us.filter(troop)) { const err = sim.issue(u, { k: "fortify", x, y }, false); if (err) why = err; else ok++; }
+    rest = us.filter(u => !troop(u));
+    if (!rest.length) { if (why && !ok) say(why); else log("info", "order", { k: "fortify", n: ok, x, y }); return; }
+  } // a fortified squad given a street comes down first, then goes (Sim.issue does both)
+  const e = sim.issueGroup(rest, { k: "move", x: cx, y: cy }, keys.has("shift"));
+  if (e) say(e); else log("info", "order", { k: "move", n: rest.length, x: Math.floor(cx), y: Math.floor(cy), queue: keys.has("shift") });
 }
 /** The small bar for the selection: names, targeting (T), unit commands, remove/pull out (Del). */
+/** 0.49: replace a lost soldier in each selected squad (one per press). */
+function topUpSelected() {
+  let done = 0, why = "";
+  for (const e of sel) if ("unit" in e && e.unit.soldiers) { const err = sim.topUp(e.unit); if (err) why = err; else done++; }
+  say(done ? `${done > 1 ? `${done} squads` : "Squad"} topped up.` : why || "Select a squad.", 1800);
+  refreshUi(); renderSelbar();
+}
 function renderSelbar() {
+  renderGroupbar(); // 0.50: highlights the selected group
   const bar = $("selbar");
+  if (!sel.length && selZone >= 0 && mode === "game" && sim.zones[selZone]) { // 0.50: a selected safe zone
+    const buy = sim.phase === "battle" ? `<button data-sel="buytroops">Buy Troops here ${C.money(sim.unitCost("garrison"))}</button><button data-sel="buysniper">Buy Sniper team here ${C.money(sim.unitCost("sniper"))}</button>` : "";
+    const html = `<b>Safe zone ${selZone + 1}</b> <span class="hk">Ctrl+1-0 makes it a group key</span>${buy}`;
+    if (bar.innerHTML !== html) bar.innerHTML = html;
+    bar.hidden = false; return;
+  }
   if (!sel.length || mode !== "game") { bar.hidden = true; return; }
   const us = orderable();
   const first = sel[0];
@@ -1774,11 +1933,26 @@ function renderSelbar() {
   const del = onlyAir ? (os.every(o => !o.arrived) ? "Cancel (charge back)" : "Send home") : sim.phase === "plan" ? "Remove" : "Pull out";
   const cmds = us.length ? [["amove", "Attack-move", "A"], ["patrol", "Patrol", "P"], ["escort", "Escort", "E"], ["stop", "Stop", "S"], ["standby", "Stand by", "D"]]
     .map(([k, l, h]) => `<button data-sel="${k}"${armedCmd === k || (k === "standby" && us.every(u => u.standby)) ? ' class="on"' : ""}>${l} <span class="hk">${h}</span></button>`).join("") : "";
-  const html = `<b>${name}</b>${os.length ? ` <span class="hk">Move: right-click</span>` : ""}${armedU ? `<button data-sel="target">Target: ${C.TARGET_LABEL[armedU.unit.mode ?? "near"]} <span class="hk">T</span></button>` : ""}${cmds}${sim.phase === "over" ? "" : `<button data-sel="remove">${del} <span class="hk">Del</span></button>`}`;
+  const sq = sel.length === 1 && "unit" in first && first.unit.soldiers ? first.unit : null; // 0.49: a squad
+  const card = sq && selSoldier && sq.soldiers!.includes(selSoldier) && selSoldier.alive ? soldierCardLines(sq.kind, sq.soldiers!, selSoldier) : null;
+  const strength = sq ? ` <span class="hk">${card ? card.join(" · ") : `Squad ${sq.soldiers!.filter(so => so.alive).length}/${sq.soldiers!.length}`}</span>` : "";
+  const topUp = sq && sim.phase === "battle" && sq.soldiers!.some(so => !so.alive) ? `<button data-sel="topup">Top up ${C.money(Math.round((sq.squadPaid ?? sq.paid ?? 0) / sq.soldiers!.length))} <span class="hk">U</span></button>` : "";
+  const html = `<b>${name}</b>${strength}${topUp}${os.length ? ` <span class="hk">Move: right-click</span>` : ""}${armedU ? `<button data-sel="target">Target: ${C.TARGET_LABEL[armedU.unit.mode ?? "near"]} <span class="hk">T</span></button>` : ""}${cmds}${sim.phase === "over" ? "" : `<button data-sel="remove">${del} <span class="hk">Del</span></button>`}`;
   if (bar.innerHTML !== html) bar.innerHTML = html;
   bar.hidden = false;
 }
 const ORDER_COLOR: Record<string, string> = { move: "#80cbc4", amove: "#f87171", patrol: "#fbbf24", escort: "#86efac" };
+/** 0.49: every soldier is a dot in the crowd: green soldiers, yellow snipers (zoomed-in models draw on top). */
+function drawSoldierDots(s: number) {
+  const r = Math.max(1.4, s * 0.32);
+  for (const u of sim.units) {
+    if (!u.soldiers || (hasSquad(u.kind) && s >= SQUAD_ZOOM)) continue;
+    ctx.fillStyle = u.kind === "sniper" ? C.SNIPER_COLOR : C.SOLDIER_COLOR;
+    ctx.globalAlpha = (u.deployT && u.deployT > 0) || u.extractT !== undefined ? 0.45 : 1;
+    for (const so of u.soldiers) if (so.alive) { ctx.beginPath(); ctx.arc(cam.x + so.x * s, cam.y + so.y * s, r, 0, 7); ctx.fill(); }
+  }
+  ctx.globalAlpha = 1;
+}
 function drawSelection(s: number) {
   if (box) { ctx.strokeStyle = "#80cbc4"; ctx.lineWidth = 1.5; ctx.setLineDash([5, 4]); ctx.strokeRect(Math.min(box[0], box[2]), Math.min(box[1], box[3]), Math.abs(box[2] - box[0]), Math.abs(box[3] - box[1])); ctx.setLineDash([]); }
   if (!selAlive()) return;
@@ -2154,7 +2328,7 @@ function toolInfoHtml(t: string): { html: string; accent: string } | null {
     };
     const spUrl = SPRITE_URL[k];
     return out(
-      `<div class="ip-top">${spUrl ? `<img class="ip-portrait" src="${spUrl}" alt="" />` : ""}<div class="ip-meta"><div class="ip-head"><span class="ip-title">${spec.name}${cxLink("ability-" + k)}</span><span class="ip-cost">${C.money(spec.cost)} (${sim.charges[k]} ready)</span></div>` +
+      `<div class="ip-top">${spUrl ? `<img class="ip-portrait" src="${spUrl}" alt="" />` : ""}<div class="ip-meta"><div class="ip-head"><span class="ip-title">${spec.name}${cxLink("ability-" + k)}</span><span class="ip-cost">${C.money(sim.abilityCost(k))} (${sim.charges[k]} ready)</span></div>` +
       `<div class="ip-role" style="color:${spec.color}">Tactical Air Support · ${platforms[k]}</div></div></div>` +
       `<div class="ip-desc">${spec.hint}</div>` +
       `<div class="ip-grid">` +
@@ -2210,6 +2384,7 @@ function updateInfoPanel() {
     const dps = Math.round(spec.damage * effRate);
     const status = u.extractT !== undefined ? `EXTRACTING (${Math.max(0, u.extractT).toFixed(1)}s)`
       : u.deployT && u.deployT > 0 ? `DEPLOYING (${u.deployT.toFixed(1)}s)`
+      : u.fort === "climb" ? `FORTIFYING (${Math.max(0, u.fortT ?? 0).toFixed(1)}s)` : u.fort === "descend" ? `COMING DOWN (${Math.max(0, u.fortT ?? 0).toFixed(1)}s)` : u.fort === "up" ? "FORTIFIED" // 0.50
       : u.ai ? u.ai.toUpperCase() : u.ammo < 1 ? "OUT OF AMMO" : "ACTIVE";
     const ammoCap = sim.mutators.has("supply_shortage") && spec.reloadsInZone && sim.unitInZone(u) ? spec.ammo * 2 : spec.ammo;
     const ammoPct = u.ammo === Infinity ? 100 : Math.min(100, Math.round((u.ammo / ammoCap) * 100));
@@ -2485,6 +2660,7 @@ let tutTick = 0;
 function frame(now: number) {
   const real = Math.min(0.1, (now - last) / 1000); last = now;
   if (++tutTick % 10 === 0) stepTut();
+  if (tutTick % 30 === 0) renderGroupbar(); // 0.50: counts and health (about twice a second)
   // keyboard panning
   const pan = 600 * real * devicePixelRatio;
   const ord = orderable().length > 0, held = (k: string) => keys.has(k) && cameraKeysActive(k, ord); // 0.45: A/S/D are commands while units are selected
@@ -2518,7 +2694,7 @@ function frame(now: number) {
   }
   const d0 = performance.now();
   try { soundEvents(); } catch { /* sound must never break the game */ }
-  try { draw(now); hud(now); minimap(now); } catch (err) {
+  try { draw(now); hud(now); minimap(now); stepPings(); } catch (err) {
     if (drawErrors++ < 5) log("error", "frame-error", { stack: String((err as Error)?.stack ?? err), phase: sim.phase, t: sim.time });
   }
   if (mode === "game") {
@@ -2767,16 +2943,22 @@ $("startbtn").addEventListener("click", () => {
 $("heatmapbtn").addEventListener("click", () => { showHeatmap = !showHeatmap; refreshUi(); });
 $("end-heatmap").addEventListener("click", () => { showHeatmap = true; $("end").hidden = true; refreshUi(); say("Showing kill heatmap. Press H or Menu when done.", 5000); });
 $("closegates").addEventListener("click", () => { const n = sim.closeAllGates(); buildZone(); log("info", "close-all-gates", { closed: n, t: +sim.time.toFixed(1), phase: sim.phase }); say(n ? (sim.phase === "battle" ? `Closing ${n} gate cells (${C.GATE_CLOSE_S}s).` : "All gates closed.") : "No open gates left."); });
+$("groupbar").addEventListener("click", e => { // 0.50: click a slot = its key; twice quickly jumps there
+  const b = (e.target as HTMLElement).closest<HTMLButtonElement>(".gslot"); if (!b) return;
+  runGroup({ k: keys.has("shift") ? "addsel" : "select", n: Number(b.dataset.n) }); renderGroupbar();
+});
 $("selbar").addEventListener("click", e => { // 0.44/0.45
   const b = (e.target as HTMLElement).closest<HTMLButtonElement>("[data-sel]"); if (!b) return;
   const k = b.dataset.sel!;
+  if (k === "topup") topUpSelected(); // 0.49
+  if ((k === "buytroops" || k === "buysniper") && selZone >= 0) { const e = sim.placeFromZone(k === "buytroops" ? "garrison" : "sniper", selZone); if (e) say(e); else { snd.radio(); refreshUi(); renderSelbar(); } } // 0.50
   if (k === "remove") removeSelected(); else if (k === "target") cycleSelected();
   else if (k === "amove" || k === "patrol" || k === "escort") runIntent({ k: "arm", cmd: k });
   else if (k === "stop" || k === "standby") runIntent({ k, queue: false });
 });
 $("clear").addEventListener("click", () => { if (sim.phase === "plan") { sim.clearZone(); draft = []; buildZone(); refreshUi(); } });
 $("end-retry").addEventListener("click", () => newSim(true));
-$("end-continue").addEventListener("click", () => { $("end").hidden = true; speed = pausedSpeed || 1; log("info", "round-continue", { t: +sim.time.toFixed(1) }); refreshUi(); });
+$("end-continue").addEventListener("click", () => { $("end").hidden = true; speed = battleSpeed(); log("info", "round-continue", { t: +sim.time.toFixed(1) }); refreshUi(); });
 $("end-stop").addEventListener("click", () => { $("end").hidden = true; sim.callIt(); });
 $("end-new").addEventListener("click", () => newSim(false, true));
 $("end-next").addEventListener("click", () => { const i = city ? C.CITIES.indexOf(city) : -1; if (C.CITIES[i + 1]) { dailyDate = null; customMap = null; playCity(C.CITIES[i + 1]); } });
@@ -2925,7 +3107,7 @@ $("opt-crowd").addEventListener("change", e => {
 });
 $("opt-dev").addEventListener("change", e => { save.settings.devMode = (e.target as HTMLInputElement).checked; Save.store(save); log("info", "setting", { devMode: save.settings.devMode }); syncDev(); });
 $("devbtn").addEventListener("click", toggleDevPanel);
-document.querySelectorAll<HTMLButtonElement>("[data-dspeed]").forEach(b => b.addEventListener("click", () => { setSpeed(Number(b.dataset.dspeed)); devLog("speed", { speed }); }));
+document.querySelectorAll<HTMLButtonElement>("[data-dspeed]").forEach(b => b.addEventListener("click", () => { setSpeed(Number(b.dataset.dspeed), true); devLog("speed", { speed }); }));
 $("dev-money").addEventListener("click", () => { sim.budget += 100_000_000; devLog("money", { money: sim.remaining() }); refreshUi(); });
 const devXp = (d: number | null) => { save.xp = d === null ? 0 : Math.max(0, (save.xp ?? 0) + d); Save.store(save); devLog("xp", { xp: save.xp }); say(`XP: ${save.xp.toLocaleString()} (${P.rankFor(save.xp).name}).`, 2500); refreshUi(); };
 $("dev-xp1").addEventListener("click", () => devXp(1000));
@@ -3036,7 +3218,7 @@ async function loadBattle(n: number) {
   stack.length = 0; show(null);
   $("osm-credit").hidden = !(city?.real || customMap);
   Object.assign(perf, new Perf());
-  draft = []; strikeStart = null; orderSel = null; nukeArm = null;
+  draft = []; pings = []; strikeStart = null; orderSel = null; nukeArm = null;
   xpGiven = Number(p.xpGiven) || 0; roundShown = !!p.roundShown; tipGates = !!p.tipGates; lastWave = Number(p.lastWave) || 0; warnedWave = Number(p.warnedWave ?? -1);
   warnShown = !!p.warnShown; outbreakShown = !!p.outbreakShown; lastBreaches = Number(p.lastBreaches) || 0; lastEarned = Number(p.lastEarned) || 0;
   showRanges = save.settings.showRanges;
@@ -3145,7 +3327,11 @@ if (SHOTS) {
   let rs = 1;
   const seedRandom = (n: number) => { rs = n >>> 0 || 1; Math.random = () => { rs = (rs + 0x6d2b79f5) >>> 0; let t = rs; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; };
   const px = (x: number, y: number): [number, number] => [cam.x + x * cam.scale, cam.y + y * cam.scale];
-  const key = (k: string) => { dispatchEvent(new KeyboardEvent("keydown", { key: k })); dispatchEvent(new KeyboardEvent("keyup", { key: k })); };
+  const key = (k: string) => { // 0.50: "Ctrl+1" / "Shift+2": modifiers, and digits carry their code (group keys read e.code)
+    const parts = k.split("+"), base = parts.pop()!, ctrlKey = parts.includes("Ctrl"), shiftKey = parts.includes("Shift");
+    const code = /^[0-9]$/.test(base) ? "Digit" + base : /^F\d+$/.test(base) ? base : /^[a-z]$/i.test(base) ? "Key" + base.toUpperCase() : base;
+    dispatchEvent(new KeyboardEvent("keydown", { key: base, code, ctrlKey, shiftKey })); dispatchEvent(new KeyboardEvent("keyup", { key: base, code, ctrlKey, shiftKey }));
+  };
   // a drawn mouse pointer: headless screenshots have none, and clips need to show where the clicks land
   const cur = document.createElement("div");
   cur.id = "shot-cursor"; cur.hidden = true;

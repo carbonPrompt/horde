@@ -16,7 +16,7 @@ export function statEntries(): CodexEntry[] {
   for (const k of Object.keys(C.UNITS) as C.UnitKind[]) {
     const s = C.UNITS[k], i = C.UNIT_INFO[k];
     out.push({ id: "unit-" + k, section: "units", title: s.name, summary: short(i.role), body: [i.desc, ...i.specials].join("\n\n"),
-      stats: "unit-" + k, since: VER, updated: VER });
+      stats: "unit-" + k, since: VER, updated: k === "garrison" || k === "sniper" ? "0.50.0" : k === "para" ? "0.49.0" : VER }); // 0.49: squads; 0.50: Troops, mobile Snipers
   }
   for (const k of Object.keys(C.ABILITIES) as C.AbilityKind[]) {
     const a = C.ABILITIES[k];
@@ -44,6 +44,8 @@ export function statRows(key: string): [string, string][] {
       ["Fire rate", `${s.rate} per s`],
       ["Ammo", s.ammo === Infinity ? "Unlimited" : s.ammo.toLocaleString("en-US") + (s.reloadsInZone ? " (unlimited in the zone)" : "")],
       ["Setup time", `${s.deploy} s`]];
+    const squad = k === "garrison" ? "4 soldiers, one fortified squad per building" : k === "sniper" ? "Sniper + spotter, one team per building" : k === "para" ? "5 soldiers" : ""; // 0.49
+    if (squad) rows.splice(1, 0, ["Squad", squad]);
     if (s.mobile) rows.push(["Armor", s.mobile.hp === Infinity ? "Can't be hit" : `${s.mobile.hp} HP`], ["Speed", `${+(s.mobile.speed * C.CELL_M).toFixed(1)} m/s`]);
     else if (s.hp) rows.push(["Armor", `${s.hp} HP`]);
     return rows;

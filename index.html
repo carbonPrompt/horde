@@ -397,11 +397,26 @@
     background: rgba(14, 18, 26, 0.96); border: 1px solid #38455c; border-left: 4px solid #e2e8f0; border-radius: 10px; padding: 12px 14px;
     box-shadow: 0 12px 32px rgba(0,0,0,0.75); font-size: 12.5px; line-height: 1.35; color: #e2e8f0; }
   #person[hidden] { display: none; }
+  /* 0.50: battle groups 1-0, bottom right of the map, just above the bottom bar (design ruling) */
+  #groupbar { position: absolute; right: 8px; bottom: 8px; z-index: 7; display: flex; gap: 4px; max-width: calc(100% - 200px); overflow-x: auto; padding: 4px; background: rgba(8, 12, 20, 0.72); border: 1px solid rgba(148, 163, 184, 0.25); border-radius: 10px; }
+  #groupbar[hidden] { display: none; }
+  #groupbar .gslot { position: relative; flex: 0 0 auto; width: 52px; height: 46px; padding: 0; border-radius: 7px; border: 1px dashed rgba(148, 163, 184, 0.35); background: rgba(15, 23, 42, 0.6); color: #cbd5e1; font: 600 11px/1.1 inherit; cursor: pointer; overflow: hidden; }
+  #groupbar .gslot.on { border-style: solid; border-color: rgba(128, 203, 196, 0.6); background: rgba(30, 41, 59, 0.9); }
+  #groupbar .gslot.sel { border-color: #80cbc4; box-shadow: 0 0 0 1px #80cbc4 inset; }
+  #groupbar .gslot .gk { position: absolute; left: 4px; top: 2px; font-size: 10px; color: #94a3b8; }
+  #groupbar .gslot .gn { position: absolute; right: 4px; top: 2px; font-size: 12px; color: #f8fafc; }
+  #groupbar .gslot .gi { position: absolute; left: 50%; top: 14px; transform: translateX(-50%); font-size: 10px; letter-spacing: 0.02em; color: #e2e8f0; white-space: nowrap; }
+  #groupbar .gslot .gh { position: absolute; left: 4px; right: 4px; bottom: 4px; height: 4px; border-radius: 2px; background: rgba(148, 163, 184, 0.25); }
+  #groupbar .gslot .gh i { display: block; height: 100%; border-radius: 2px; background: #4ade80; }
+  @media (max-width: 760px) { #groupbar { right: 6px; bottom: 6px; max-width: calc(100% - 12px); } #groupbar .gslot { width: 44px; height: 44px; }
+    main #selbar { max-width: calc(100% - 16px); width: max-content; } }
   #selbar { position: absolute; left: 50%; top: 10px; transform: translateX(-50%); max-width: calc(100% - 600px); flex-wrap: wrap; justify-content: center; z-index: 7; display: flex; gap: 8px; align-items: center;
     background: rgba(14, 18, 26, 0.94); border: 1px solid #38455c; border-left: 4px solid #80cbc4; border-radius: 10px; padding: 6px 10px; font-size: 12.5px; color: #e2e8f0; }
   #selbar[hidden] { display: none; }
   #minimap { position: absolute; inset: 8px 8px auto auto; z-index: 6; border: 1px solid #38455c; border-radius: 6px; background: #0b0f16; box-shadow: 0 6px 18px rgba(0,0,0,0.6); cursor: crosshair; }
   #minimap[hidden] { display: none; }
+  #minipings { position: absolute; inset: 9px 9px auto auto; z-index: 7; pointer-events: none; border-radius: 6px; }
+  #minipings[hidden] { display: none; }
   #selbar button { padding: 4px 10px; font-size: 12px; white-space: nowrap; }
   #selbar button.on { background: #7f1d1d; border-color: #f87171; color: #fff; }
   #selbar b { white-space: nowrap; }
@@ -512,7 +527,9 @@
   <main>
     <div id="person" hidden></div>
     <div id="selbar" hidden></div>
-    <canvas id="minimap" hidden title="Click or drag: move the camera. Right-click: send the selected units here."></canvas>
+    <div id="groupbar" hidden><button class="gslot" data-key="1" data-n="0"></button><button class="gslot" data-key="2" data-n="1"></button><button class="gslot" data-key="3" data-n="2"></button><button class="gslot" data-key="4" data-n="3"></button><button class="gslot" data-key="5" data-n="4"></button><button class="gslot" data-key="6" data-n="5"></button><button class="gslot" data-key="7" data-n="6"></button><button class="gslot" data-key="8" data-n="7"></button><button class="gslot" data-key="9" data-n="8"></button><button class="gslot" data-key="0" data-n="9"></button></div>
+    <canvas id="minimap" hidden title="Click or drag: move the camera. Right-click: send the selected units here. Red rings: trouble (F jumps to the latest)."></canvas>
+    <canvas id="minipings" hidden></canvas>
     <div id="timepick" hidden><div class="tp-box">
       <h2>When does it start?</h2>
       <p>The sirens go off at this time. Everyone gets the phone alert at once. Where people are depends on the hour.</p>
@@ -568,7 +585,7 @@
       <button class="ctl2" id="recall" title="Q">Recall<br>Units<span class="hk">Q</span></button>
       <button class="ctl2" id="closegates" title="L">Lock<br>Gates<span class="hk">L</span></button>
       <button class="ctl2" id="clear" title="K">Clear<br>Zone<span class="hk">K</span></button>
-      <div class="spd3"><div class="row"><button data-speed="0.5" title="1">½x<span class="k">1</span></button><button data-speed="1" title="2">1x<span class="k">2</span></button><button data-speed="2" title="3">2x<span class="k">3</span></button></div><button class="pausebar" data-speed="0" title="Space">PAUSE<span class="k">Space</span></button></div>
+      <div class="spd3"><div class="row"><button data-speed="0.5" title="F1">½x<span class="k">F1</span></button><button data-speed="1" title="F2">1x<span class="k">F2</span></button><button data-speed="2" title="F3">2x<span class="k">F3</span></button></div><button class="pausebar" data-speed="0" title="Space">PAUSE<span class="k">Space</span></button></div>
       <button id="startbtn">Start Battle</button>
     </div>
     <div id="tool-cards" hidden>
@@ -585,7 +602,7 @@
     <div class="dock-group cat" data-cat="Infantry">
       <h2>Infantry</h2>
       <div class="tool-grid">
-        <button class="tcard" data-tool="garrison"><img class="px-ico" data-sprite="garrison" alt=""><div class="tc-body"><span class="tc-name">Garrison</span><small id="cost-garrison"></small></div></button>
+        <button class="tcard" data-tool="garrison"><img class="px-ico" data-sprite="garrison" alt=""><div class="tc-body"><span class="tc-name">Troops</span><small id="cost-garrison"></small></div></button>
         <button class="tcard" data-tool="sniper"><img class="px-ico" data-sprite="sniper" alt=""><div class="tc-body"><span class="tc-name">Sniper</span><small id="cost-sniper"></small></div></button>
         <button class="tcard" data-tool="para"><img class="px-ico" data-sprite="para" alt=""><div class="tc-body"><span class="tc-name">Paradrop</span><small id="n-para"></small></div></button>
       </div>

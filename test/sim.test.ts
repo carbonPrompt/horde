@@ -606,6 +606,30 @@ test("Evac Points fly people out (score + money); a swarmed pad waves off; round
   expect(s.result!.bonus).toBe("Light Touch");
 }, 120000);
 
+test("0.49: a swarmed pad with nobody waiting stands down without counting a wave-off", () => {
+  const s = new Sim(42, { budget: 80_000_000 });
+  s.setZone(zoneAroundCenter(s, 34));
+  let pad: Support | undefined;
+  for (let i = 0; i < s.inZone.length && !pad; i++) {
+    if (s.inZone[i] !== 1 || s.map.tile[i] !== BUILDING) continue;
+    if (!s.placeSupport("evac", i % s.w, (i / s.w) | 0)) pad = s.supports[s.supports.length - 1];
+  }
+  expect(pad).toBeDefined();
+  s.dev.bites = false; s.dev.waves = false;
+  s.startBattle();
+  s.devRemoveCivilians(); // nobody left to wait at the pad
+  let sw = -1;
+  for (let r = 1; r <= 8 && sw < 0; r++) for (let dy = -r; dy <= r && sw < 0; dy++) for (let dx = -r; dx <= r && sw < 0; dx++) {
+    const i = s.idx(pad!.x + dx, pad!.y + dy);
+    if (s.inZone[i] === 1 && s.map.tile[i] !== BUILDING && s.map.tile[i] !== WATER) sw = i;
+  }
+  expect(sw).toBeGreaterThanOrEqual(0);
+  for (let j = 0; j < C.EVAC_ABORT_INF + 4; j++) s.spawnInfected((sw % s.w) + 0.5, ((sw / s.w) | 0) + 0.5, 1e9);
+  const t0 = s.time; while (s.time < t0 + C.EVAC_EVERY_S * 3) s.step();
+  expect(s.liftsAborted).toBe(0);
+  expect(s.liftLog.some(l => l.kind === "abort")).toBe(false);
+});
+
 test("mobile units kite: infected close in, the squad backs away instead of standing still", () => {
   const s = new Sim(42, { budget: 60_000_000 });
   s.setZone(zoneAroundCenter(s));
@@ -1861,7 +1885,7 @@ test("0.44: entityAt + removeEntity in planning refunds exactly that unit", () =
 });
 
 test("0.44: removeEntity refuses a Budget Office whose removal would go into debt", () => {
-  const s = new Sim(7, { budget: 70_000_000 });
+  const s = new Sim(7, { budget: 70_000_000, difficulty: "easy" }); // 0.48: flat prices (no price line), so "discounted" reads plainly
   expect(s.setZone(zoneAroundCenter(s))).toBeNull();
   const bld: [number, number][] = [];
   for (let i = 0; i < s.inZone.length; i++) {
@@ -1872,7 +1896,8 @@ test("0.44: removeEntity refuses a Budget Office whose removal would go into deb
   }
   expect(s.placeSupport("budget", bld[0][0], bld[0][1])).toBeNull();
   const office = s.supports[0];
-  for (const [x, y] of bld.slice(1)) { if (s.remaining() < 960_000) break; s.place("garrison", x, y); }
+  // 0.49: one Garrison per building, so fill the office's area with rooftop Mortars too
+  for (const [x, y] of bld.slice(1)) { if (s.remaining() < 960_000) break; if (s.place("garrison", x, y)) s.place("mortar", x, y); }
   const discounted = s.units.filter(u => u.paid! < C.UNITS[u.kind].cost).reduce((a, u) => a + (C.UNITS[u.kind].cost - u.paid!), 0);
   expect(discounted).toBeGreaterThan(s.remaining()); // removing it would cost more than is left
   expect(s.removeEntity({ support: office })).toBe(false);

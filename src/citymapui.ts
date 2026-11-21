@@ -34,11 +34,11 @@ export function cityMapModel(cityId: string): CityMapModel | null {
   return m;
 }
 
-export function areaCardInfo(key: string, best: Record<string, { pct: number; medal?: string | null }>, d: C.Difficulty) {
+export function areaCardInfo(key: string, best: Record<string, { pct: number; medal?: string | null; underBudget?: boolean }>, d: C.Difficulty) {
   const f = C.areaByKey(key), b = best[bestKey(key, d)];
   return {
     title: f?.area.name ?? key, city: f?.city.name ?? "", blurb: f?.city.blurb ?? "",
-    best: b ? `${b.medal ?? "No medal"} · ${b.pct.toFixed(0)} pts` : "Not played",
+    best: b ? `${b.medal ?? "No medal"} · ${b.pct.toFixed(0)} pts${b.underBudget ? " · Under Budget" : ""}` : "Not played", // 0.48
     medal: b?.medal ?? null,
   };
 }

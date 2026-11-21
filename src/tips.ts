@@ -14,6 +14,7 @@ export const TIPS = {
   views: "J shows building heights, R shows unit ranges, H shows where your kills happen.",
   quickbar: "Drag a tool onto the quick bar (Z to M) to keep it one key away.",
   orders: "Right-click sends them. A attack-move, P patrol, E escort a person, S stop, D stand by (hold fire). Shift queues orders. Arrows move the camera while units are selected.",
+  groups: "Battle groups: select units and press Ctrl+1 to Ctrl+0. Then 1-0 selects them, twice jumps there. Right-click a roof with Troops to fortify it.",
   gunship: "AC-130 on station. Click the plane with Move/Aim: right-click sends it to a new spot, Delete sends it home (before it arrives: charge back).",
   refuse: "This person refuses to leave. Park a unit next to them for a while to talk them out.",
 } as const;

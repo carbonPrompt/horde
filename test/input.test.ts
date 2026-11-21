@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { keyIntent, cameraKeysActive, pruneSelection } from "../src/input";
+import { keyIntent, cameraKeysActive, pruneSelection, groupIntent } from "../src/input";
 
 const none = { shift: false, ctrl: false, alt: false };
 
@@ -29,4 +29,15 @@ test("0.45: pruneSelection drops what's gone and keeps order", () => {
   const a = { unit: { id: 1 } } as any, b = { unit: { id: 2 } } as any, c = { support: { id: 3 } } as any;
   expect(pruneSelection([a, b, c], e => e !== b)).toEqual([a, c]);
   expect(pruneSelection([], () => true)).toEqual([]);
+});
+
+test("0.50: groupIntent: Ctrl assigns, Shift+Ctrl adds, plain selects, Shift adds the group; key 0 is group 10", () => {
+  const m = (shift = false, ctrl = false, alt = false) => ({ shift, ctrl, alt });
+  expect(groupIntent("3", m(false, true))).toEqual({ k: "assign", n: 2 });
+  expect(groupIntent("0", m(true, true))).toEqual({ k: "add", n: 9 });
+  expect(groupIntent("5", m())).toEqual({ k: "select", n: 4 });
+  expect(groupIntent("5", m(true))).toEqual({ k: "addsel", n: 4 });
+  expect(groupIntent("Digit7", m())).toEqual({ k: "select", n: 6 }); // e.code form (Shift turns e.key into a symbol)
+  expect(groupIntent("1", m(false, false, true))).toBeNull();
+  expect(groupIntent("a", m())).toBeNull();
 });

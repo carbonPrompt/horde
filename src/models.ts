@@ -215,8 +215,9 @@ function slot(px: number, py: number, s: number, ang: number, ox: number, oy: nu
 }
 
 /** Soldiers zoomed in: little people with rifles, facing the fight; they run when they move. */
-export function drawSquad(ctx: CanvasRenderingContext2D, u: Unit, px: number, py: number, s: number, color: string, dt: number, simTime: number) {
-  const f = SQUADS[u.kind]; if (!f) return;
+export function drawSquad(ctx: CanvasRenderingContext2D, u: Unit, px: number, py: number, s: number, color: string, dt: number, simTime: number, at?: [number, number][]) {
+  const f0 = SQUADS[u.kind]; if (!f0) return;
+  const f = at ?? f0; // 0.49: real soldiers: one model per living soldier at their own spot (screen px)
   const p = pose(u, dt);
   const moving = p.moveT < 0.4;
   const face = moving ? p.heading : u.shotT >= 0 ? p.aim : p.heading;
@@ -225,8 +226,8 @@ export function drawSquad(ctx: CanvasRenderingContext2D, u: Unit, px: number, py
   const flash = u.shotT >= 0 && simTime - u.shotT < 0.07;
   const smooth = ctx.imageSmoothingEnabled; ctx.imageSmoothingEnabled = false;
   f.forEach(([ox, oy], i) => {
-    const [x, y] = slot(px, py, s, p.heading, ox, oy);
-    const part = u.kind === "sniper" ? (i === 0 ? PRONE : SPOTTER) : SOLDIER;
+    const [x, y] = at ? [ox, oy] : slot(px, py, s, p.heading, ox, oy);
+    const part = u.kind === "sniper" ? ((at ? u.soldiers?.filter(so => so.alive)[i]?.role === "sniper" : i === 0) ? PRONE : SPOTTER) : SOLDIER;
     const k = bake(part, pal, true, `${u.kind}:${part === SOLDIER ? "s" : part === PRONE ? "p" : "o"}:${color}`);
     const bob = moving ? Math.sin(p.run + i * 1.7) : 0;
     ctx.save(); ctx.translate(x, y); ctx.rotate(face + (i === 0 ? 0 : (i % 2 ? 0.12 : -0.12))); ctx.scale(b, b);

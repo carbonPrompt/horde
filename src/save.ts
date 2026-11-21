@@ -1,15 +1,16 @@
 // Progress and settings, kept in the browser/app's local storage. Every access is guarded:
 // storage can be blocked or empty, and the game must still run.
 import type * as C from "./config";
+import type { PlanGroup } from "./groups";
 import { cleanOrders, type Order } from "./orders";
 import { SECTIONS } from "./codex";
 const CODEX_SECTIONS: string[] = SECTIONS.map(s => s.id);
 
 // 0.45: Plan.units entries: 5th = the unit's orders (present = commanded), 6th = stand by
-export interface Plan { poly: [number, number][]; zones?: [number, number][][]; walls: number[]; units: [C.UnitKind, number, number, C.TargetMode?, Order[]?, boolean?][]; supports?: [C.SupportKind, number, number][]; abilities?: Partial<Record<C.AbilityKind, number>>; c4?: number[]; demo?: number[]; start?: number }
+export interface Plan { poly: [number, number][]; zones?: [number, number][][]; walls: number[]; units: [C.UnitKind, number, number, C.TargetMode?, Order[]?, boolean?][]; supports?: [C.SupportKind, number, number][]; abilities?: Partial<Record<C.AbilityKind, number>>; c4?: number[]; demo?: number[]; start?: number; groups?: PlanGroup[] } // 0.50: battle groups (unit indices into units, or a zone)
 export interface Settings { fullscreen: boolean; edgeScroll: boolean; showRanges: boolean; devMode?: boolean; crowd?: number; vol?: { master: number; sfx: number; music: number }; quickbar?: (string | null)[]; difficulty?: C.Difficulty; codexSeen?: string; codexOpen?: string[]; /* 0.47: last version the Codex was opened in, open sections */
   autoUpdate?: boolean; checkUpdates?: boolean; updatePin?: string; speed?: number; tips?: boolean; tipsSeen?: string[] } // 0.26 updater: install by itself / look on start / stay on a picked older version
-export interface Best { pct: number; medal: string | null; mayhem?: number } // pct: round score 0..100 since 0.20 ("% evacuated" before)
+export interface Best { pct: number; medal: string | null; mayhem?: number; perM?: number; underBudget?: boolean } // 0.48: best people saved per $1M, Under Budget badge // pct: round score 0..100 since 0.20 ("% evacuated" before)
 /** 0.33: the battle frozen in this slot (the file itself sits beside the profile). */
 export interface BattleInfo { version: string; savedAt: string; label: string; t: number; phase: string; bytes: number }
 export interface SaveData { battle?: BattleInfo; settings: Settings; best: Record<string, Best>; plans: Record<string, Plan>; daily?: Record<string, Best>; xp?: number | null; achievements?: Record<string, string>; gameVersion?: string } // gameVersion: the version that last wrote it (0.26+)
@@ -37,7 +38,8 @@ export function clean(s: SaveData): SaveData {
     const out: Record<string, Best> = {};
     if (o && typeof o === "object") for (const [k, v] of Object.entries(o as Record<string, any>)) {
       if (!BEST_KEY.test(k) || !v || typeof v !== "object" || !Number.isFinite(v.pct)) continue;
-      out[k] = { pct: Math.max(0, Math.min(100, v.pct)), medal: MEDAL_NAMES.includes(v.medal) ? v.medal : null, ...(Number.isFinite(v.mayhem) && v.mayhem >= 0 ? { mayhem: Math.floor(v.mayhem) } : {}) };
+      out[k] = { pct: Math.max(0, Math.min(100, v.pct)), medal: MEDAL_NAMES.includes(v.medal) ? v.medal : null, ...(Number.isFinite(v.mayhem) && v.mayhem >= 0 ? { mayhem: Math.floor(v.mayhem) } : {}),
+        ...(Number.isFinite(v.perM) && v.perM >= 0 ? { perM: Math.min(1e7, v.perM) } : {}), ...(v.underBudget === true ? { underBudget: true } : {}) };
     }
     return out;
   };

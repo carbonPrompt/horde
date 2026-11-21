@@ -1,6 +1,6 @@
 // 0.47: a minimal Chrome DevTools Protocol client over Bun's WebSocket (no npm dependency).
 export class CdpClient {
-  private ws: WebSocket; private id = 0; private pending = new Map<number, { ok: (v: any) => void; bad: (e: Error) => void }>();
+  private ws: WebSocket; private id = 0; closed = false; private pending = new Map<number, { ok: (v: any) => void; bad: (e: Error) => void }>();
   private constructor(ws: WebSocket) {
     this.ws = ws;
     ws.addEventListener("message", ev => {
@@ -10,7 +10,7 @@ export class CdpClient {
       this.pending.delete(m.id);
       if (m.error) p.bad(new Error(`${m.error.message} (${m.error.code})`)); else p.ok(m.result);
     });
-    ws.addEventListener("close", () => { for (const p of this.pending.values()) p.bad(new Error("devtools socket closed")); this.pending.clear(); });
+    ws.addEventListener("close", () => { this.closed = true; for (const p of this.pending.values()) p.bad(new Error("devtools socket closed")); this.pending.clear(); });
   }
   static connect(url: string, timeoutMs = 10000): Promise<CdpClient> {
     return new Promise((ok, bad) => {
@@ -21,6 +21,7 @@ export class CdpClient {
   }
   send(method: string, params: object = {}, timeoutMs = 60000): Promise<any> {
     const id = ++this.id;
+    if (this.closed || this.ws.readyState > WebSocket.OPEN) return Promise.reject(new Error(`${method}: devtools socket closed (Chrome is gone)`)); // 0.47.1: fail now, not in 60 s
     return new Promise((ok, bad) => {
       const t = setTimeout(() => { this.pending.delete(id); bad(new Error(`${method} timed out`)); }, timeoutMs);
       this.pending.set(id, { ok: v => { clearTimeout(t); ok(v); }, bad: e => { clearTimeout(t); bad(e); } });

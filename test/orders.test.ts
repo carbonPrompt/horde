@@ -405,3 +405,8 @@ test("review: the battle keeps each unit's planning orders for Retry", () => {
   expect(b.planOrders).toBeUndefined(); // ordered only in battle: Retry brings it back uncommanded
   expect(apc.planOrders!.orders.length).toBe(1); // a copy: the live queue running out doesn't touch it
 });
+
+test("0.50: cleanOrders keeps fortify orders (street cell + roof cell)", () => {
+  expect(cleanOrders([{ k: "fortify", x: 3, y: 4, px: 5, py: 6 }])).toEqual([{ k: "fortify", x: 3, y: 4, px: 5, py: 6 }]);
+  expect(cleanOrders([{ k: "fortify", x: 3, y: 4 }])).toBeUndefined();
+});

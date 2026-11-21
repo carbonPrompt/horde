@@ -1,6 +1,11 @@
 // 0.47: the Codex. How to Play as data: sections, entries, media and keys. The screen (codexui.ts) renders it;
 // unit, ability and support pages come from config (codexStats.ts); test/codex.test.ts keeps it honest.
 import { statEntries } from "./codexStats";
+import * as C from "./config";
+
+// 0.48: difficulty numbers as the player reads them
+const pctOf = (v: number) => `${Math.round(v * 100)}%`;
+const D = C.DIFFICULTY;
 
 export type SectionId = "start" | "battle" | "people" | "units" | "strikes" | "support" | "destruction" | "controls" | "more" | "credits";
 export const SECTIONS: { id: SectionId; title: string }[] = [
@@ -49,8 +54,8 @@ export const ENTRIES: CodexEntry[] = [
     { keys: ["G", "L"] }),
   e("walls-fire", "start", "What walls block", "Walls stop your vehicles and direct fire; artillery, rooftop units and aircraft fire over.",
     "Walls also stop your own tanks, APCs and squads (they use gates or breaches), and turrets, tanks, APCs, squads and the gunboat can't shoot through a wall or the buildings on your zone's edge. Mortars, howitzers, HIMARS, the battleship, rooftop units and aircraft fire over them."),
-  e("units-basics", "start", "3. Units", "Garrisons and Snipers go on buildings, Turrets on streets. Hover anything for its stats.",
-    "Garrisons and Snipers go on buildings, Turrets on streets. Taller buildings give snipers more range (press J to see heights). Units inside the zone never run out of ammo; outside, they do. Hover over any button or placed unit to see its stats.",
+  e("units-basics", "start", "3. Units", "Troops and Snipers go on roofs (fortified) or zone streets, Turrets on streets. Hover anything for its stats.",
+    "Troops and Snipers go on roofs, where they fortify, or on streets inside your zone; Turrets go on streets. Taller buildings give snipers more range (press J to see heights). Units inside the zone never run out of ammo; outside, they do. Hover over any button or placed unit to see its stats.",
     { keys: ["J", "R"] }),
   e("evacuate", "start", "4. Evacuate", "Evac Points fly people out every 12 s; each extra pad costs double the last.",
     "Build Evac Points inside your zone: every 12 s a lift flies people out, and trains carry people out on the rails. Each extra pad costs double the last ($3M, $6M, $12M...). A lift waves off if infected crowd the pad. Each person flown out brings $24,000 in federal evacuation funding."),
@@ -62,13 +67,21 @@ export const ENTRIES: CodexEntry[] = [
   e("hordes", "battle", "Hordes", "Hordes walk in from outside along highways, rails, bridges and the river.",
     "Hordes walk in from outside the city along highways, rail lines, bridges and the river (an amber arrow shows where the next one comes in). Each is bigger and comes sooner."),
   e("money", "battle", "Money", "You earn for every person safe and every infected killed. Spend it any time.",
-    "Every 10 seconds you earn money for each person safe, plus a little for every infected killed. Spend it any time: units (they take a few seconds to set up), strikes, C4, even extra safe zones (those cost a lot more).\n\nSelling a unit mid-battle (Sell / Evac) sends a helicopter to pull it out first; then you get its cost back. Prices are real-world US dollars; ordnance is limited per battle, like a real stockpile."),
+    `Every 10 seconds you earn money for each person safe, plus a little for every infected killed. Spend it any time: units (they take a few seconds to set up), strikes, C4, even extra safe zones (those cost a lot more).\n\nSelling a unit mid-battle (Sell / Evac) sends a helicopter to pull it out first; then you get its cost back. Prices are real-world US dollars; ordnance is limited per battle, like a real stockpile.\n\n**The price line:** from Medium up, every unit of a kind you already have standing makes the next one dearer (Medium +${pctOf(D.medium.priceStep)}, Hard +${pctOf(D.hard.priceStep)}, Insane +${pctOf(D.insane.priceStep)} each; Paratroopers too, per squad bought). Lose or sell one and the next gets cheaper again. Mixing unit kinds in good spots goes further than stacking one.\n\n**Support buildings** have a line too: from Medium up, each one of a kind you already have makes the next one cost more (Medium x${D.medium.supportMul}, Hard x${D.hard.supportMul}, Insane x${D.insane.supportMul} the last). Evac Points keep their own line (each costs ${C.EVAC_COST_MUL}x the last) on every difficulty.\n\n**Cost of operations (Insane):** every 10 s each unit and building standing costs ${(D.insane.upkeepPct * 100).toFixed(1)}% of what you paid for it, shown in the top bar after your income. It never takes you below $0.`, { updated: "0.49.0" }),
   e("strikes-rules", "strikes", "How strikes work", "Strikes land a few seconds after you call them and hurt civilians too.",
     "Airstrike and the A-10 take two clicks (where the run starts, where it ends); the rest take one. Each lands a few seconds later and hurts civilians too (the AC-130 only shoots infected).\n\nCratering strikes and shelling can't land within 20 to 30 m of your people (the cursor turns red: NO-FIRE); the nuke and MOAB are allowed but warn you first."),
-  e("speed", "battle", "Speed", "1, 2 and 3 set the speed; Space pauses.",
-    "1, 2 and 3 set the speed (half, normal, double); Space pauses.", { keys: ["1", "2", "3", "Space"] }),
+  e("speed", "battle", "Speed", "F1, F2 and F3 set the speed; Space pauses (not on Hard or Insane).",
+    "F1, F2 and F3 set the speed (half, normal, double); Space pauses. (The number keys are battle groups since 0.50.)\n\nOn **Hard** and **Insane** the battle runs in real time once it starts: no pause and no speed change until the round is scored. Plan everything you can before you press Start.", { keys: ["F1", "F2", "F3", "Space"], updated: "0.50.0" }),
+  e("difficulty", "battle", "Difficulty", "Easy saves almost everyone; Insane is a fight for every person.",
+    `Difficulty decides how many people you can save, not whether you can.\n\n**Easy:** small, slow hordes and plenty of money. You save almost everyone.\n**Medium:** you save most people if you pay attention.\n**Hard:** bigger, faster hordes, ${pctOf(D.hard.budgetMul)} of the money and ${pctOf(D.hard.incomeMul)} of the income, a steeper price line, and no pause once the battle starts. A good plan saves most people; spamming one unit doesn't.\n**Insane:** ${pctOf(D.insane.budgetMul)} of the money, ${pctOf(D.insane.incomeMul)} of the income, the steepest price line, cost of operations, no pause. Half the city is a good day.\n\nThe end screen shows **people saved per $1M** spent, your best for that city and difficulty, and the **Under Budget** badge for a medal won spending no more than ${pctOf(C.UNDER_BUDGET_PCT)} of your starting money plus income.`, { since: "0.48.0", updated: "0.48.0" }),
+  e("soldiers", "units", "Soldiers", "Troops, Sniper teams, Paratroopers: each soldier fires. Fortified on a roof they're safe; in the street they get bitten.",
+    `Troops are 4 riflemen, a Sniper team is a sniper and a spotter, Paratroopers are 5 soldiers. Each is a dot in the crowd (green; snipers yellow) and fires on their own, so every soldier lost is firepower lost.\n\n**Fortify a roof.** Select Troops or a Sniper team and right-click a roof: they walk over and climb up (${C.FORTIFY_S} s, no shooting, and they can be bitten at the foot of the building). Fortified, they get the roof's range bonus and can't be bitten. One Troops squad and one Sniper team per building.\n\n**Come down and fight.** Right-click a street with a fortified squad selected: they climb down (${C.DISMOUNT_S} s) and go. On the ground they take every order (move, attack-move, patrol, escort) and hold where they stand when you give none. Outside the zone they carry a limited load of ammo; back inside, it refills.\n\n**Buying.** In planning, click a roof (fortified) or a street inside your zone. In battle, click your zone's open ground and use Buy Troops here. Paratroopers drop from the air anywhere.\n\nA bitten soldier turns. Click a soldier's dot to see who they are; select a squad that lost soldiers and press \`U\` (Top up) to fly in a replacement for a share of the squad's price.`, { keys: ["U"], since: "0.49.0", updated: "0.50.0" }),
+  e("groups", "controls", "Battle groups", "Ctrl+1-0 saves a group, 1-0 selects it, twice jumps there. The group bar sits bottom right.",
+    "Select units (or click a safe zone's open ground) and press **Ctrl+1** to **Ctrl+0**: that key now holds the group. **Shift+Ctrl** adds the selection to it.\n\nPress the number to select the group again, press it twice quickly to jump the camera there, Shift+number to add it to what you have selected. A group key can hold a safe zone instead: then it selects the zone (Buy Troops here) and jumps to it.\n\nThe group bar at the bottom right shows each group's main unit, how many are left and their health; click a slot to select it. Units that die or are pulled out leave their groups. Groups save with your plan and your battle saves.\n\nIn a web browser, Ctrl+1-9 may switch browser tabs instead; the Windows app has no such problem.", { keys: ["Ctrl+1", "1"], since: "0.50.0", updated: "0.50.0" }),
+  e("minimap-alerts", "battle", "Alerts on the minimap", "Red rings on the minimap show trouble; F jumps to it.",
+    "Pulsing rings on the minimap show where something needs you: people bitten inside a safe zone or a wall down (big red), a unit under attack or an evac lift waved off, infected clawing at a wall, people bitten out in the city (small). Urgent ones come with a radio blip.\n\nPress `F` to jump the camera to the most urgent one, or click it on the minimap. Alerts work on every difficulty.", { keys: ["F"], since: "0.48.0", updated: "0.48.0" }),
   e("round-score", "battle", "The round and your score", "The round ends when the city is empty. Score 0 to 100, medals from Bronze to Platinum.",
-    "The round ends when nobody is left in the city, or when only a few stuck stragglers remain. End round (top bar) scores it right away: people in the zone count as saved.\n\nYour score (0 to 100) is mostly people saved, plus how fast, how intact the city is and how many infected you killed: Bronze 10, Silver 30, Gold 50, Platinum 75, and at least 5% saved for any medal.\n\nThen Keep fighting: endless, harder hordes scored as Mayhem until you pull out (Pause menu: Pull out)."),
+    "The round ends when nobody is left in the city, or when only a few stuck stragglers remain. End round (top bar) scores it right away: people in the zone count as saved.\n\nYour score (0 to 100) is mostly people saved, plus how fast, how intact the city is and how many infected you killed: Bronze 10, Silver 30, Gold 50, Platinum 75, and at least 5% saved for any medal. Next to it: people saved per $1M spent, and the Under Budget badge.\n\nThen Keep fighting: endless, harder hordes scored as Mayhem until you pull out (Pause menu: Pull out).", { updated: "0.48.0" }),
   // ---------- People ----------
   e("every-dot", "people", "Every dot is a person", "Click a white dot with Move/Aim to see who they are and what happened to them.",
     "Every dot is a person with a name, an age, a family and a home. Pick Move/Aim and click a white dot to see who they are, where they were when the sirens went off and everything that has happened to them since. **Follow** keeps the camera on them.\n\nSome carry guns and defend their family; panicked crowds can crush; anyone can be carrying the infection."),
@@ -86,13 +99,13 @@ export const ENTRIES: CodexEntry[] = [
     { keys: ["Right-click", "Delete"] }),
   // ---------- Support ----------
   e("support-buildings", "support", "Support buildings", "Built on buildings inside your zone: discounts, repairs, range, ammo, fire rate, police, militia.",
-    "Support buildings go on buildings inside your zone: Budget office (20% off nearby), Repair yard (walls, gates, vehicles), Radio tower (+40% range nearby), Supply depot (ammo by cargo drone to units outside the walls), Command post (+30% fire rate), Precinct (police squads), Armory (militia on the walls)."),
+    `Support buildings go on buildings inside your zone: Budget office (20% off nearby), Repair yard (walls, gates, vehicles; at most ${C.REPAIR_MAX} per battle), Radio tower (+40% range nearby), Supply depot (ammo by cargo drone to units outside the walls), Command post (+30% fire rate), Precinct (police squads), Armory (militia on the walls).`),
   // ---------- Destruction ----------
   e("c4", "destruction", "C4 and destruction", "Plant C4 on a bridge or building, then click it in battle to blow it.",
     "Plant C4 on a bridge or a building, then click it again in battle to blow it: a bridge drops into the river, a building collapses into rubble that slows everyone. Heavy weapons crater streets and bring buildings down too. Fuel tanks blow during the battle."),
   // ---------- Controls ----------
   e("controls-all", "controls", "All controls", "Every key and mouse action in one list.",
-    "Right-drag or WASD move the map (arrow keys while units are selected), wheel zooms, minimap jumps the camera.\n\nMove/Aim: click to select, Shift-click to add, drag a box for mobile units, Esc to deselect; right-click sends them (Shift queues).\n\nWith units selected: A attack-move, P patrol, E escort, S stop, D stand by, T target priority, Delete remove (planning) or pull out (battle).\n\nSpace pauses, 1/2/3 speed, G gate tool, Q recall, L lock gates, K clear zone, Z X C V B N M quick bar slots 1 to 7 (drag a tool onto a slot), J heights, R unit ranges, H kill heatmap, Esc menu, F5 quick save (pick a save slot first), F11 fullscreen (Windows app)."),
+    "Right-drag or WASD move the map (arrow keys while units are selected), wheel zooms, minimap jumps the camera.\n\nMove/Aim: click to select, Shift-click to add, drag a box for squads and mobile units, double-click a unit for every one of its kind on screen, Esc to deselect; right-click sends them (Shift queues). Right-click a roof with Troops or Snipers selected to fortify it; right-click a street to bring a fortified squad down.\n\nBattle groups: Ctrl+1-0 saves the selection (or a selected safe zone) as a group, Shift+Ctrl adds to it, 1-0 selects it, press it twice to jump there, Shift+1-0 adds it to the selection.\n\nWith units selected: A attack-move, P patrol, E escort, S stop, D stand by, T target priority, Delete remove (planning) or pull out (battle).\n\nSpace pauses (not on Hard or Insane), F1/F2/F3 speed, F jump to the latest alert, U top up a squad, G gate tool, Q recall, L lock gates, K clear zone, Z X C V B N M quick bar slots 1 to 7 (drag a tool onto a slot), J heights, R unit ranges, H kill heatmap, Esc menu, F5 quick save (pick a save slot first), F11 fullscreen (Windows app).", { updated: "0.50.0" }),
   // ---------- More ----------
   e("real-cities", "more", "Real cities, mutators and the daily challenge", "13 real OpenStreetMap cities, any city live when online, mutators and a daily challenge.",
     "Play 13 real OpenStreetMap cities (Boston, Castle Rock, Chicago, Denver, Los Angeles, New York, Miami, Omaha, Paris, Pittsburgh, Portland, San Francisco, Washington), or search any city live when online. Mutators and the Daily Challenge are on the Cities screen. H shows where your kills happened.",
@@ -130,6 +143,9 @@ export const ENTRY_MEDIA: Record<string, Media> = {
   "ac130": shot("units-ac130-orbit", "The AC-130 circling its spot and firing on infected below"),
   "support-buildings": shot("support-radius", "Placing a Radio Tower inside the zone: the circle shows the area it boosts"),
   "c4": clip("clip-c4-bridge", "C4 on a bridge is blown in battle and the bridge drops into the river"),
+  "soldiers": clip("clip-troops-fortify", "A Troops squad on a zone street is sent to a roof with a right-click: it walks to the building, climbs up and fortifies"),
+  "groups": shot("controls-groupbar", "The group bar: slot 1 a Troops squad on the ground, 2 a fortified one, 3 a Sniper team, each with its count and health"),
+  "minimap-alerts": shot("battle-minimap-alerts", "The minimap in battle with pulsing red rings where people are being bitten out in the city"),
   "controls-all": shot("controls-quickbar", "The bottom bar: tool classes, the Z to M quick bar, abilities, gates and speed controls", [c(1, 0.12, 0.5, "Tool classes"), c(2, 0.36, 0.5, "Quick bar Z X C V B N M"), c(3, 0.95, 0.5, "Speed and pause")]),
 };
 export const STAT_MEDIA: Record<string, Media> = {
@@ -175,5 +191,17 @@ export function badgeFor(e: CodexEntry, seen: string | undefined): "new" | "upda
 /** The version badges compare against: the last Codex visit, else the version that last wrote the save (a save from
  * before 0.47 sees what changed since), else nothing (a brand-new player gets no badges). */
 export function seenFor(codexSeen: string | undefined, prevGameVersion: string | undefined): string | undefined {
-  return codexSeen ?? prevGameVersion;
+  const s = codexSeen ?? prevGameVersion;
+  return s && verCmp(s, CODEX_EPOCH) < 0 ? CODEX_EPOCH : s; // 0.47.1: the whole Codex is new at launch; badge only later changes
+}
+
+/** The version the Codex launched in. A save from before it gets no badges for the launch itself (every entry
+ * would carry one); badges start with the first change after it. */
+export const CODEX_EPOCH = "0.47.0";
+
+/** 0.47.1: the version that wrote a save slot before this session touched it, kept per slot on first sight (the
+ * desktop updater and the Codex visit both restamp the save later). null = the profile in use before any slot. */
+export function slotPrevVersion(m: Map<number | null, string | undefined>, slot: number | null, gameVersion: string | undefined): string | undefined {
+  if (!m.has(slot)) m.set(slot, gameVersion);
+  return m.get(slot);
 }

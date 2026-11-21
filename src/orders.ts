@@ -1,8 +1,9 @@
 // 0.45: StarCraft-style unit orders. Plain data on each Unit (saved with plans and snapshots); Sim.think runs them.
-export type OrderKind = "move" | "amove" | "patrol" | "escort";
-/** x, y: where it goes. Patrol: px, py is the other end. Escort: who is the person whose group it guards. */
+export type OrderKind = "move" | "amove" | "patrol" | "escort" | "fortify";
+/** x, y: where it goes. Patrol: px, py is the other end. Escort: who is the person whose group it guards.
+ *  0.50 Fortify: x, y is the street cell beside the building it walks to; px, py the roof cell it climbs onto. */
 export interface Order { k: OrderKind; x: number; y: number; px?: number; py?: number; who?: number }
-export const ORDER_KINDS: OrderKind[] = ["move", "amove", "patrol", "escort"];
+export const ORDER_KINDS: OrderKind[] = ["move", "amove", "patrol", "escort", "fortify"];
 export const ARRIVE_R = 1.5; // cells: close enough to count as there
 export const ESCORT_R = 4; // cells: an escort stays this close to its group
 
@@ -33,7 +34,7 @@ export function cleanOrders(v: unknown): Order[] | undefined {
   for (const o of v) {
     if (!o || typeof o !== "object" || !ORDER_KINDS.includes((o as Order).k) || !num((o as Order).x) || !num((o as Order).y)) return undefined;
     const q = o as Order, c: Order = { k: q.k, x: q.x, y: q.y };
-    if (q.k === "patrol") { if (!num(q.px) || !num(q.py)) return undefined; c.px = q.px; c.py = q.py; }
+    if (q.k === "patrol" || q.k === "fortify") { if (!num(q.px) || !num(q.py)) return undefined; c.px = q.px; c.py = q.py; }
     if (q.k === "escort") { if (!Number.isInteger(q.who) || q.who! < 0) return undefined; c.who = q.who; }
     out.push(c);
   }

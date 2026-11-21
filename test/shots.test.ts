@@ -76,3 +76,35 @@ test("final review #1: shot mode only runs from a local file, never on the web b
   expect(shotsAllowed("http://127.0.0.1:8765/horde.html?shots=1")).toBe(false);
   expect(shotsAllowed("file:///x/dist/horde.html")).toBe(false);
 });
+
+// ---------- 0.47.1: final review minor #10 ----------
+import { atomicCopy } from "../tools/shots/run";
+import { CdpClient } from "../tools/shots/cdp";
+import { existsSync as ex2, readFileSync as rf2, writeFileSync as wf2 } from "node:fs";
+
+test("minor #10: atomicCopy replaces the target whole and leaves no temp file", () => {
+  const d = mkdtempSync(join(tmpdir(), "atomic-"));
+  wf2(join(d, "src"), "new"); wf2(join(d, "dst.png"), "old");
+  atomicCopy(join(d, "src"), join(d, "dst.png"));
+  expect(rf2(join(d, "dst.png"), "utf8")).toBe("new");
+  expect(readdirSync(d).sort()).toEqual(["dst.png", "src"]);
+});
+
+test("minor #10: after Chrome's socket closes, calls fail at once instead of waiting 60 s", async () => {
+  const srv = Bun.serve({ port: 0, fetch(req, s) { return s.upgrade(req) ? undefined : new Response("no"); },
+    websocket: { message() {}, open(ws) { setTimeout(() => ws.close(), 20); } } });
+  try {
+    const c = await CdpClient.connect(`ws://127.0.0.1:${srv.port}`);
+    await Bun.sleep(100);
+    expect(c.closed).toBe(true);
+    const t0 = performance.now();
+    await expect(c.send("Page.enable")).rejects.toThrow(/closed/);
+    expect(performance.now() - t0).toBeLessThan(1000);
+  } finally { srv.stop(true); }
+});
+
+test("minor #10: run.ts builds from the repo root, whatever the current folder", () => {
+  const src = rf2(new URL("../tools/shots/run.ts", import.meta.url), "utf8");
+  expect(src).toMatch(/spawnSync\(cmd, \{ cwd: ROOT/);
+  expect(ex2(new URL("../build.ts", import.meta.url))).toBe(true);
+});
