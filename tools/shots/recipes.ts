@@ -5,7 +5,7 @@ import type { Recipe } from "./stale";
 // Fairhaven (400 x 300, seed 101). Town Green stand centered 191,106; north-south streets near x 157, 178, 200, 223;
 // the river runs along y ~172 with bridges at 60,172 / 200,178 / 330,170.
 const FH = { city: "fairhaven", seed: 101, startMin: 600, size: [960, 540] as [number, number], rev: 1 };
-const MAP: [number, number, number, number] = [0, 76, 960, 372]; // the map, without the top and bottom bars
+const MAP: [number, number, number, number] = [0, 76, 960, 276]; // the map, without the top bar and the 0.51 bottom panel
 const ZONE = "zone 165,82 217,82 217,130 165,130";
 const BASE = [ZONE, "gate 217,98", "place sniper 186,78", "place garrison 172,78", "place turret 178,72", "place evac 191,106"];
 const BATTLE = (s: number) => [...BASE, "battle", `advance ${s}`];
@@ -18,19 +18,19 @@ export const RECIPES: Recipe[] = [
   { ...FH, id: "units-ranges", kind: "shot", camera: { x: 182, y: 84, scale: 6 }, crop: MAP, setup: [...BASE, "key r"] },
   { ...FH, id: "battle-horde-arrow", kind: "shot", camera: { x: 200, y: 150, scale: 1.55 }, crop: MAP, setup: BATTLE(50) },
   { ...FH, id: "battle-money-bar", kind: "shot", camera: { x: 191, y: 106, scale: 4 }, crop: [0, 0, 700, 76], setup: BATTLE(30) },
-  { ...FH, id: "people-person-window", kind: "shot", camera: { x: 191, y: 106, scale: 5 }, setup: [...BATTLE(12), "person 178,140", "cursor off"] },
-  { ...FH, id: "units-selected-card", kind: "shot", camera: { x: 186, y: 92, scale: 6 }, setup: [...BASE, "select 186,78"] },
+  { ...FH, rev: 4, id: "people-person-window", kind: "shot", camera: { x: 191, y: 106, scale: 5 }, setup: [...BATTLE(12), "person 178,140", "cursor off"] },
+  { ...FH, rev: 4, id: "units-selected-card", kind: "shot", camera: { x: 186, y: 92, scale: 6 }, setup: [...BASE, "select 186,78"] },
   { ...FH, id: "units-ac130-orbit", kind: "shot", camera: { x: 191, y: 150, scale: 3 }, crop: MAP,
     setup: [...BASE, "ability gunship", "battle", "advance 30", "tool gunship", "click 191,150", "advance 25", "cursor off"] },
   { ...FH, id: "support-radius", kind: "shot", camera: { x: 191, y: 106, scale: 3.5 }, crop: MAP,
     setup: ["zone 150,66 234,66 234,142 150,142", "tool radio", "hover 160,78"] },
-  { ...FH, id: "battle-minimap-alerts", kind: "shot", camera: { x: 191, y: 106, scale: 3 }, crop: [724, 76, 236, 184], setup: BATTLE(75) }, // 0.48
+  { ...FH, id: "battle-minimap-alerts", kind: "shot", camera: { x: 191, y: 106, scale: 3 }, crop: [0, 352, 150, 164], setup: BATTLE(75) }, // 0.48 (0.51: the minimap sits in the bottom panel)
   // 0.50: battle groups on the bar (bottom right), and a Troops squad walking over to fortify a roof
-  { ...FH, id: "controls-groupbar", kind: "shot", camera: { x: 191, y: 106, scale: 4 }, crop: [384, 380, 576, 72],
+  { ...FH, rev: 2, id: "controls-groupbar", kind: "shot", camera: { x: 191, y: 106, scale: 4 }, crop: [180, 296, 600, 58],
     setup: [ZONE, "place garrison 172,78", "place garrison 190,106", "place sniper 186,78", "battle", "advance 3", "select 190,106", "key Ctrl+1", "select 172,78", "key Ctrl+2", "select 186,78", "key Ctrl+3", "key 1", "cursor off"] },
-  { ...FH, id: "clip-troops-fortify", kind: "clip", camera: { x: 191, y: 119, scale: 8 }, crop: MAP, seconds: 13.5,
-    setup: [ZONE, "place garrison 191,119", "battle", "advance 3", "select 191,119", "click 192,126 right"], action: ["advance 13.5"] },
-  { ...FH, id: "controls-quickbar", kind: "shot", camera: { x: 191, y: 106, scale: 4 }, crop: [0, 448, 960, 92], setup: BASE },
+  { ...FH, rev: 2, id: "clip-troops-fortify", kind: "clip", camera: { x: 191, y: 119, scale: 8 }, crop: [180, 140, 600, 180], seconds: 12.5,
+    setup: [ZONE, "place garrison 191,119", "battle", "advance 3", "select 191,119", "click 192,126 right"], action: ["advance 12.5"] },
+  { ...FH, rev: 3, id: "controls-hud", kind: "shot", camera: { x: 191, y: 106, scale: 4 }, crop: [0, 350, 960, 168], setup: [...BATTLE(3), "select 172,78", "cursor off"] }, // 0.51
   // ---------- clips ----------
   { ...FH, id: "clip-draw-zone", kind: "clip", camera: { x: 191, y: 106, scale: 4.5 }, crop: MAP, seconds: 5, setup: [],
     action: ["tool zone", "click 165,82", "advance 0.7", "click 217,82", "advance 0.7", "click 217,130", "advance 0.7", "click 165,130", "advance 0.7", "click 165,82"] },

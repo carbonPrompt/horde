@@ -8,7 +8,7 @@ const CODEX_SECTIONS: string[] = SECTIONS.map(s => s.id);
 
 // 0.45: Plan.units entries: 5th = the unit's orders (present = commanded), 6th = stand by
 export interface Plan { poly: [number, number][]; zones?: [number, number][][]; walls: number[]; units: [C.UnitKind, number, number, C.TargetMode?, Order[]?, boolean?][]; supports?: [C.SupportKind, number, number][]; abilities?: Partial<Record<C.AbilityKind, number>>; c4?: number[]; demo?: number[]; start?: number; groups?: PlanGroup[] } // 0.50: battle groups (unit indices into units, or a zone)
-export interface Settings { fullscreen: boolean; edgeScroll: boolean; showRanges: boolean; devMode?: boolean; crowd?: number; vol?: { master: number; sfx: number; music: number }; quickbar?: (string | null)[]; difficulty?: C.Difficulty; codexSeen?: string; codexOpen?: string[]; /* 0.47: last version the Codex was opened in, open sections */
+export interface Settings { fullscreen: boolean; edgeScroll: boolean; showRanges: boolean; devMode?: boolean; crowd?: number; quickbar?: (string | null)[]; quickKeys?: (string | null)[]; vol?: { master: number; sfx: number; music: number }; difficulty?: C.Difficulty; codexSeen?: string; codexOpen?: string[]; /* 0.47: last version the Codex was opened in, open sections */
   autoUpdate?: boolean; checkUpdates?: boolean; updatePin?: string; speed?: number; tips?: boolean; tipsSeen?: string[] } // 0.26 updater: install by itself / look on start / stay on a picked older version
 export interface Best { pct: number; medal: string | null; mayhem?: number; perM?: number; underBudget?: boolean } // 0.48: best people saved per $1M, Under Budget badge // pct: round score 0..100 since 0.20 ("% evacuated" before)
 /** 0.33: the battle frozen in this slot (the file itself sits beside the profile). */
@@ -57,8 +57,10 @@ export function clean(s: SaveData): SaveData {
     plans[k] = pl;
   }
   const settings = { ...s.settings };
-  const qb = settings.quickbar as unknown;
+  const qb = settings.quickbar as unknown; // 0.54: the quick bar is back (5 slots) with player-chosen keys
   if (!Array.isArray(qb) || qb.length > 9 || !qb.every(x => x === null || (typeof x === "string" && ID.test(x)))) delete settings.quickbar;
+  const qk = settings.quickKeys as unknown;
+  if (!Array.isArray(qk) || qk.length > 9 || !qk.every(x => x === null || (typeof x === "string" && x.length >= 1 && x.length <= 3))) delete settings.quickKeys;
   if (settings.tips !== undefined && typeof settings.tips !== "boolean") delete settings.tips; // 0.41
   if (settings.tipsSeen !== undefined) { const ts = settings.tipsSeen as unknown; settings.tipsSeen = Array.isArray(ts) ? ts.filter((x): x is string => typeof x === "string" && /^[a-zA-Z]{1,24}$/.test(x)).slice(0, 64) : undefined; if (!settings.tipsSeen) delete settings.tipsSeen; }
   const diff = settings.difficulty as unknown;

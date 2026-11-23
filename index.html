@@ -63,29 +63,21 @@
   .spacer { flex: 1; }
 
   /* Bottom Tactical Command Toolbar */
-  nav {
-    grid-column: 1; display: flex; flex-direction: row; align-items: stretch; justify-content: safe center;
-    gap: 8px; padding: 6px 12px; overflow-x: auto; overflow-y: hidden;
+  #toolsrc { display: none; } /* 0.51: only holds the tool cards the build panel reads */
+  /* 0.51: the RTS bottom panel: minimap | info | selection | build | actions */
+  #hud {
+    grid-column: 1; display: grid; grid-template-columns: 176px minmax(220px, 1.25fr) minmax(170px, 1fr) minmax(300px, 1.7fr) auto;
+    align-items: stretch; gap: 8px; padding: 6px 10px; height: 164px; box-sizing: border-box; overflow-x: auto; overflow-y: hidden;
     background: linear-gradient(180deg, rgba(18, 23, 33, 0.98) 0%, rgba(10, 13, 19, 0.99) 100%);
     border-top: 1px solid var(--line-bright);
     box-shadow: 0 -6px 24px rgba(0, 0, 0, 0.65); z-index: 5;
   }
-  nav::-webkit-scrollbar { height: 5px; }
-  nav::-webkit-scrollbar-thumb { background: #283142; border-radius: 3px; }
-  .dock-group {
-    display: flex; flex-direction: column; gap: 3px; padding: 0 8px 0 0;
-    border-right: 1px solid #202938; flex-shrink: 0;
-  }
-  .dock-group:last-child { border-right: none; padding-right: 0; }
-  nav h2 {
-    font-size: 9.5px; font-weight: 800; text-transform: uppercase; letter-spacing: 1.3px;
-    color: var(--dim); margin: 0 2px; line-height: 1.1; white-space: nowrap;
-  }
+  #hud::-webkit-scrollbar { height: 5px; }
+  #hud::-webkit-scrollbar-thumb { background: #283142; border-radius: 3px; }
   .tool-grid { display: flex; flex-direction: row; gap: 4px; align-items: stretch; flex: 1; }
   /* Category tabs: one tray open at a time (Command always shows) */
   .cats { display: grid; grid-template-columns: repeat(2, auto); gap: 3px; align-content: center; flex-shrink: 0; padding-right: 8px; border-right: 1px solid #202938; }
   .cats button { font-size: 10px; font-weight: 700; padding: 3px 8px; justify-content: center; white-space: nowrap; border-radius: 5px; }
-  .dock-group.cat:not(.open) { display: none; }
   .tcard.locked { opacity: 0.45; filter: grayscale(0.8); }
   .tcard.locked small { color: #94a3b8; }
   .reclist { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 6px; max-width: 900px; width: 100%; }
@@ -102,11 +94,6 @@
   .slot .acts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
   .slot .acts button { font-size: 12.5px; padding: 6px 10px; justify-content: center; }
   .slot .acts button.danger { border-color: rgba(248, 113, 113, 0.5); color: #fca5a5; }
-  nav .pair { display: flex; flex-direction: column; gap: 3px; justify-content: stretch; }
-  nav .pair button {
-    flex: 1; justify-content: center; font-size: 10.5px; font-weight: 600;
-    padding: 3px 7px; white-space: nowrap; border-radius: 5px;
-  }
 
   button {
     background: var(--card); color: var(--text); border: 1px solid var(--line);
@@ -165,7 +152,7 @@
   #hint { color: #cbd5e1; font-weight: 500; flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; flex-shrink: 1; }
 
   #msg {
-    position: absolute; bottom: 10px; left: 50%; transform: translateX(-50%); max-width: calc(100% - 40px);
+    position: absolute; bottom: 64px; left: 50%; transform: translateX(-50%); max-width: calc(100% - 40px); /* 0.51: above the group tabs */
     background: rgba(11, 15, 23, 0.92); border: 1px solid var(--line-bright);
     padding: 8px 16px; border-radius: 8px; font-weight: 600; box-shadow: 0 6px 20px rgba(0,0,0,0.55);
     transition: opacity 0.35s; pointer-events: none; z-index: 7;
@@ -190,7 +177,7 @@
 
   /* Attract & Modal Screens */
   body.attract #app { display: block; }
-  body.attract header, body.attract nav, body.attract footer, body.attract #msg { display: none !important; }
+  body.attract header, body.attract nav, body.attract #hud, body.attract footer, body.attract #msg { display: none !important; }
   body.attract main { height: 100%; width: 100%; }
   body.attract canvas:not(#cm-canvas) { cursor: default; }
   #screens {
@@ -318,47 +305,93 @@
   #dev-info { color: var(--dim); font-size: 11.5px; white-space: pre-line; font-variant-numeric: tabular-nums; }
 
   /* Tactical Hover Info Panel with Pixel-Art Portrait (Anchored above Bottom Toolbar) */
-  #infopanel {
-    position: absolute; right: 16px; top: 12px; width: 360px; max-width: calc(100% - 32px);
+  #infocard {
+    position: static; width: auto; max-width: none; /* 0.51: lives in the info panel */
     background: rgba(14, 18, 26, 0.96); backdrop-filter: blur(10px);
     border: 1px solid #38455c; border-left: 4px solid var(--accent); border-radius: 10px;
     padding: 12px 14px; box-shadow: 0 12px 32px rgba(0,0,0,0.75);
-    pointer-events: none; z-index: 6; font-size: 12.5px; line-height: 1.35;
+    font-size: 12.5px; line-height: 1.35; box-shadow: none; padding: 6px 8px;
   }
-  :is(#infopanel, #pdetail) .ip-top { display: flex; gap: 10px; align-items: center; margin-bottom: 7px; }
-  :is(#infopanel, #pdetail) .ip-portrait {
+  #infocard .ip-top { display: flex; gap: 10px; align-items: center; margin-bottom: 7px; }
+  #infocard .ip-portrait {
     width: 64px; height: 64px; image-rendering: pixelated; flex-shrink: 0;
     background: #090c12; border: 1px solid #2e3a4e; border-radius: 7px; padding: 3px;
   }
-  :is(#infopanel, #pdetail) .ip-meta { flex: 1; min-width: 0; }
-  :is(#infopanel, #pdetail) .ip-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
-  :is(#infopanel, #pdetail) .ip-title { font-size: 15px; font-weight: 800; color: #fff; }
-  :is(#infopanel, #pdetail) .ip-cost { font-weight: 800; color: var(--gold); font-variant-numeric: tabular-nums; font-size: 13px; }
-  :is(#infopanel, #pdetail) .ip-role { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; color: #90caf9; margin-top: 2px; }
-  :is(#infopanel, #pdetail) .ip-desc { color: #cbd5e1; margin-bottom: 8px; }
-  :is(#infopanel, #pdetail) .ip-grid {
+  #infocard .ip-meta { flex: 1; min-width: 0; }
+  #infocard .ip-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+  #infocard .ip-title { font-size: 15px; font-weight: 800; color: #fff; }
+  #infocard .ip-cost { font-weight: 800; color: var(--gold); font-variant-numeric: tabular-nums; font-size: 13px; }
+  #infocard .ip-role { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; color: #90caf9; margin-top: 2px; }
+  #infocard .ip-desc { color: #cbd5e1; margin-bottom: 8px; }
+  #infocard .ip-grid {
     display: grid; grid-template-columns: 1fr 1fr; gap: 4px 10px;
     background: rgba(8, 10, 15, 0.72); border: 1px solid #242d3d; border-radius: 7px;
     padding: 7px 9px; margin-bottom: 7px; font-variant-numeric: tabular-nums;
   }
-  :is(#infopanel, #pdetail) .ip-grid div { display: flex; justify-content: space-between; gap: 6px; }
-  :is(#infopanel, #pdetail) .ip-grid span { color: var(--dim); }
-  :is(#infopanel, #pdetail) .ip-grid b { color: #f8fafc; font-weight: 600; text-align: right; }
-  :is(#infopanel, #pdetail) .ip-bar { height: 5px; background: #1e2636; border-radius: 3px; overflow: hidden; margin: 3px 0 6px; }
-  :is(#infopanel, #pdetail) .ip-bar > i { display: block; height: 100%; background: var(--accent); }
-  :is(#infopanel, #pdetail) .ip-tags { display: flex; flex-direction: column; gap: 2px; color: #b8c2d0; font-size: 11.5px; }
-  :is(#infopanel, #pdetail) .ip-tags div::before { content: "▸ "; color: var(--accent); }
+  #infocard .ip-grid div { display: flex; justify-content: space-between; gap: 6px; }
+  #infocard .ip-grid span { color: var(--dim); }
+  #infocard .ip-grid b { color: #f8fafc; font-weight: 600; text-align: right; }
+  #infocard .ip-bar { height: 5px; background: #1e2636; border-radius: 3px; overflow: hidden; margin: 3px 0 6px; }
+  #infocard .ip-bar > i { display: block; height: 100%; background: var(--accent); }
+  #infocard .ip-tags { display: flex; flex-direction: column; gap: 2px; color: #b8c2d0; font-size: 11.5px; }
+  #infocard .ip-tags div::before { content: "▸ "; color: var(--accent); }
   .legend i { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin: 0 4px 0 10px; }
 
-  /* 0.19 bottom bar: classes | quick bar | fixed controls. Fixed sizes: nothing reflows when a class opens. */
-  nav { justify-content: space-between; gap: 8px; padding: 6px 8px; overflow-x: hidden; }
-  nav #controls .tcard { width: clamp(46px, 3.6vw, 58px); }
-  nav #controls .tcard .tc-name { max-width: 100%; }
-  #classes, #quickbar, #controls { display: flex; gap: 4px; flex-shrink: 0; align-items: stretch; }
-  #classes { display: grid; grid-template-columns: repeat(4, clamp(60px, 4.6vw, 80px)); grid-auto-rows: 1fr; gap: 4px; }
-  #classes button { justify-content: center; font-size: clamp(9.5px, 0.75vw, 11px); font-weight: 700; padding: 3px 4px; white-space: nowrap; }
-  #quickbar { padding: 0 6px; border-left: 1px solid #202938; border-right: 1px solid #202938; }
-  .qslot { width: clamp(40px, 3vw, 56px); min-height: 64px; padding: 2px; justify-content: center; flex-direction: column; gap: 1px; border-style: dashed; background: #0f131a; position: relative; }
+  /* 0.51: panel cells */
+  #hud > div { min-width: 0; min-height: 0; background: rgba(8, 11, 17, 0.6); border: 1px solid #1f2836; border-radius: 8px; padding: 6px; overflow: hidden; position: relative; }
+  #cmdtools, #cmdorders { display: grid; grid-template-columns: repeat(5, 46px); grid-auto-rows: 46px; gap: 4px; align-content: start; } /* 0.51.1: square picture buttons */
+  #cmdtools[hidden], #cmdorders[hidden] { display: none; }
+  #hud-actions .tcard, #hud-actions .ctl2 { width: auto; min-height: 0; height: 46px; }
+  #cmdorders .cmd { position: relative; padding: 2px; justify-content: center; }
+  #cmdorders .cmd img, #cmdtools .ctl2 img { width: 32px; height: 32px; pointer-events: none; }
+  #cmdorders .cmd .hk { position: absolute; top: 1px; left: 2px; font-size: 8.5px; font-weight: 800; color: var(--gold); background: rgba(9, 11, 16, 0.85); padding: 0 3px; border-radius: 3px; line-height: 1.3; }
+  #cmdorders .cmd.on { background: #7f1d1d; border-color: #f87171; color: #fff; }
+  /* 0.51.1: picture-only command card and tools page; names live in the tooltip */
+  #cmdtools .tc-body { display: none; }
+  #cmdtools .tcard .px-ico { width: 32px; height: 32px; }
+  #cmdtools .ctl2 { padding: 2px; justify-content: center; }
+  #cmdtools .ctl2 .px-ico { background: transparent; border: none; padding: 0; }
+  #uitip { position: fixed; z-index: 60; pointer-events: none; max-width: 260px; padding: 6px 9px; border-radius: 7px; background: rgba(10, 14, 20, 0.96); border: 1px solid #334155; font-size: 12px; line-height: 1.35; color: #cbd5e1; box-shadow: 0 6px 18px rgba(0, 0, 0, 0.55); }
+  #uitip[hidden] { display: none; }
+  #uitip b { color: #fff; font-size: 12.5px; }
+  #uitip kbd { margin-left: 6px; font: 700 10.5px system-ui, sans-serif; color: var(--gold); background: #1b2230; border: 1px solid #334155; border-radius: 4px; padding: 0 5px; }
+  #uitip .sub { color: var(--gold); font-weight: 700; }
+  #uitip .desc { display: block; margin-top: 2px; }
+  #hud-build { display: flex; flex-direction: column; gap: 4px; }
+  #hud-mini { padding: 4px; display: flex; align-items: center; justify-content: center; }
+  #hud-info { overflow-y: auto; }
+  #hud-info #infocard { border: none; border-left: 3px solid var(--accent); border-radius: 6px; background: transparent; padding: 2px 8px; }
+  #hud-info #infocard.float { position: fixed; z-index: 40; max-height: calc(100vh - 150px); overflow: hidden; background: rgba(10, 13, 19, 0.97); border: 1px solid #2c3a50; border-left: 3px solid var(--accent); box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.55); padding: 6px 10px; } /* 0.52.1: a long hover card grows up over the map */
+  /* 0.51.1: the card fits its cell: smaller portrait, the head wraps, stat values never split */
+  #hud-info #infocard .ip-top { gap: 8px; margin-bottom: 5px; }
+  #hud-info #infocard .ip-portrait { width: 44px; height: 44px; padding: 2px; }
+  #hud-info #infocard .ip-head { flex-wrap: wrap; row-gap: 0; }
+  #hud-info #infocard .ip-title { font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+  #hud-info #infocard .ip-head > :not(.ip-title) { white-space: nowrap; font-size: 11.5px; }
+  #hud-info #infocard .ip-role { letter-spacing: 0.4px; }
+  #hud-info #infocard .ip-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); padding: 5px 7px; gap: 3px 10px; }
+  #hud-info #infocard .ip-grid span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  #hud-info #infocard .ip-grid b, #hud-info #person .ip-grid b { white-space: nowrap; margin-left: auto; }
+  #hud-info #infocard .ip-grid div, #hud-info #person .ip-grid div { flex-wrap: wrap; column-gap: 6px; row-gap: 0; } /* a long value drops under its label instead of clipping */
+  #hud-sel { display: flex; flex-direction: column; gap: 3px; overflow-y: auto; }
+  #hud-sel .sel-head { font-weight: 800; color: #fff; font-size: 12.5px; }
+  #hud-sel .sel-head .hk { color: var(--dim); font-weight: 700; margin-left: 6px; }
+  #hud-sel .sel-row { display: flex; align-items: center; justify-content: space-between; gap: 6px; padding: 2px 6px; font-size: 11.5px; min-height: 0; white-space: nowrap; }
+  #hud-sel .sel-row > :first-child, #hud-sel .sel-row { overflow: hidden; text-overflow: ellipsis; }
+  #hud-sel .sel-row.dead { opacity: 0.4; text-decoration: line-through; }
+  #hud-sel .sel-row.on { border-color: #80cbc4; }
+  #hud-sel .sel-card { font-size: 11px; color: #cbd5e1; }
+  #hud-sel .sel-grid { display: grid; grid-template-columns: repeat(auto-fill, 40px); gap: 3px; }
+  #hud-sel .sel-tile { width: 40px; height: 44px; padding: 2px; flex-direction: column; justify-content: space-between; min-height: 0; }
+  #hud-sel .sel-tile img { width: 28px; height: 28px; image-rendering: pixelated; }
+  #hud-sel .sh { display: block; width: 100%; min-width: 34px; height: 4px; border-radius: 2px; background: rgba(148, 163, 184, 0.25); }
+  #hud-sel .sel-row .sh { width: 60px; }
+  #hud-sel .sh i { display: block; height: 100%; border-radius: 2px; }
+  #hud-sel .sel-empty { color: var(--dim); font-size: 12px; margin: auto; }
+  #hud-sel .roster span:first-child { display: flex; align-items: center; gap: 5px; overflow: hidden; text-overflow: ellipsis; } /* 0.52 */
+  #hud-sel .roster .ring { width: 7px; height: 7px; border-radius: 50%; border: 2px solid; background: #5ef07a; flex-shrink: 0; }
+  #hud-sel .roster small { color: var(--dim); font-size: 10.5px; }
+  #hud-sel .roster small.st-fighting { color: #f87171; } #hud-sel .roster small.st-low-ammo, #hud-sel .roster small.st-out-of-ammo { color: #fbbf24; }
   .upd-banner { margin: 6px auto 0; display: block; background: #3b2f0a; border: 1px solid var(--gold); color: var(--gold); font-weight: 700; }
   #ver-list { display: flex; flex-direction: column; gap: 8px; max-height: 55vh; overflow-y: auto; width: min(720px, 92vw); }
   .ver-row { display: flex; gap: 12px; align-items: flex-start; justify-content: space-between; background: #0f131a; border: 1px solid #232a36; border-radius: 6px; padding: 8px 10px; }
@@ -366,14 +399,8 @@
   .ver-row button { flex-shrink: 0; }
   .ver-latest { border-color: var(--gold); }
   .ver-notes { color: #cbd5e1; font-size: 12px; white-space: pre-wrap; max-height: 7.5em; overflow-y: auto; margin-top: 4px; }
-  .qslot::after { content: attr(data-key); position: absolute; top: 1px; left: 3px; font-size: 9px; font-weight: 700; color: var(--dim); pointer-events: none; }
-  .qslot.full { border-style: solid; background: var(--card); }
-  .qslot img { width: 80%; height: auto; aspect-ratio: 1; }
-  .qslot small { font-size: 9px; }
-  .qslot.locked { opacity: 0.45; filter: grayscale(0.8); }
-  .qslot.drop { border-color: var(--gold); box-shadow: 0 0 10px rgba(250, 204, 21, 0.45); }
   .ctl2 { width: clamp(46px, 3.6vw, 58px); min-height: 64px; justify-content: center; text-align: center; font-size: 10.5px; font-weight: 700; line-height: 1.15; position: relative; flex-shrink: 0; }
-  .ctl2 .hk, .tcard .hk { position: absolute; top: 2px; right: 3px; font-size: 8.5px; font-weight: 800; color: #94a3b8; background: rgba(9, 11, 16, 0.8); padding: 0 3px; border-radius: 3px; }
+  .ctl2 .hk, .tcard .hk { position: absolute; top: 2px; left: 3px; right: auto; font-size: 8.5px; font-weight: 800; color: #94a3b8; background: rgba(9, 11, 16, 0.8); padding: 0 3px; border-radius: 3px; }
   .spd3 { display: flex; flex-direction: column; gap: 4px; width: clamp(110px, 8.8vw, 150px); flex-shrink: 0; }
   .spd3 .row { display: flex; gap: 4px; flex: 1; }
   .spd3 button { flex: 1; justify-content: center; gap: 5px; font-size: 12px; font-weight: 700; padding: 2px 4px; }
@@ -381,6 +408,11 @@
   .spd3 .pausebar { flex: 1; letter-spacing: 1px; background: #1c2230; }
   .spd3 button.on { background: #2563eb; border-color: #60a5fa; color: #fff; box-shadow: none; }
   .spd3 .pausebar.on { background: #b45309; border-color: #fbbf24; }
+  #topctl { display: flex; gap: 6px; align-items: center; flex-shrink: 0; }
+  #topctl #startbtn { padding: 4px 12px; min-height: 0; font-size: 12px; }
+  #topctl .spd3 button { padding: 3px 7px; }
+  #topctl .spd3 { flex-direction: row; width: auto; }
+  #topctl .spd3 .row { flex: none; }
   #startbtn {
     width: clamp(70px, 5.6vw, 92px); flex-shrink: 0; background: linear-gradient(180deg, #dc2626 0%, #991b1b 100%);
     border-color: #f87171; font-weight: 900; font-size: 11.5px; letter-spacing: 0.6px; text-transform: uppercase;
@@ -393,33 +425,27 @@
     background: #1e293bee; border: 2px solid #facc15; border-radius: 8px; padding: 10px 14px; font-size: 15px; font-weight: 600; color: #f8fafc; }
   #tut button { flex: 0 0 auto; }
   /* 0.39: the person window (click a white dot) */
-  #person { position: absolute; left: 16px; top: 12px; width: 330px; max-width: calc(100% - 32px); max-height: calc(100% - 24px); overflow: auto; z-index: 7;
+  #person { position: static; width: auto; max-width: none; overflow: auto; /* 0.51: lives in the info panel */
     background: rgba(14, 18, 26, 0.96); border: 1px solid #38455c; border-left: 4px solid #e2e8f0; border-radius: 10px; padding: 12px 14px;
     box-shadow: 0 12px 32px rgba(0,0,0,0.75); font-size: 12.5px; line-height: 1.35; color: #e2e8f0; }
   #person[hidden] { display: none; }
-  /* 0.50: battle groups 1-0, bottom right of the map, just above the bottom bar (design ruling) */
-  #groupbar { position: absolute; right: 8px; bottom: 8px; z-index: 7; display: flex; gap: 4px; max-width: calc(100% - 200px); overflow-x: auto; padding: 4px; background: rgba(8, 12, 20, 0.72); border: 1px solid rgba(148, 163, 184, 0.25); border-radius: 10px; }
-  #groupbar[hidden] { display: none; }
-  #groupbar .gslot { position: relative; flex: 0 0 auto; width: 52px; height: 46px; padding: 0; border-radius: 7px; border: 1px dashed rgba(148, 163, 184, 0.35); background: rgba(15, 23, 42, 0.6); color: #cbd5e1; font: 600 11px/1.1 inherit; cursor: pointer; overflow: hidden; }
-  #groupbar .gslot.on { border-style: solid; border-color: rgba(128, 203, 196, 0.6); background: rgba(30, 41, 59, 0.9); }
-  #groupbar .gslot.sel { border-color: #80cbc4; box-shadow: 0 0 0 1px #80cbc4 inset; }
-  #groupbar .gslot .gk { position: absolute; left: 4px; top: 2px; font-size: 10px; color: #94a3b8; }
-  #groupbar .gslot .gn { position: absolute; right: 4px; top: 2px; font-size: 12px; color: #f8fafc; }
-  #groupbar .gslot .gi { position: absolute; left: 50%; top: 14px; transform: translateX(-50%); font-size: 10px; letter-spacing: 0.02em; color: #e2e8f0; white-space: nowrap; }
-  #groupbar .gslot .gh { position: absolute; left: 4px; right: 4px; bottom: 4px; height: 4px; border-radius: 2px; background: rgba(148, 163, 184, 0.25); }
-  #groupbar .gslot .gh i { display: block; height: 100%; border-radius: 2px; background: #4ade80; }
-  @media (max-width: 760px) { #groupbar { right: 6px; bottom: 6px; max-width: calc(100% - 12px); } #groupbar .gslot { width: 44px; height: 44px; }
-    main #selbar { max-width: calc(100% - 16px); width: max-content; } }
-  #selbar { position: absolute; left: 50%; top: 10px; transform: translateX(-50%); max-width: calc(100% - 600px); flex-wrap: wrap; justify-content: center; z-index: 7; display: flex; gap: 8px; align-items: center;
-    background: rgba(14, 18, 26, 0.94); border: 1px solid #38455c; border-left: 4px solid #80cbc4; border-radius: 10px; padding: 6px 10px; font-size: 12.5px; color: #e2e8f0; }
-  #selbar[hidden] { display: none; }
-  #minimap { position: absolute; inset: 8px 8px auto auto; z-index: 6; border: 1px solid #38455c; border-radius: 6px; background: #0b0f16; box-shadow: 0 6px 18px rgba(0,0,0,0.6); cursor: crosshair; }
+  /* 0.50: battle groups (0.54: 1-5, centered over the selection box) */
+  #grouptabs { position: absolute; left: 50%; bottom: 4px; transform: translateX(-50%); z-index: 6; width: max-content; display: flex; gap: 4px; max-width: calc(100% - 200px); overflow-x: auto; padding: 4px; background: rgba(8, 12, 20, 0.72); border: 1px solid rgba(148, 163, 184, 0.25); border-radius: 10px; }
+  #grouptabs[hidden] { display: none; }
+  #grouptabs .gslot { position: relative; flex: 0 0 auto; width: 52px; height: 46px; padding: 0; border-radius: 7px; border: 1px dashed rgba(148, 163, 184, 0.35); background: rgba(15, 23, 42, 0.6); color: #cbd5e1; font: 600 11px/1.1 inherit; cursor: pointer; overflow: hidden; }
+  #grouptabs .gslot.on { border-style: solid; border-color: rgba(128, 203, 196, 0.6); background: rgba(30, 41, 59, 0.9); }
+  #grouptabs .gslot.sel { border-color: #80cbc4; box-shadow: 0 0 0 1px #80cbc4 inset; }
+  #grouptabs .gslot .gk { position: absolute; left: 3px; top: 1px; z-index: 1; font-size: 10px; font-weight: 800; color: var(--gold); background: rgba(9, 11, 16, 0.85); padding: 0 3px; border-radius: 3px; line-height: 1.3; }
+  #grouptabs .gslot .gn { position: absolute; right: 3px; top: 1px; z-index: 1; font-size: 11px; font-weight: 700; color: #f8fafc; text-shadow: 0 1px 2px #000; }
+  #grouptabs .gslot .gp { position: absolute; left: 50%; top: 4px; transform: translateX(-50%); width: 30px; height: 30px; pointer-events: none; } /* 0.54: the unit picture */
+  #grouptabs .gslot[hidden] { display: none; }
+  #grouptabs .gslot .gh { position: absolute; left: 4px; right: 4px; bottom: 4px; height: 4px; border-radius: 2px; background: rgba(148, 163, 184, 0.25); }
+  #grouptabs .gslot .gh i { display: block; height: 100%; border-radius: 2px; background: #4ade80; }
+
+  #minimap { position: static; max-width: 100%; max-height: 100%; border: 1px solid #38455c; border-radius: 6px; background: #0b0f16; box-shadow: 0 6px 18px rgba(0,0,0,0.6); cursor: crosshair; }
   #minimap[hidden] { display: none; }
-  #minipings { position: absolute; inset: 9px 9px auto auto; z-index: 7; pointer-events: none; border-radius: 6px; }
+  #minipings { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); pointer-events: none; border-radius: 6px; }
   #minipings[hidden] { display: none; }
-  #selbar button { padding: 4px 10px; font-size: 12px; white-space: nowrap; }
-  #selbar button.on { background: #7f1d1d; border-color: #f87171; color: #fff; }
-  #selbar b { white-space: nowrap; }
   #person.following { border-left-color: #fde68a; }
   #person .pw-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
   #person .pw-name { font-size: 16px; font-weight: 800; color: #fff; }
@@ -455,53 +481,53 @@
   .tut-glow { outline: 3px solid #facc15 !important; outline-offset: 1px; animation: tutglow 1s ease-in-out infinite alternate; }
   @keyframes tutglow { from { outline-color: #facc15; } to { outline-color: #facc1540; } }
   #ticker {
-    flex: 1 1 260px; max-width: 640px; min-width: 200px; height: 26px; position: relative; overflow: hidden; white-space: nowrap;
+    flex: 1 1 160px; max-width: 640px; min-width: 90px; height: 26px; position: relative; overflow: hidden; white-space: nowrap;
     background: #1f0f12; border: 1px solid #6b2229; border-radius: 6px; font-size: 12.5px; font-weight: 700;
   }
   #ticker span { position: absolute; top: 0; line-height: 24px; color: #fcd34d; will-change: transform; }
   #ticker span.urgent { color: #ff8a8a; }
   #devpanel .warn { color: #fbbf24; font-size: 11px; line-height: 1.25; }
 
-  /* Picker over the map (0.19): fixed spot and size, see-through, the game keeps running */
-  #picker {
-    position: absolute; left: 10px; bottom: 10px; width: min(1000px, calc(100% - 400px)); height: min(540px, calc(100% - 20px));
-    background: rgba(12, 16, 23, 0.8); backdrop-filter: blur(2px); border: 1px solid #4b6a55; border-radius: 10px;
-    display: flex; gap: 12px; padding: 12px; z-index: 6; box-shadow: 0 12px 32px rgba(0,0,0,0.6);
-  }
-  #picker .plist { width: 42%; display: flex; flex-direction: column; gap: 6px; overflow-y: auto; }
-  #picker h3 { margin: 0 0 2px; font-size: 16px; letter-spacing: 1px; text-transform: uppercase; color: #cbd5e1; }
-  .prow { display: flex; gap: 10px; align-items: center; padding: 6px 8px; border: 1px solid #2a3446; border-radius: 7px; background: rgba(28, 34, 46, 0.72); cursor: pointer; touch-action: none; }
-  .prow img { width: 48px; height: 48px; flex-shrink: 0; pointer-events: none; }
-  .prow b { display: block; font-size: 14px; } .prow small { color: var(--gold); font-size: 11px; font-weight: 700; }
-  .prow .hk { font-size: 10px; color: #94a3b8; background: #0b0f16; padding: 0 4px; border-radius: 3px; }
-  .prow.sel { border-color: var(--gold); background: rgba(66, 58, 24, 0.75); }
-  .prow.on { box-shadow: inset 0 0 0 1px var(--accent); }
-  .prow.locked, .prow.off { opacity: 0.45; filter: grayscale(0.8); }
-  #pdetail { flex: 1; overflow-y: auto; border-left: 4px solid var(--accent); padding: 4px 12px; font-size: 13px; line-height: 1.4; }
-  #pdetail .ip-portrait { width: 96px; height: 96px; }
-  #pdetail .ip-title { font-size: 20px; }
-  #pdetail .plock { color: #fca5a5; font-weight: 700; margin: 6px 0; }
-  #pdetail .phow { color: var(--gold); font-size: 12px; margin-top: 8px; }
-  #picker .pclose { position: absolute; top: 8px; right: 8px; padding: 2px 8px; font-size: 14px; justify-content: center; }
-  #classes button.on { background: linear-gradient(180deg, rgba(34, 88, 58, 0.92) 0%, rgba(18, 48, 33, 0.96) 100%); border-color: var(--accent); }
-  .dragghost { position: fixed; width: 48px; height: 48px; pointer-events: none; z-index: 50; opacity: 0.85; filter: drop-shadow(0 4px 8px rgba(0,0,0,0.7)); }
+  /* 0.51: the build panel: category tabs over an always-open grid (0.54: the quick bar under it) */
+  #btabs { display: flex; gap: 2px; flex-wrap: nowrap; overflow-x: auto; flex-shrink: 0; }
+  #btabs button { padding: 2px 6px; font-size: 10px; font-weight: 700; min-height: 0; white-space: nowrap; }
+  #btabs button.on { background: linear-gradient(180deg, rgba(34, 88, 58, 0.9), rgba(20, 52, 34, 0.9)); border-color: var(--accent); color: #fff; }
+  #bgrid { display: flex; gap: 4px; flex-wrap: wrap; align-content: flex-start; overflow-y: auto; flex: 1; min-height: 0; }
+  .btile { position: relative; width: 46px; height: 46px; padding: 2px; justify-content: center; gap: 0; min-height: 0; } /* 0.51.1: picture only */
+  .btile img { width: 34px; height: 34px; pointer-events: none; image-rendering: auto; }
+  .btile .hk { position: absolute; top: 1px; left: 2px; font-size: 8px; font-weight: 800; color: #94a3b8; background: rgba(9, 11, 16, 0.85); padding: 0 2px; border-radius: 3px; line-height: 1.3; }
+  .btile.on { box-shadow: inset 0 0 0 1px var(--accent); border-color: var(--accent); }
+  .btile.locked, .btile.off { opacity: 0.45; filter: grayscale(0.8); }
+  /* 0.54: the quick bar is back under the build grid: 5 slots, keys 6-0 by default, right-click a slot to change its key */
+  #quickbar { display: flex; gap: 4px; flex-shrink: 0; padding-top: 3px; border-top: 1px solid #1f2836; }
+  .qslot { position: relative; width: 46px; height: 40px; padding: 2px; justify-content: center; border-style: dashed; background: #0f131a; min-height: 0; }
+  .qslot.full { border-style: solid; background: var(--card); }
+  .qslot img { width: 30px; height: 30px; pointer-events: none; }
+  .qslot .hk { position: absolute; top: 1px; left: 2px; font-size: 8.5px; font-weight: 800; color: var(--gold); background: rgba(9, 11, 16, 0.85); padding: 0 3px; border-radius: 3px; line-height: 1.3; }
+  .qslot.locked { opacity: 0.45; filter: grayscale(0.8); }
   .qslot.on { border-color: var(--accent); box-shadow: 0 0 10px rgba(74, 222, 128, 0.35); }
+  .qslot.drop { border-color: var(--gold); box-shadow: 0 0 10px rgba(250, 204, 21, 0.45); }
+  .qslot.rebind { border-color: #f472b6; box-shadow: 0 0 10px rgba(244, 114, 182, 0.5); }
+  .dragghost { position: fixed; width: 48px; height: 48px; pointer-events: none; z-index: 50; opacity: 0.85; filter: drop-shadow(0 4px 8px rgba(0,0,0,0.7)); }
 
-  /* Narrow windows (a 1366 laptop at 125% is about 1093 px): icons only on the controls, smaller slots. Below
-     about 1080 px the bar scrolls sideways rather than hide a control. */
+  /* Narrow windows (a 1366 laptop at 125% is about 1093 px): a tighter panel; below that it scrolls sideways (0.51) */
   @media (max-width: 1300px) {
-    nav { overflow-x: auto; gap: 6px; padding: 5px 6px; }
-    #classes { grid-template-columns: repeat(4, 52px); }
-    #classes button { font-size: 9px; padding: 2px; }
-    .qslot { width: 30px; min-height: 56px; }
-    #quickbar { gap: 3px; }
-    nav #controls .tcard, .ctl2 { width: 40px; min-height: 56px; }
-    nav #controls .tcard .tc-body { display: none; }
+    #hud { grid-template-columns: 130px minmax(170px, 1fr) minmax(140px, 0.8fr) minmax(230px, 1.3fr) auto; gap: 5px; padding: 5px 6px; }
+    #cmdtools, #cmdorders { grid-template-columns: repeat(4, 52px); grid-auto-rows: 40px; }
+    #hud-actions .tcard, #hud-actions .ctl2 { height: 40px; } /* 0.51 review: three rows fit */
+    #hud-actions .tcard small { display: none; } #hud-actions .tcard .px-ico { width: 22px; height: 22px; } #hud-actions .tcard .tc-name { font-size: 9px; }
+    #cmdorders .cmd img, #cmdtools .ctl2 img, #cmdtools .tcard .px-ico { width: 26px; height: 26px; } /* 0.51.1 */
+    #hud-info #infocard .ip-grid, #hud-info #person .ip-grid { grid-template-columns: minmax(0, 1fr); } /* 0.51.1: one stat per row so values never clip */
+    #topctl .spd3 .k { display: none; }
     .ctl2 { font-size: 9px; }
-    .spd3 { width: 96px; }
-    .spd3 button { font-size: 10.5px; gap: 2px; }
-    .spd3 .k { display: none; }
-    #startbtn { width: 60px; font-size: 9.5px; }
+  }  /* 0.51: phones (after the narrow-window block, so it wins): the panel is a tray that scrolls sideways; the minimap and the command card come first */
+  @media (max-width: 760px) {
+    #grouptabs { max-width: calc(100% - 12px); } #grouptabs .gslot { width: 40px; height: 40px; }
+    #hud { grid-template-columns: 112px 218px 250px 190px 300px; height: 150px; padding: 4px; gap: 4px; }
+    #hud > div { grid-row: 1; }
+    #hud-mini { grid-column: 1; } #hud-actions { grid-column: 2; } #hud-info { grid-column: 3; } #hud-sel { grid-column: 4; } #hud-build { grid-column: 5; } /* minimap and orders first, swipe for the rest */
+    #cmdtools, #cmdorders { grid-template-columns: repeat(4, 48px); grid-auto-rows: 40px; }
+    #hud-actions .tcard, #hud-actions .ctl2 { height: 40px; }
   }
   #end-headline { font-size: 26px; font-weight: 900; color: #fca5a5; letter-spacing: 0.5px; }
   #end-score { font-size: 13px; color: #cbd5e1; line-height: 1.5; }
@@ -522,14 +548,11 @@
     <div id="stats"></div>
     <span class="spacer"></span>
     <div id="ticker"></div>
+    <div id="topctl"><div class="spd3"><div class="row"><button data-speed="0.5" title="F1">½x<span class="k">F1</span></button><button data-speed="1" title="F2">1x<span class="k">F2</span></button><button data-speed="2" title="F3">2x<span class="k">F3</span></button></div><button class="pausebar" data-speed="0" title="Space">PAUSE<span class="k">Space</span></button></div><button id="startbtn">Start Battle</button></div>
     <button id="devbtn" hidden title="F10">DEV</button>
   </header>
   <main>
-    <div id="person" hidden></div>
-    <div id="selbar" hidden></div>
-    <div id="groupbar" hidden><button class="gslot" data-key="1" data-n="0"></button><button class="gslot" data-key="2" data-n="1"></button><button class="gslot" data-key="3" data-n="2"></button><button class="gslot" data-key="4" data-n="3"></button><button class="gslot" data-key="5" data-n="4"></button><button class="gslot" data-key="6" data-n="5"></button><button class="gslot" data-key="7" data-n="6"></button><button class="gslot" data-key="8" data-n="7"></button><button class="gslot" data-key="9" data-n="8"></button><button class="gslot" data-key="0" data-n="9"></button></div>
-    <canvas id="minimap" hidden title="Click or drag: move the camera. Right-click: send the selected units here. Red rings: trouble (F jumps to the latest)."></canvas>
-    <canvas id="minipings" hidden></canvas>
+    
     <div id="timepick" hidden><div class="tp-box">
       <h2>When does it start?</h2>
       <p>The sirens go off at this time. Everyone gets the phone alert at once. Where people are depends on the hour.</p>
@@ -555,8 +578,6 @@
       <label><input type="checkbox" id="dev-field"> Show the infected's path map</label>
       <div id="dev-info"></div>
     </div>
-    <div id="infopanel" hidden></div>
-    <div id="picker" hidden></div>
     <div id="msg"></div>
     <div id="end" hidden><div class="card">
       <div id="end-reason"></div>
@@ -571,23 +592,37 @@
       <div id="end-xp"></div>
       <div class="row" id="end-final-row"><button id="end-retry">Try again</button><button id="end-next">Next city</button><button id="end-new">New city</button><button id="end-heatmap">Kill heatmap (H)</button><button id="end-cities">Cities</button><button id="end-title">Menu</button></div><!-- end-final-row -->
     </div></div>
+  <div id="grouptabs" hidden><button class="gslot" data-key="1" data-n="0"></button><button class="gslot" data-key="2" data-n="1"></button><button class="gslot" data-key="3" data-n="2"></button><button class="gslot" data-key="4" data-n="3"></button><button class="gslot" data-key="5" data-n="4"></button></div>
   </main>
-  <nav>
-    <div id="classes"><button data-cat="Engineering">Engineering</button><button data-cat="Infantry">Infantry</button><button data-cat="Artillery">Artillery</button><button data-cat="Armor">Armor</button><button data-cat="Naval">Naval</button><button data-cat="Air">Air</button><button data-cat="Strategic">Strategic</button><button data-cat="Support">Support</button></div>
-    <div id="quickbar"><button class="qslot" data-slot="0" data-key="Z"></button><button class="qslot" data-slot="1" data-key="X"></button><button class="qslot" data-slot="2" data-key="C"></button><button class="qslot" data-slot="3" data-key="V"></button><button class="qslot" data-slot="4" data-key="B"></button><button class="qslot" data-slot="5" data-key="N"></button><button class="qslot" data-slot="6" data-key="M"></button></div>
-    <div id="controls">
-      <button class="tcard" data-tool="zone"><img class="px-ico" data-sprite="zone" alt=""><div class="tc-body"><span class="tc-name">Safe Zone</span><small>Draw</small></div></button>
-      <button class="tcard" data-tool="gate" title="G"><img class="px-ico" data-sprite="gate" alt=""><div class="tc-body"><span class="tc-name">Gate/Wall</span><small>Toggle</small></div><span class="hk">G</span></button>
-      <button class="tcard" data-tool="remove"><img class="px-ico" data-sprite="remove" alt=""><div class="tc-body"><span class="tc-name">Sell/Evac</span><small>Refund</small></div></button>
-      <button class="tcard" data-tool="order"><img class="px-ico" data-sprite="order" alt=""><div class="tc-body"><span class="tc-name">Order</span><small>Send unit</small></div></button>
-      <button class="tcard" data-tool="pan"><img class="px-ico" data-sprite="pan" alt=""><div class="tc-body"><span class="tc-name">Move/Aim</span><small>Select</small></div></button>
-      <button class="tcard" id="heatmapbtn" title="H"><img class="px-ico" data-sprite="heatmap" alt=""><div class="tc-body"><span class="tc-name">Heatmap</span><small>Kills</small></div><span class="hk">H</span></button>
-      <button class="ctl2" id="recall" title="Q">Recall<br>Units<span class="hk">Q</span></button>
-      <button class="ctl2" id="closegates" title="L">Lock<br>Gates<span class="hk">L</span></button>
-      <button class="ctl2" id="clear" title="K">Clear<br>Zone<span class="hk">K</span></button>
-      <div class="spd3"><div class="row"><button data-speed="0.5" title="F1">½x<span class="k">F1</span></button><button data-speed="1" title="F2">1x<span class="k">F2</span></button><button data-speed="2" title="F3">2x<span class="k">F3</span></button></div><button class="pausebar" data-speed="0" title="Space">PAUSE<span class="k">Space</span></button></div>
-      <button id="startbtn">Start Battle</button>
+  <section id="hud">
+    <div id="hud-mini">
+      <canvas id="minimap" hidden title="Click or drag: move the camera. Right-click: send the selected units here. Red rings: trouble (` jumps to the latest)."></canvas>
+      <canvas id="minipings" hidden></canvas>
     </div>
+    <div id="hud-info"><div id="infocard" hidden></div><div id="person" hidden></div></div>
+    <div id="hud-sel"></div>
+    <div id="hud-build">
+      <div id="btabs"></div>
+      <div id="bgrid"></div>
+      <div id="quickbar"><button class="qslot" data-slot="0"></button><button class="qslot" data-slot="1"></button><button class="qslot" data-slot="2"></button><button class="qslot" data-slot="3"></button><button class="qslot" data-slot="4"></button></div>
+    </div>
+    <div id="hud-actions">
+      <div id="cmdtools">
+      <button class="tcard" data-tool="zone" data-tip="Safe Zone"><img class="px-ico" data-sprite="zone" alt=""><div class="tc-body"><span class="tc-name">Safe Zone</span><small>Draw</small></div><span class="hk"></span></button>
+      <button class="tcard" data-tool="gate" data-tip="Gate/Wall"><img class="px-ico" data-sprite="gate" alt=""><div class="tc-body"><span class="tc-name">Gate/Wall</span><small>Toggle</small></div><span class="hk">G</span></button>
+      <button class="tcard" data-tool="remove" data-tip="Sell/Evac"><img class="px-ico" data-sprite="remove" alt=""><div class="tc-body"><span class="tc-name">Sell/Evac</span><small>Refund</small></div><span class="hk"></span></button>
+      <button class="tcard" data-tool="order" data-tip="Order"><img class="px-ico" data-sprite="order" alt=""><div class="tc-body"><span class="tc-name">Order</span><small>Send unit</small></div><span class="hk"></span></button>
+      <button class="tcard" data-tool="pan" data-tip="Move/Aim"><img class="px-ico" data-sprite="pan" alt=""><div class="tc-body"><span class="tc-name">Move/Aim</span><small>Select</small></div><span class="hk"></span></button>
+      <button class="tcard" id="heatmapbtn" data-tip="Kill heatmap"><img class="px-ico" data-sprite="heatmap" alt=""><div class="tc-body"><span class="tc-name">Heatmap</span><small>Kills</small></div><span class="hk">H</span></button>
+      <button class="ctl2" id="recall" data-tip="Recall units"><img class="px-ico" data-oicon="recall" alt="Recall units"><span class="hk">Q</span></button>
+      <button class="ctl2" id="closegates" data-tip="Lock gates"><img class="px-ico" data-oicon="closegates" alt="Lock gates"><span class="hk">L</span></button>
+      <button class="ctl2" id="clear" data-tip="Clear zone"><img class="px-ico" data-oicon="clear" alt="Clear zone"><span class="hk">K</span></button>
+      </div>
+      <div id="cmdorders" hidden></div>
+    </div>
+  </section>
+  <div id="uitip" hidden></div>
+  <nav id="toolsrc">
     <div id="tool-cards" hidden>
     <div class="dock-group cat" data-cat="Engineering">
       <h2>Engineering</h2>
@@ -672,7 +707,7 @@
     <span class="spacer"></span>
     <span id="osm-credit" hidden>Map data &copy; OpenStreetMap contributors (ODbL)</span>
     <span class="legend"><i style="background:#f5f1e6"></i>civilian<i style="background:#9be7a8"></i>safe<i style="background:#ff3b3b"></i>infected<i style="background:#ff66d1"></i>swimmer</span>
-    <span>Z-M quick bar · J heights · R ranges · H heatmap · right-drag/WASD move · wheel zoom</span>
+    <span>Z zone · X sell · C order · V move/aim · B build · 1-5 groups · 6-0 quick bar · J heights · N ranges · H heatmap · WASD move</span>
   </footer>
 </div>
 

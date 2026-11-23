@@ -202,12 +202,12 @@ test("money: income in battle, purchases, extra zones, selling takes time, gates
   expect(s.place("garrison", at![0], at![1])).toBeNull();
   expect(s.remaining()).toBe(before - C.UNITS.garrison.cost);
   const g = s.units[s.units.length - 1];
-  expect(g.deployT).toBe(5);
+  expect(g.deployT).toBe(C.UNITS.garrison.deploy); // 0.53: 20 s by helicopter
   // sell it: gone after 7.5 s, refunded
   const t = s.sellAt(at![0] + 0.5, at![1] + 0.5);
-  expect(t).toBe(7.5);
+  expect(t).toBe(C.TROOPS_EXTRACT_S); // 0.53.1: in slow (20 s), out in 10 s (design ruling)
   const mid = s.remaining();
-  for (let i = 0; i < 20 * 8; i++) s.step();
+  for (let i = 0; i < 20 * ((t as number) + 1); i++) s.step();
   expect(s.units.includes(g)).toBe(false);
   expect(s.remaining()).toBeGreaterThanOrEqual(mid + 600);
   expect(s.unitsLost).toBe(0);
@@ -314,6 +314,9 @@ test("support buildings: budget discount, radio range, command rate, supply ammo
   expect(turret.ammo).toBeGreaterThan(500); // resupplied by Supply depot
   expect(s.units.some(u => u.kind === "police")).toBe(true); // Precinct spawned Police Squad
   expect(s.units.some(u => u.kind === "militia")).toBe(true); // Armory spawned Militia
+  // 0.52: they are people: a squad of soldier dots each (police 3, militia 4)
+  for (const u of s.units.filter(u => u.kind === "police")) expect(u.soldiers?.filter(so => so.alive).length).toBe(C.SQUAD_POLICE);
+  for (const u of s.units.filter(u => u.kind === "militia")) expect(u.soldiers?.length).toBe(C.SQUAD_MILITIA);
 }, 60000);
 
 test("real OpenStreetMap cities decode cleanly at 560x420 with buildings, highways, mass transit rail/stations, parks, water and bridges", () => {
@@ -493,6 +496,7 @@ test("terrain & building destruction, air/helo/APC deployment vehicles, supply d
   s.step();
   expect(apc.dismounted).toBe(true);
   expect(s.units.some(u => u.kind === "militia" && u.parentUnit === apc)).toBe(true);
+  expect(s.units.find(u => u.kind === "militia" && u.parentUnit === apc)!.soldiers?.length).toBe(C.SQUAD_MILITIA); // 0.52: dismounts are dots
 
   // 3. Call a Supply Drop near the APC and a damaged gate: refills ammo, heals APC, repairs gate, and leaves supply crates
   apc.ammo = 20;

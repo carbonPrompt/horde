@@ -1,37 +1,13 @@
 import { expect, test } from "bun:test";
-import { QUICK_SLOTS, cleanQuickbar, setSlot, swapSlots, clearSlot } from "../src/quickbar";
 import { clean } from "../src/save";
 
-const known = (t: string) => ["mortar", "howitzer", "nuke"].includes(t);
-const empty = () => Array(QUICK_SLOTS).fill(null) as (string | null)[];
-
-test("cleanQuickbar handles junk", () => {
-  expect(QUICK_SLOTS).toBe(7); // 0.22: Z X C V B N M
-  expect(cleanQuickbar(undefined, known)).toEqual(Array(7).fill(null));
-  expect(cleanQuickbar("x", known)).toEqual(Array(7).fill(null));
-  const s = cleanQuickbar(["mortar", 7, "bogus", null, "nuke", ...Array(10).fill("howitzer")], known);
-  expect(s.length).toBe(QUICK_SLOTS);
-  expect(s.slice(0, 5)).toEqual(["mortar", null, null, null, "nuke"]);
-});
-
-test("setSlot moves instead of duplicating", () => {
-  const s = setSlot(setSlot(empty(), 0, "mortar"), 4, "mortar");
-  expect(s[0]).toBe(null);
-  expect(s[4]).toBe("mortar");
-});
-
-test("swap and clear", () => {
-  let s = setSlot(setSlot(empty(), 0, "mortar"), 1, "nuke");
-  s = swapSlots(s, 0, 1);
-  expect(s.slice(0, 2)).toEqual(["nuke", "mortar"]);
-  expect(clearSlot(s, 0)[0]).toBe(null);
-  expect(s[0]).toBe("nuke"); // copies, not mutation
-});
-
-test("save clean keeps a valid quickbar and drops a non-array", () => {
+test("0.54: save clean keeps a valid quick bar and its keys, drops junk", () => {
   const base = { settings: { fullscreen: true, edgeScroll: false, showRanges: false }, best: {}, plans: {} };
-  expect(clean({ ...base, settings: { ...base.settings, quickbar: "x" as any } }).settings.quickbar).toBeUndefined();
-  expect(clean({ ...base, settings: { ...base.settings, quickbar: ["mortar", null] } }).settings.quickbar).toEqual(["mortar", null]);
+  const c = (st: object) => (clean({ ...base, settings: { ...base.settings, ...st } } as any).settings as any);
+  expect(c({ quickbar: ["mortar", null] }).quickbar).toEqual(["mortar", null]);
+  expect(c({ quickbar: "x" }).quickbar).toBeUndefined();
+  expect(c({ quickKeys: ["6", null, "f7"] }).quickKeys).toEqual(["6", null, "f7"]);
+  expect(c({ quickKeys: [123] }).quickKeys).toBeUndefined();
 });
 
 import { AlertQueue } from "../src/ticker";
@@ -263,10 +239,6 @@ test("save keeps a valid difficulty, drops junk", () => {
 
 
 
-test("an old 9-slot quick bar keeps its first 7 slots", () => {
-  expect(cleanQuickbar(["mortar", null, null, null, null, null, "nuke", "howitzer", null], known)).toEqual(["mortar", null, null, null, null, null, "nuke"]);
-});
-
 test("save clean keeps updater settings and the game version only when well formed", () => {
   const base = { settings: { fullscreen: true, edgeScroll: false, showRanges: false }, best: {}, plans: {} } as any;
   const ok = clean({ ...base, gameVersion: "0.26.0", settings: { ...base.settings, autoUpdate: true, checkUpdates: false, updatePin: "0.24.0" } });
@@ -455,10 +427,113 @@ test("0.42: end-of-round lines for refusers and accidents (only what happened)",
   expect(endStatsLines({ refused: 2, refusedLost: 0, talkedOut: 0, broke: 0, civKilledByUs: 0, civFriendlyFire: 0 })).toEqual(["Refused to leave: 2 stayed home"]);
 });
 
-test("0.50: index.html has the group bar: 10 slots keyed 1-9, 0", () => {
+
+test("0.51: the HUD has minimap, info, selection, build and actions in that order; old bars are gone", () => {
   const html = require("fs").readFileSync(import.meta.dir + "/../index.html", "utf8") as string;
-  const bar = /<div id="groupbar"[^>]*>([\s\S]*?)<\/div>/.exec(html);
-  expect(bar).not.toBeNull();
-  const keys = [...bar![1].matchAll(/class="gslot"[^>]*data-key="(\d)"/g)].map(m => m[1]);
-  expect(keys).toEqual(["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"]);
+  const hud = /<section id="hud"[^>]*>([\s\S]*?)<\/section>/.exec(html);
+  expect(hud).not.toBeNull();
+  const ids = [...hud![1].matchAll(/<div id="(hud-[a-z]+)"/g)].map(m => m[1]);
+  expect(ids).toEqual(["hud-mini", "hud-info", "hud-sel", "hud-build", "hud-actions"]);
+  const tabs = /<div id="grouptabs"[^>]*>([\s\S]*?)<\/div>/.exec(html);
+  expect([...tabs![1].matchAll(/class="gslot"[^>]*data-key="(\d)"/g)].map(m => m[1])).toEqual(["1", "2", "3", "4", "5"]); // 0.54: groups 1-5 (6-0 are the quick bar);
+  const top = /<div id="topctl"[^>]*>([\s\S]*?)<\/header>/.exec(html);
+  expect(top).not.toBeNull();
+  expect(top![1]).toContain('data-speed="0.5"'); expect(top![1]).toContain('id="startbtn"');
+  for (const gone of ["controls", "groupbar"]) expect(html).not.toContain(`id="${gone}"`); // 0.51 Task 1; selbar, infopanel, classes, picker go in their own tasks
+});
+
+test("0.51: the old selection bar is gone; the command card has a tools page and an orders page", () => {
+  const fs = require("fs");
+  const html = fs.readFileSync(import.meta.dir + "/../index.html", "utf8") as string;
+  const main = fs.readFileSync(import.meta.dir + "/../src/main.ts", "utf8") as string;
+  expect(html).not.toContain('id="selbar"');
+  expect(main).not.toContain('"selbar"');
+  expect(main).not.toContain("function renderSelbar");
+  const act = /<div id="hud-actions">([\s\S]*?)<\/section>/.exec(html)![1];
+  expect(act).toContain('id="cmdtools"'); expect(act).toContain('id="cmdorders"');
+  for (const t of ["zone", "gate", "remove", "order", "pan"]) expect(act).toContain(`data-tool="${t}"`);
+  for (const id of ["heatmapbtn", "recall", "closegates", "clear"]) expect(act).toContain(`id="${id}"`);
+});
+
+test("0.51: the info card and the person window live in the info panel; the selection panel is drawn by main", () => {
+  const fs = require("fs");
+  const html = fs.readFileSync(import.meta.dir + "/../index.html", "utf8") as string;
+  const main = fs.readFileSync(import.meta.dir + "/../src/main.ts", "utf8") as string;
+  expect(html).not.toContain('id="infopanel"');
+  expect(html).toMatch(/<div id="hud-info"><div id="infocard" hidden><\/div><div id="person" hidden><\/div><\/div>/);
+  expect(main).toContain("function renderSelection(");
+  expect(main).toContain("infoSource(");
+  expect(html).not.toMatch(/#person \{ position: absolute/);
+});
+
+test("0.51: the stylesheet's braces balance (a lost } once swallowed every rule after it)", () => {
+  const html = require("fs").readFileSync(import.meta.dir + "/../index.html", "utf8") as string;
+  const css = html.slice(html.indexOf("<style>"), html.indexOf("</style>")).replace(/\/\*[\s\S]*?\*\//g, "");
+  let depth = 0, min = 0;
+  for (const ch of css) { if (ch === "{") depth++; else if (ch === "}") { depth--; min = Math.min(min, depth); } }
+  expect(min).toBe(0); expect(depth).toBe(0);
+  // and every @media block closes before the next top-level rule starts with two-space indent
+  const media = [...css.matchAll(/@media[^{]*\{/g)].length;
+  expect(media).toBeGreaterThan(0);
+});
+
+test("0.51: the build panel replaces the category menu and its pop-up picker", () => {
+  const fs = require("fs");
+  const html = fs.readFileSync(import.meta.dir + "/../index.html", "utf8") as string;
+  const main = fs.readFileSync(import.meta.dir + "/../src/main.ts", "utf8") as string;
+  for (const gone of ["classes", "picker", "pdetail"]) { expect(html).not.toContain(`id="${gone}"`); expect(html).not.toContain(`#${gone} `); }
+  for (const gone of ["openPicker(", "renderPicker(", "#classes", "#picker", "pickerCat"]) expect(main).not.toContain(gone);
+  const build = /<div id="hud-build">([\s\S]*?)<\/div>\s*<div id="hud-actions">/.exec(html)![1];
+  expect(build).toContain('id="btabs"'); expect(build).toContain('id="bgrid"'); expect(build).toContain('id="quickbar"'); // 0.54: the quick bar is back under the grid
+  expect((build.match(/class="qslot"/g) ?? []).length).toBe(5);
+  expect(main).toContain("buildTabs(");
+});
+
+// ---- 0.51 final review fixes ----
+const readHtml = () => require("fs").readFileSync(import.meta.dir + "/../index.html", "utf8") as string;
+const readMain = () => require("fs").readFileSync(import.meta.dir + "/../src/main.ts", "utf8") as string;
+test("review C1: the phone @media block comes after the narrow-window block, and cells are placed by grid-column", () => {
+  const html = readHtml(), narrow = html.indexOf("@media (max-width: 1300px)"), phone = html.indexOf("@media (max-width: 760px)");
+  expect(narrow).toBeGreaterThan(0); expect(phone).toBeGreaterThan(narrow);
+  expect(html).not.toMatch(/#hud-mini \{ order:/);
+  expect(html).toMatch(/#hud-actions \{ grid-column: 2/);
+});
+test("review I2: setTool sets the tool before the build panel redraws", () => {
+  const m = readMain(), i = m.indexOf("function setTool(t: Tool) {"), body = m.slice(i, m.indexOf("\n}\n", i));
+  expect(body.indexOf("tool = t")).toBeGreaterThan(0);
+  expect(body.indexOf("openCatFor(t)")).toBeGreaterThan(body.indexOf("tool = t"));
+});
+test("review I3: the armed Fortify cursor says to click a roof", () => {
+  expect(readMain()).toContain('"Fortify: click a roof"');
+});
+test("review I4: the bottom panel hides on the title screen", () => {
+  expect(readHtml()).toMatch(/body\.attract #hud[,\s{]/);
+});
+test("review I7: on narrow windows three rows of the command card fit (40 px rows)", () => {
+  const html = readHtml(), i = html.indexOf("@media (max-width: 1300px)"), blk = html.slice(i, html.indexOf("\n  }\n", i));
+  expect(blk).toMatch(/#cmdtools, #cmdorders \{[^}]*grid-auto-rows: 40px/);
+});
+test("review #8/#9/#12: no picker in player text; Esc clears a selected zone; the info panel probes the selected entity", () => {
+  const m = readMain();
+  expect(m).not.toContain("in the picker");
+  expect(m).toMatch(/if \(mode === "game" && selZone >= 0\) \{ selZone = -1;/);
+  expect(m).toContain("function selProbe(): { at: [number, number]; ent?:");
+});
+
+test("0.52: people units draw as ringed dots, never a picture or model", () => {
+  const main = require("fs").readFileSync(import.meta.dir + "/../src/main.ts", "utf8") as string;
+  expect(main).toMatch(/if \(people\) \{ if \(hov\) unitHoverLabel\(u, spec, px, py, r\); continue; \}/); // before the picture/model branch
+  const dots = main.slice(main.indexOf("function drawSoldierDots"), main.indexOf("function drawSelection"));
+  expect(dots).toContain("C.RING_COLOR[u.kind]");
+  expect(dots).not.toContain("SQUAD_ZOOM"); // every zoom
+  expect(main.indexOf("if (people) {")).toBeLessThan(main.indexOf("drawSquad(ctx, u"));
+});
+
+test("0.52: selecting without pause: click snap, Tab, roster", () => {
+  const main = require("fs").readFileSync(import.meta.dir + "/../src/main.ts", "utf8") as string;
+  const click = main.slice(main.indexOf("function click(cx: number, cy: number)"), main.indexOf('  if (tool === "order") {'));
+  expect(click.indexOf("squadNearScreen(")).toBeLessThan(click.indexOf("sim.entityAt(")); // soldiers win
+  expect(main).toMatch(/k === "Tab" && mode === "game"[^\n]*cycleSquad\(e\.shiftKey\)/);
+  expect(main).toContain('data-ru="${sim.units.indexOf(u)}"');
+  expect(main).toMatch(/firedAgo: u\.shotT !== undefined && u\.shotT >= 0/); // -1 = never fired
 });

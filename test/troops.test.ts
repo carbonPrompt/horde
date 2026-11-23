@@ -28,10 +28,10 @@ test("placing Troops on a street inside a zone starts a ground squad that holds"
   for (const so of u.soldiers!) expect(s.map.tile[s.idx(so.x | 0, so.y | 0)]).not.toBe(BUILDING);
 });
 
-test("Troops and Snipers can't go on a street outside a zone in planning", () => {
+test("Snipers can't go on a street outside a zone in planning; Troops can (0.53: flown in anywhere)", () => {
   const s = mk(), [x, y] = outsideStreet(s);
-  expect(s.place("garrison", x, y)).toBe("Troops go on a roof, or a street inside a safe zone.");
   expect(s.place("sniper", x, y)).toBe("Snipers go on a roof, or a street inside a safe zone.");
+  expect(s.place("garrison", x, y)).toBeNull();
 });
 
 test("display name is Troops; one fortified squad per building", () => {
@@ -322,3 +322,17 @@ test("M6: Retry keeps squads where they were planned, not where they ended up", 
   for (let t = 0; t < 6; t += C.DT) s.step();
   expect(u.planPos).toEqual([fx, fy]);
 });
+
+test("0.52: climbing soldiers walk to the foot of the building, never into it", () => {
+  const { Sim } = require("../src/sim"); const C2 = require("../src/config");
+  const city = C2.CITIES.find((c: any) => c.id === "fairhaven");
+  const s = new Sim(101, { city });
+  s.setZone([[165, 82], [217, 82], [217, 130], [165, 130]]);
+  expect(s.place("garrison", 191, 119)).toBeNull();
+  s.startBattle(); for (let i = 0; i < 60; i++) s.step();
+  const u = s.units[0], d0 = u.soldiers.map((so: any) => Math.hypot(so.x - 192.5, so.y - 126.5));
+  expect(s.issue(u, { k: "fortify", x: 192, y: 126 }, false)).toBeNull();
+  for (let i = 0; i < 20 * 4; i++) { s.step(); for (const so of u.soldiers) expect(s.map.tile[s.idx(Math.floor(so.x), Math.floor(so.y))]).not.toBe(1); }
+  expect(u.fort).toBe("climb");
+  u.soldiers.forEach((so: any, k: number) => expect(Math.hypot(so.x - 192.5, so.y - 126.5)).toBeLessThan(d0[k]));
+}, 120_000);

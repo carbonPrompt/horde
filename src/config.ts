@@ -235,6 +235,9 @@ export let PING_CELL = 24, PING_GAP_S = 10, PING_LIFE_S = 4;
 // 0.49: squads. Soldiers per squad; a "building" is connected rooftop cells, split into pieces of at most
 // BUILDING_MAX_CELLS (square tiles); a Sniper team's spotter carries a rifle.
 export let SQUAD_GARRISON = 4, SQUAD_SNIPER = 2, SQUAD_PARA = 5;
+/** 0.53: the paratroopers' grenadier (design ruling): an M320 round every GREN_RATE s that bursts GREN_SPLASH cells wide. */
+export let GREN_DMG = 300, GREN_SPLASH = 1.8, GREN_MAX_HITS = 8, GREN_EVERY_S = 2, GREN_AMMO = 12, GREN_MIN_PACK = 3;
+export let SQUAD_POLICE = 3, SQUAD_MILITIA = 4; // 0.52: police and militia are people too (design ruling)
 export let BUILDING_MAX_CELLS = 144;
 export let SQUAD_SPREAD = 6; // cells from where it was placed that a rooftop squad spreads over
 export let SPOTTER_RATE = 2, SPOTTER_DMG = 100;
@@ -249,7 +252,10 @@ export let FORTIFY_S = 8, DISMOUNT_S = 4;
 export let REPAIR_MAX = 3; // 0.50 stopgap: most Repair Yards per battle until engineers (0.52)
 export let SOLDIER_HP = 100; // a rooftop soldier (paratroopers split their squad HP)
 export const SOLDIER_COLOR = "#5ef07a", SNIPER_COLOR = "#ffd54f";
+/** 0.52: every soldier is a green dot; the ring around it says the job (design ruling). Engineers (0.53) get green. */
+export const RING_COLOR: Partial<Record<UnitKind, string>> = { garrison: "#ef4444", sniper: "#facc15", para: "#a855f7", police: "#3b82f6", militia: "#f97316" };
 export let EXTRACT_MUL = 1.5; // selling mid-battle: the unit sits out 1.5x its deploy time (at least 5 s) before it is pulled out
+export let TROOPS_EXTRACT_S = 10; // 0.53.1: Troops come in slow (20 s) but the bird pulls them out in 10 s (design ruling)
 export let CRUSH_SLOW_S = 0.8; // 0.25: seconds a tank or APC stays slowed after crushing infected
 export let VEH_A = 4, VEH_CLEAR = 1.5, VEH_AHEAD = 5; // 0.32: people step aside from a tank/APC: push (m/s2), clearance and look-ahead (cells)
 export let CRUSH_YIELD_MUL = 0.12; // 0.33: slowest crawl when civilians are in its way (it never runs people over)
@@ -305,7 +311,8 @@ export interface UnitSpec {
 
 export const UNITS: Record<UnitKind, UnitSpec> = {
   garrison: {
-    name: "Troops", foot: 2, cost: 1_200_000, deploy: 5, on: "building", range: 16, roofBonus: 0.5,
+    name: "Troops", foot: 2, cost: 1_200_000, deploy: 20, on: "building", // 0.53: flown in by UH-60 anywhere (design ruling: ~20 s)
+    range: 16, roofBonus: 0.5,
     rate: 8, damage: 100, ammo: 800, reloadsInZone: true, color: "#4fc3f7",
     mobile: { speed: 2.4, hp: 400, leash: 0, nav: "road", flee: 0 }, // 0.50: walks, fortifies roofs, dismounts
   },
@@ -365,8 +372,8 @@ export const UNITS: Record<UnitKind, UnitSpec> = {
   },
   para: {
     name: "Paratroopers", foot: 2, cost: 0, deploy: 0, on: "any", range: 15, roofBonus: 0,
-    rate: 10, damage: 100, ammo: 450, reloadsInZone: false, color: "#a5d6a7",
-    mobile: { speed: 2.4, hp: 350, leash: 35, nav: "road", flee: 4 },
+    rate: 10, damage: 130, ammo: 450, reloadsInZone: false, color: "#a5d6a7", // 0.53: elite: better shots (100 -> 130)
+    mobile: { speed: 2.4, hp: 500, leash: 35, nav: "road", flee: 4 }, // 0.53: elite: tougher (350 -> 500)
   },
   police: {
     name: "Police Squad", foot: 2, cost: 0, deploy: 0, on: "any", range: 14, roofBonus: 0,
@@ -513,7 +520,7 @@ export function cityGunProfile(cityId?: string): CityGunProfile {
   return { country: "US", avgHousehold: 2.5, armedRate: CIV_ARMED_BASE, cityFactor: 1.0, mix: US_MIX, militiaFactor: 1.0 };
 }
 
-export const VERSION = "0.50.0";
+export const VERSION = "0.54.0";
 
 /** The campaign: fixed cities that unlock in order (a medal on one opens the next). */
 export interface CityDef { id: string; name: string; seed: number; budget: number; waveMul: number; sites: number; speedMul: number; blurb: string; real?: boolean; trial?: string; recipe?: CityRecipe; clearXp?: number; intro?: string[]; areas?: AreaDef[]; realArea?: string } // 0.36: areas = a real city's battle areas; realArea = this def is one area ("<city>/<area>") // 0.35: recipe = designed campaign map; clearXp = one-time bonus for the first medal; intro = lines shown the first time // trial: hardware this city lends you before you unlock it
@@ -637,8 +644,8 @@ export const ABILITIES: Record<AbilityKind, AbilitySpec> = {
     hint: "Click where the run starts, then where it ends. An F-15E Strike Eagle drops a stick of bombs 3 s later, demolishing buildings and cratering streets. Hurts civilians too." },
   firebomb: { name: "Firebomb", cost: 600_000, max: 6, delay: 1.5, color: "#ff9100",
     hint: "Click a spot. A strike jet drops incendiary canisters that burn for 12 s and scorch terrain. Parks burn wider. Hurts civilians too." },
-  para: { name: "Paratroopers", cost: 2_400_000, max: 10, delay: 4, color: "#a5d6a7",
-    hint: "Click a street or roof. A C-130J Hercules flies over and drops an airborne squad on parachutes 4 s later. Up to 6 squads can be deployed at a time." },
+  para: { name: "Paratroopers", cost: 2_400_000, max: 10, delay: 3, color: "#a5d6a7", // 0.53: elite, quick to deploy (4 -> 3 s)
+    hint: "Click a street or roof. A C-130J Hercules flies over and drops an elite airborne squad on parachutes 3 s later, with a grenadier. Up to 6 squads can be deployed at a time." },
   supply_drop: { name: "Supply Drop", cost: 500_000, max: 8, delay: 3.5, color: "#4fc3f7",
     hint: "Click near your units or walls. A C-130J drops 4 GPS-guided supply crates 3.5 s later: refills 100% ammo, heals mobile units, repairs walls within 70 m, and leaves an active field depot for 45 s." },
   barrage: { name: "Artillery Barrage", cost: 900_000, max: 8, delay: 6, color: "#f48fb1",
@@ -738,11 +745,11 @@ export interface UnitInfoSpec {
 }
 export const UNIT_INFO: Record<UnitKind, UnitInfoSpec> = {
   garrison: {
-    role: "Rooftop Infantry Squad",
-    transport: "UH-60 Black Hawk fast-rope",
+    role: "Infantry Squad",
+    transport: "UH-60 Black Hawk, anywhere (20 s)",
     vehicle: "helo_uh60",
     structDmg: "None (5.56mm carbines)",
-    desc: "Four riflemen who fortify a rooftop or fight in the street, each one firing on their own. Fortified, they hold safe-zone perimeters and mow down packed runners; down on the street they go where you send them. One fortified Troops squad per building.",
+    desc: "Four riflemen flown in by helicopter anywhere on the map: onto a roof, where they dig into a sandbag fortification, or a street or park, inside or outside your zone. Slower to arrive than Paratroopers. Fortified, they hold perimeters and mow down packed runners; on the street they go where you send them. One fortified Troops squad per building.",
     specials: ["+1 m range per building floor", "Infinite ammo when inside Safe Zone", "Lost soldiers can be replaced in battle (U)"],
   },
   sniper: {
@@ -838,8 +845,8 @@ export const UNIT_INFO: Record<UnitKind, UnitInfoSpec> = {
     transport: "C-130J Hercules parachute drop",
     vehicle: "c130_para",
     structDmg: "None",
-    desc: "Five airborne soldiers dropped by parachute anywhere on the map, each firing on their own. They fight autonomously until out of ammo, then evacuate to the Safe Zone. Infected that reach them bite, and a bitten soldier turns.",
-    specials: ["Deployed via the Paratroopers ability", "Can be resupplied in the field by Supply Drops or Supply Depots"],
+    desc: "Five elite airborne soldiers dropped by parachute anywhere on the map in 3 s: better shots and tougher than Troops, with a grenadier whose M320 bursts packs of infected. They fight autonomously until out of ammo, then evacuate to the Safe Zone. Infected that reach them bite, and a bitten soldier turns.",
+    specials: ["Deployed via the Paratroopers ability", "Grenadier: M320, area damage, limited rounds", "Can be resupplied in the field by Supply Drops or Supply Depots"],
   },
   police: {
     role: "Precinct Tactical Response Unit",
@@ -1111,6 +1118,10 @@ export const TUNABLE: Record<string, [() => number, (v: number) => void]> = {
   SQUAD_GARRISON: [() => SQUAD_GARRISON, v => { SQUAD_GARRISON = v; }],
   SQUAD_SNIPER: [() => SQUAD_SNIPER, v => { SQUAD_SNIPER = v; }],
   SQUAD_PARA: [() => SQUAD_PARA, v => { SQUAD_PARA = v; }],
+  SQUAD_POLICE: [() => SQUAD_POLICE, v => { SQUAD_POLICE = v; }],
+  GREN_DMG: [() => GREN_DMG, v => { GREN_DMG = v; }],
+  GREN_AMMO: [() => GREN_AMMO, v => { GREN_AMMO = v; }],
+  SQUAD_MILITIA: [() => SQUAD_MILITIA, v => { SQUAD_MILITIA = v; }],
   BUILDING_MAX_CELLS: [() => BUILDING_MAX_CELLS, v => { BUILDING_MAX_CELLS = v; }],
   SQUAD_SPREAD: [() => SQUAD_SPREAD, v => { SQUAD_SPREAD = v; }],
   SPOTTER_RATE: [() => SPOTTER_RATE, v => { SPOTTER_RATE = v; }],
@@ -1122,6 +1133,7 @@ export const TUNABLE: Record<string, [() => number, (v: number) => void]> = {
   REPAIR_MAX: [() => REPAIR_MAX, v => { REPAIR_MAX = v; }],
   SOLDIER_HP: [() => SOLDIER_HP, v => { SOLDIER_HP = v; }],
   EXTRACT_MUL: [() => EXTRACT_MUL, v => { EXTRACT_MUL = v; }],
+  TROOPS_EXTRACT_S: [() => TROOPS_EXTRACT_S, v => { TROOPS_EXTRACT_S = v; }],
   CRUSH_SLOW_S: [() => CRUSH_SLOW_S, v => { CRUSH_SLOW_S = v; }],
   VEH_A: [() => VEH_A, v => { VEH_A = v; }],
   VEH_CLEAR: [() => VEH_CLEAR, v => { VEH_CLEAR = v; }],

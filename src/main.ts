@@ -4,6 +4,10 @@ import { fetchLiveOsmCity } from "./osm";
 import { CIV, INF, SAFE_CIV, SHOT_CANNON, SHOT_ROCKET, SHOT_SHELL, SHOT_SNIPER, Sim } from "./sim";
 import type { Score, Entity, Orbit, Unit } from "./sim";
 import { groupsToPlan, groupsFromPlan, pruneGroups, assignGroup, groupUnits, groupSummary } from "./groups";
+import { commandCard, selectionGrid, infoSource, buildTabs, CMD_DESC, squadState, tabOrder, nextInTab, type CardButton } from "./hud";
+import { ORDER_KEYS, TOOL_KEYS, VIEW_KEYS, ALERT_KEY, QUICK_SLOTS, keyLabel, bindProblem, cleanQuickKeys } from "./keymap";
+import { orderIcon } from "./ordericons";
+import { cleanQuickbar, setSlot, swapSlots, clearSlot, type Slots } from "./quickbar";
 import { describeCell, estimateAt } from "./cursorinfo";
 import { keyIntent, cameraKeysActive, pruneSelection, typingInField, groupIntent, type ArmCmd } from "./input";
 import { drawMinimap, miniToWorld, drawPings, pickPing } from "./minimap";
@@ -29,7 +33,6 @@ import { partPoints, mergeBest, mergeEfficiency, bestKey, anyMedal, difficultyFo
 import { loadRealArea, realAreaMap } from "./realcity/load";
 import { areaCardInfo, bindCityMap, cityMapModel, drawCityMap, fitView, type CityMapUi } from "./citymapui";
 import { soundDue, zoomGain } from "./audiotiming";
-import { cleanQuickbar, setSlot, swapSlots, clearSlot, type Slots } from "./quickbar";
 import { airHalfPx, drawAirframe, smoothHeading } from "./aircraft";
 import { tutorialSteps, currentStep, wantTutorial, type TutStep, type TutState } from "./tutorial";
 import { drawDepot, drawModel, drawSquad, drawSupport, drawWrecks, hasModel, hasSquad, MODEL_ZOOM, noteUnits, SQUAD_ZOOM } from "./models";
@@ -46,6 +49,11 @@ initSprites();
 document.querySelectorAll<HTMLImageElement>("img[data-sprite]").forEach(img => {
   const k = img.dataset.sprite as SpriteKey;
   if (SPRITE_URL[k]) img.src = SPRITE_URL[k];
+});
+document.querySelectorAll<HTMLImageElement>("img[data-oicon]").forEach(img => { img.src = orderIcon(img.dataset.oicon!); }); // 0.51.1
+document.querySelectorAll<HTMLElement>("#cmdtools button").forEach(b => { // 0.54: every tool's key from the key map, top-left on the button
+  const k = b.dataset.tool ?? (b.id === "heatmapbtn" ? "heatmap" : b.id); b.dataset.tipdesc = CMD_DESC[k] ?? "";
+  const key = keyLabel((TOOL_KEYS as Record<string, string>)[k]); b.dataset.tipkey = key; const hk = b.querySelector(".hk"); if (hk) hk.textContent = key;
 });
 const perf = new Perf();
 
@@ -96,7 +104,7 @@ let pausedSpeed = save.settings.speed ?? 1; // 0.32: the player's last chosen sp
 let tool: Tool = "zone";
 let speed = 1; // 0 paused
 let draft: [number, number][] = []; // zone being drawn
-let selbarT = 0;
+let actionsT = 0;
 let selSoldier: import("./squads").Soldier | null = null; // 0.49: the soldier whose dot was clicked
 let sel: Entity[] = []; // 0.44/0.45: what is selected with the Move/Aim tool (click, Shift-click, or drag a box)
 let selZone = -1; // 0.50: a safe zone selected by clicking its open ground (bindable to a group key; Troops deploy from it)
@@ -273,7 +281,7 @@ function importPlanInner(p: Plan) {
   if (doubled) say(`${doubled === 1 ? "A Troops squad or Sniper team shared a building" : `${doubled} Troops squads or Sniper teams shared buildings`} in this plan; one per building now, the extra ${doubled === 1 ? "one was" : "ones were"} left out.`, 6000);
 }
 function newSim(keepPlan: boolean, newSeed = false) {
-  openPicker(null); clearTicker(); closePerson();
+  clearTicker(); closePerson();
   const plan = keepPlan ? exportPlan() : null;
   if (newSeed) seed = Math.floor(Math.random() * 1e9);
   if (city?.realArea && !realAreaMap(city.realArea)) { const c = city; loadRealArea(c.realArea!).then(() => { if (city === c) newSim(keepPlan, false); }); return; } // review #2
@@ -323,7 +331,7 @@ function codexShown() {
 }
 function openCodex(id: string) {
   if (mode === "game" && !stack.length) {
-    const cat = pickerCat;
+    const cat = buildCat;
     pause();
     codexBack = { cat }; stack.length = 0; // Back closes the Codex straight into the game
   }
@@ -444,8 +452,9 @@ function selectPerson(k: number) {
   if (following) following = followable(sim, k);
   renderPerson();
   log("info", "person-select", { k });
+  renderSelection(); // 0.51
 }
-function closePerson() { selPerson = -1; following = false; $("person").hidden = true; lastPersonHtml = ""; }
+function closePerson() { selPerson = -1; following = false; $("person").hidden = true; lastPersonHtml = ""; renderSelection(); } // 0.51: the selection panel says so
 function renderPerson() {
   if (selPerson < 0 || mode !== "game") { if (!$("person").hidden) $("person").hidden = true; return; }
   const html = personHtml(sim, selPerson, following);
@@ -479,7 +488,7 @@ function startAttract() {
   loadSeq++; // a pending area load must not pull the player back into a battle
   tut = null; showTut(); // 0.35: no tutorial banner over the menus
   $("timepick").hidden = true; closePerson(); // 0.39
-  openPicker(null); clearTicker();
+  clearTicker();
   mode = "attract"; city = null; customMap = null; dailyDate = null; showHeatmap = false;
   document.body.classList.add("attract");
   seed = Math.floor(Math.random() * 1e9);
@@ -535,8 +544,8 @@ function showTut() {
   if (st.highlight?.kind === "button") document.getElementById(st.highlight.button)?.classList.add("tut-glow"); // 0.41
   if (st.highlight?.kind === "tool") {
     document.querySelectorAll(`[data-tool="${st.highlight.tool}"]`).forEach(e => e.classList.add("tut-glow"));
-    const cat = catOf(st.highlight.tool!); // the tool may sit in a closed category: light that up too
-    if (cat) document.querySelectorAll(`#classes [data-cat="${cat}"]`).forEach(e => e.classList.add("tut-glow"));
+    const cat = catOf(st.highlight.tool!); // 0.51: open its build tab (the tile glows from buildTile) and light the tab
+    if (cat) { setBuildTab(cat); document.querySelectorAll(`#btabs [data-cat="${cat}"]`).forEach(e => e.classList.add("tut-glow")); }
   }
 }
 function stepTut() {
@@ -666,7 +675,6 @@ function playDaily() {
 function pause() {
   if (mode !== "game") return;
   codexBack = null;
-  openPicker(null);
   log("info", "pause", { phase: sim.phase, t: +sim.time.toFixed(1) });
   if (!speedLocked()) speed = 0; // 0.48: on Hard/Insane the menu opens but the battle carries on
   refreshUi();
@@ -676,7 +684,7 @@ function pause() {
 function resume() {
   stack.length = 0; show(null);
   if (sim.phase === "battle") speed = battleSpeed();
-  if (codexBack?.cat) openPicker(codexBack.cat);
+  if (codexBack?.cat) setBuildTab(codexBack.cat);
   codexBack = null;
   refreshUi();
 }
@@ -765,16 +773,16 @@ function toggleTool(t: Tool) { if (tool === t && t !== "pan") setTool("pan"); el
 function setTool(t: Tool) {
   if (!isOpen(t)) { say(`${toolName(t)} unlocks at ${P.UNLOCK_XP[t].toLocaleString()} XP. You have ${(save.xp ?? 0).toLocaleString()}.`, 3500); return; }
   orderSel = null; nukeArm = null;
-  if (t === "order") { t = "pan"; say("Select units (click them or drag a box), then right-click where to send them. A attack-move, P patrol, E escort, S stop, D stand by.", 6000); } // 0.45: the Order card now opens unit control
-  if (t !== "pan" && (sel.length || armedCmd)) { sel = []; armedCmd = null; renderSelbar(); } // 0.44: the strip goes with the selection
-  openCatFor(t);
+  if (t === "order") { t = "pan"; say("Select units (click them or drag a box), then right-click where to send them. Q attack-move, R patrol, E escort, F stop, G stand by.", 6000); } // 0.45: the Order card now opens unit control
+  if (t !== "pan" && (sel.length || armedCmd)) { sel = []; armedCmd = null; renderActions(); } // 0.44: the strip goes with the selection
   tool = t; strikeStart = null;
+  openCatFor(t); // 0.51 review: after tool = t, so the right tile lights
   if (t !== "zone") draft = [];
   document.querySelectorAll<HTMLButtonElement>("[data-tool]").forEach(b => b.classList.toggle("on", b.dataset.tool === t));
   renderQuickbar();
   const hints: Record<Tool, string> = {
-    pan: "Right-drag to move the map, wheel to zoom. Click a unit to select it (drag a box for several): right-click sends mobile units or an AC-130, T changes what it shoots first, Delete removes it (an AC-130 goes home).",
-    order: "Unit control: select units with Move/Aim (click or drag a box), then right-click where to send them. A attack-move, P patrol, E escort, S stop, D stand by.",
+    pan: "Right-drag to move the map, wheel to zoom. Click a unit to select it (drag a box for several): right-click sends mobile units or an AC-130, T changes what it shoots first, X or Delete removes it (an AC-130 goes home).",
+    order: "Unit control: select units with Move/Aim (click or drag a box), then right-click where to send them. Q attack-move, R patrol, E escort, F stop, G stand by.",
     barrage: C.ABILITIES.barrage.hint, moab: C.ABILITIES.moab.hint, nuke: C.ABILITIES.nuke.hint,
     a10: C.ABILITIES.a10.hint, cluster: C.ABILITIES.cluster.hint, tomahawk: C.ABILITIES.tomahawk.hint, gunship: C.ABILITIES.gunship.hint,
     himars: "Click a street or park, ideally inside your zone (free reloads). Ripples 6 rockets at the thickest crowd up to 460 m away. Nothing closer than 60 m.",
@@ -828,18 +836,19 @@ function click(cx: number, cy: number) {
   const planning = sim.phase === "plan";
   if (tool === "pan") {
     if (armedCmd) { aimArmed(cx, cy); return; } // 0.45: A/P/E then click
-    const hit = sim.entityAt(cx, cy); // 0.44: clicking a unit selects it (T changes its targeting, Delete removes it)
-    selSoldier = sim.soldierAt(cx, cy)?.soldier ?? null; // 0.49: and a soldier's dot shows their card
+    const snap = squadNearScreen(cam.x + cx * cam.scale, cam.y + cy * cam.scale); // 0.52: a click near a soldier picks its squad first
+    const hit = snap ? { unit: snap } as Entity : sim.entityAt(cx, cy); // 0.44: clicking a unit selects it (T changes its targeting, Delete removes it)
+    selSoldier = snap ? nearestSoldier(snap, cx, cy) : sim.soldierAt(cx, cy)?.soldier ?? null; // 0.49: and a soldier's dot shows their card
     const add = keys.has("shift");
     if (hit) {
       const same = (e: Entity) => entObj(e) === entObj(hit);
       sel = add ? (sel.some(same) ? sel.filter(e => !same(e)) : [...sel, hit]) : [hit];
-      selZone = -1; renderSelbar(); return;
+      selZone = -1; renderActions(); return;
     }
-    if (!add) { sel = []; selZone = -1; renderSelbar(); }
+    if (!add) { sel = []; selZone = -1; renderActions(); }
     const k = sim.civAt(cx, cy, Math.max(0.6, 8 / cam.scale)); // 0.39: click a white dot to see who they are
     if (k >= 0) { selectPerson(k); return; }
-    if (!add && x >= 0 && y >= 0 && x < sim.w && y < sim.h && sim.inZone[sim.idx(x, y)] === 1) { selZone = sim.zoneAt(x, y); renderSelbar(); } // 0.50: open zone ground selects the zone
+    if (!add && x >= 0 && y >= 0 && x < sim.w && y < sim.h && sim.inZone[sim.idx(x, y)] === 1) { selZone = sim.zoneAt(x, y); renderActions(); } // 0.50: open zone ground selects the zone
     return;
   }
   if (tool === "order") {
@@ -971,7 +980,8 @@ function minimap(now: number) {
   if (mini.hidden === show) mini.hidden = !show;
   if (!show || now - miniT < 250) return;
   miniT = now;
-  const cssW = canvas.clientWidth < 900 ? 160 : 220, cssH = Math.round(cssW * Math.min(1.2, sim.h / sim.w));
+  const box = $("hud-mini"), bw = Math.max(80, box.clientWidth - 10), bh = Math.max(60, box.clientHeight - 10); // 0.51: fits its panel
+  const ar = Math.min(1.2, sim.h / sim.w), cssW = Math.round(Math.min(bw, bh / ar)), cssH = Math.round(cssW * ar);
   const dpr = devicePixelRatio;
   if (mini.width !== Math.round(cssW * dpr) || mini.height !== Math.round(cssH * dpr)) {
     mini.width = Math.round(cssW * dpr); mini.height = Math.round(cssH * dpr); mini.style.width = cssW + "px"; mini.style.height = cssH + "px";
@@ -1027,23 +1037,25 @@ function boxSelect(b: [number, number, number, number]) {
   if (keys.has("shift")) { for (const e of inside) if (!sel.some(x => "unit" in x && "unit" in e && x.unit === e.unit)) sel.push(e); }
   else sel = inside;
   if (inside.length) { selZone = -1; closePerson(); tip("orders"); }
-  renderSelbar();
+  renderActions();
 }
 canvas.addEventListener("dblclick", () => { // 0.50: every unit of that kind on screen
   if (mode !== "game" || tool !== "pan" || !hover) return;
-  const hit = sim.entityAt(hover[0], hover[1]);
+  const snap = squadNearScreen(cam.x + hover[0] * cam.scale, cam.y + hover[1] * cam.scale); // 0.52: through the dots too
+  const hit = snap ? { unit: snap } as Entity : sim.entityAt(hover[0], hover[1]);
   if (!hit || !("unit" in hit)) return;
   const kind = hit.unit.kind, s = cam.scale;
   sel = sim.units.filter(u => u.kind === kind && sim.groupAlive(u) && !(u.deployT && u.deployT > 0)).filter(u => {
-    const px = cam.x + (u.x + 0.5) * s, py = cam.y + (u.y + 0.5) * s; return px >= 0 && py >= 0 && px <= canvas.width && py <= canvas.height;
+    const [ux, uy] = u.soldiers ? sim.squadCenter(u) : [u.x + 0.5, u.y + 0.5];
+    const px = cam.x + ux * s, py = cam.y + uy * s; return px >= 0 && py >= 0 && px <= canvas.width && py <= canvas.height;
   }).map(u => ({ unit: u }));
-  selZone = -1; renderSelbar();
+  selZone = -1; renderActions();
 });
 canvas.addEventListener("pointerleave", () => { if (!drag) hover = null; }); // 0.44: the cursor label goes when the pointer leaves the map
 canvas.addEventListener("pointerup", e => {
   if (box) { boxSelect(box); box = null; }
   if (drag && !drag.moved && e.button === 0 && hover) click(hover[0], hover[1]);
-  if (drag && !drag.moved && e.button === 2 && armedCmd) { armedCmd = null; renderSelbar(); } // 0.45: right-click cancels an armed command
+  if (drag && !drag.moved && e.button === 2 && armedCmd) { armedCmd = null; renderActions(); } // 0.45: right-click cancels an armed command
   else if (drag && !drag.moved && e.button === 2 && tool === "pan" && (orderable().length || selOrbits().length) && hover) moveOrder(hover[0], hover[1]); // 0.45: right-click = move (0.46: AC-130s too)
   else if (drag && !drag.moved && e.button === 2) {
     if (tool === "zone" && draft.length) draft.pop();          // drawing a zone: drop the last corner
@@ -1061,7 +1073,6 @@ canvas.addEventListener("wheel", e => {
 
 const keys = new Set<string>();
 let loggedEjects = 0;
-const QUICK_KEYS = ["z", "x", "c", "v", "b", "n", "m"]; // quick bar slots 1-7 (0.22)
 addEventListener("keydown", e => {
   const k = e.key;
   if (typingInField(e.target) && k !== "Escape" && !/^F\d+$/.test(k)) return; // 0.47.1: typing in a search box is not WASD
@@ -1069,13 +1080,14 @@ addEventListener("keydown", e => {
   if (k === "F10") { e.preventDefault(); toggleDevPanel(); return; }
   if (k === "F11") { e.preventDefault(); save.settings.fullscreen = !save.settings.fullscreen; Save.store(save); applyFullscreen(); return; }
   if (k === "F5") { e.preventDefault(); void saveGame(); return; } // 0.33: quick save
+  if (k === "Tab" && mode === "game" && !stack.length) { e.preventDefault(); cycleSquad(e.shiftKey); return; } // 0.52
   if (k === "F1" || k === "F2" || k === "F3") { e.preventDefault(); if (mode === "game" && !stack.length) setSpeed(k === "F1" ? 0.5 : k === "F2" ? 1 : 2); return; } // 0.50: speed moved off 1/2/3
   if (k === "Escape") {
     if (stack.length) { const top = stack[stack.length - 1]; if (top !== "title" && !(top === "slots" && !Save.activeSlot())) back(); return; }
-    if (mode === "game" && pickerCat) { openPicker(null); return; }
     if (mode === "game" && selPerson >= 0) { closePerson(); return; } // 0.39
-    if (mode === "game" && armedCmd) { armedCmd = null; renderSelbar(); return; } // 0.45: an armed command first
-    if (mode === "game" && sel.length) { sel = []; renderSelbar(); return; } // 0.44
+    if (mode === "game" && armedCmd) { armedCmd = null; renderActions(); return; } // 0.45: an armed command first
+    if (mode === "game" && sel.length) { sel = []; selSoldier = null; renderActions(); return; } // 0.44
+    if (mode === "game" && selZone >= 0) { selZone = -1; renderActions(); return; } // 0.51 review: Esc lets go of a selected zone
     if (mode === "game" && draft.length) { draft = []; return; }
     if (mode === "game" && strikeStart) { strikeStart = null; return; }
     if (mode === "game" && $("end").hidden) pause();
@@ -1084,23 +1096,31 @@ addEventListener("keydown", e => {
   if (mode !== "game" || stack.length) return;
   const tgt = e.target as HTMLElement | null;
   if (tgt && (tgt.tagName === "INPUT" || tgt.tagName === "TEXTAREA" || tgt.tagName === "SELECT")) return; // 0.44: typing is not a command
-  if ((k === "Delete" || k === "Backspace") && sel.length) { e.preventDefault(); removeSelected(); return; }
-  if ((k === "t" || k === "T") && sel.length && !e.ctrlKey && !e.altKey && !e.metaKey) { cycleSelected(); return; }
-  { const gi = groupIntent(e.code, { shift: e.shiftKey, ctrl: e.ctrlKey || e.metaKey, alt: e.altKey }); // 0.50: battle groups
+  // 0.54: the key map (keymap.ts, design ruling): WASD camera always, 1-5 groups, 6-0 quick bar, orders around WASD
+  const kl = k.toLowerCase(), plain = !e.ctrlKey && !e.metaKey && !e.altKey;
+  if ((k === "Delete" || k === "Backspace" || (kl === ORDER_KEYS.remove && plain)) && sel.length) { e.preventDefault(); removeSelected(); return; }
+  if (kl === ORDER_KEYS.target && sel.length && plain) { cycleSelected(); return; }
+  { const gi = groupIntent(e.code, { shift: e.shiftKey, ctrl: e.ctrlKey || e.metaKey, alt: e.altKey }); // 0.50: battle groups (0.54: 1-5)
     if (gi) { e.preventDefault(); runGroup(gi); return; } }
+  if (plain && !rebindSlot && quickKeys.includes(kl)) { e.preventDefault(); useSlot(quickKeys.indexOf(kl)); return; } // 0.54: quick bar
   { const it = keyIntent(k, { shift: e.shiftKey, ctrl: e.ctrlKey || e.metaKey, alt: e.altKey }, orderable().length > 0); // 0.45
     if (it) { e.preventDefault(); runIntent(it); return; } }
-  if (k === " ") { e.preventDefault(); if (sim.phase === "battle") setSpeed(speed ? 0 : battleSpeed()); }
-  else if ((k === "f" || k === "F") && sim.phase === "battle" && !e.ctrlKey && !e.metaKey && !e.altKey) jumpToPing(); // 0.48
-  else if ((k === "u" || k === "U") && !e.ctrlKey && !e.metaKey && !e.altKey && sel.length) topUpSelected(); // 0.49
-  else if (k === "j" || k === "J") showHeights = !showHeights; // 0.22: V went to the quick bar
-  else if (k === "g" || k === "G") setTool("gate"); // 0.41: the Gate tool's key (shown on its button)
-  else if (k === "r" || k === "R") showRanges = !showRanges;
-  else if (k === "h" || k === "H") { showHeatmap = !showHeatmap; refreshUi(); }
+  if (kl === ORDER_KEYS.topup && plain && sel.length) { topUpSelected(); return; } // 0.49
+  if (k === " ") { e.preventDefault(); if (sim.phase === "battle") setSpeed(speed ? 0 : battleSpeed()); return; }
+  if (!plain) return;
+  if (k === ALERT_KEY || e.code === "Backquote") { if (sim.phase === "battle") jumpToPing(); return; } // 0.48 (0.54: was F)
+  if (kl === VIEW_KEYS.heights) showHeights = !showHeights;
+  else if (kl === VIEW_KEYS.ranges) showRanges = !showRanges;
+  else if (kl === VIEW_KEYS.heatmap) { showHeatmap = !showHeatmap; refreshUi(); }
   else if (k === "Enter" && tool === "zone" && draft.length) closeDraft();
-  else if (k === "q" || k === "Q") $("recall").click();
-  else if (k === "l" || k === "L") $("closegates").click(); else if (k === "k" || k === "K") $("clear").click();
-  else if (!e.ctrlKey && !e.metaKey && !e.altKey && QUICK_KEYS.includes(k.toLowerCase())) useSlot(QUICK_KEYS.indexOf(k.toLowerCase())); // 0.22: 7 quick bar keys
+  else if (kl === TOOL_KEYS.zone) setTool("zone");
+  else if (kl === TOOL_KEYS.remove) setTool("remove");
+  else if (kl === TOOL_KEYS.order) setTool("order");
+  else if (kl === TOOL_KEYS.pan) setTool("pan");
+  else if (kl === TOOL_KEYS.gate) setTool("gate"); // 0.41
+  else if (kl === TOOL_KEYS.recall) $("recall").click();
+  else if (kl === TOOL_KEYS.closegates) $("closegates").click(); else if (kl === TOOL_KEYS.clear) $("clear").click();
+  else if (kl === TOOL_KEYS.build) buildKey(); // 0.51: B = build (StarCraft)
 });
 addEventListener("keyup", e => keys.delete(e.key.toLowerCase()));
 
@@ -1131,7 +1151,7 @@ function startBattle() {
 
 // ---------- HUD ----------
 function refreshUi() {
-  renderSelbar(); // 0.44
+  renderActions(); // 0.44
   const planning = sim.phase === "plan";
   $("budget").textContent = C.money(sim.remaining());
   $("phase").textContent = planning ? "PLANNING" : sim.phase === "battle" ? "BATTLE" : "OVER";
@@ -1140,7 +1160,10 @@ function refreshUi() {
   sb.classList.toggle("restart", !planning);
   $<HTMLButtonElement>("closegates").disabled = sim.phase === "over";
   $<HTMLButtonElement>("recall").disabled = sim.phase !== "battle";
-  { const rb = $("recall"), want = sim.recalled ? "Send<br>Back<span class=\"hk\">Q</span>" : "Recall<br>Units<span class=\"hk\">Q</span>"; if (rb.innerHTML !== want) rb.innerHTML = want; rb.classList.toggle("on", sim.recalled); }
+  { const rb = $("recall"), ic = rb.querySelector("img")!, k = sim.recalled ? "sendback" : "recall"; // 0.51.1: picture + tooltip
+    if (ic.dataset.oicon !== k) { ic.dataset.oicon = k; ic.src = orderIcon(k); rb.dataset.tip = sim.recalled ? "Send back" : "Recall units";
+      rb.dataset.tipdesc = sim.recalled ? "Send the recalled units back to where they were." : CMD_DESC.recall; }
+    rb.classList.toggle("on", sim.recalled); }
   $("heatmapbtn").classList.toggle("on", showHeatmap);
   $("mut-badges").innerHTML = [...sim.mutators].map(m => `<span style="border-color:${C.MUTATORS[m].color};color:${C.MUTATORS[m].color}" title="${C.MUTATORS[m].desc}">${C.MUTATORS[m].name}</span>`).join("");
   for (const k of C.BUILDABLE) $(`cost-${k}`).textContent = C.money(sim.unitCost(k));
@@ -1166,8 +1189,8 @@ function refreshUi() {
     else if (b.title.startsWith("Unlocks at")) b.title = "";
   });
   $("n-depot").textContent = `×${sim.depots.filter(d => !d.used).length}`;
-  if (pickerCat) renderPicker();
-  renderQuickbar();
+  renderBuild(); // 0.51: prices, charges, locks
+  renderQuickbar(); // 0.54
   $("n-c4").textContent = `${C.money(C.C4_COST)}${sim.c4.size - sim.blown.size ? ` ×${sim.c4.size - sim.blown.size}` : ""}`;
 }
 
@@ -1183,7 +1206,8 @@ function routeNames(ids: number[]) {
 const SIREN_S = 6; // the warning siren sounds this long at battle start, then fades
 let tipGates = false, lastWave = 0, warnedWave = -1, lastBreaches = 0, lastEarned = 0, lastAlarm = 0;
 function hud(now: number) {
-  if (sel.length && now - selbarT > 250) { selbarT = now; if (sel.some(e => "unit" in e && e.unit.soldiers)) renderSelbar(); } // 0.49: squad strength and the soldier card stay live
+  if (sel.length && now - actionsT > 250) { actionsT = now; renderActions(); }
+  else if (!sel.length && mode === "game" && now - actionsT > 500) { actionsT = now; renderSelection(); } // 0.52: the roster stays live // 0.49: squad strength and the soldier card stay live (0.51: the selection panel and command card too)
   if (mode !== "game" || now - lastHud < 200) return;
   lastHud = now;
   runTicker(); // picks up alerts queued while the strip was hidden
@@ -1248,7 +1272,6 @@ let roundShown = false;
 /** 0.48: people saved per $1M, readable at any size (0.4, 12, 1,250). */
 function fmtPerM(v: number) { return v < 10 ? v.toFixed(1) : Math.round(v).toLocaleString(); }
 function showEnd(r: Score, round: boolean) {
-  openPicker(null);
   $("end-round-row").hidden = !round; $("end-final-row").hidden = round;
   const medal = C.MEDALS.find(m => m[0] === r.medal);
   $("end-medal").textContent = r.medal ?? "No medal";
@@ -1620,15 +1643,19 @@ function draw(now: number) {
   // Units, ranges, tracers. Destroyed units leave wrecks underneath.
   noteUnits(sim.units, sim.time, k => C.UNITS[k].color);
   drawWrecks(ctx, cam.x, cam.y, s, sim.time, s >= MODEL_ZOOM);
+  hoverSquad = hover && !stack.length ? squadNearScreen(cam.x + hover[0] * s, cam.y + hover[1] * s) : null; // 0.52
   for (const u of sim.units) {
     const spec = C.UNITS[u.kind];
-    const px = cam.x + (u.x + 0.5) * s, py = cam.y + (u.y + 0.5) * s;
-    const hov = hover && Math.abs(hover[0] - u.x - 0.5) < 1.5 && Math.abs(hover[1] - u.y - 0.5) < 1.5;
+    const people = !!u.soldiers; // 0.52: soldiers are dots (drawSoldierDots); no picture, model or bars on the map
+    const [ucx, ucy] = people ? sim.squadCenter(u) : [u.x + 0.5, u.y + 0.5];
+    const px = cam.x + ucx * s, py = cam.y + ucy * s;
+    const hov = people ? hoverSquad === u : hover && Math.abs(hover[0] - u.x - 0.5) < 1.5 && Math.abs(hover[1] - u.y - 0.5) < 1.5;
     if (showRanges || hov || sim.phase === "plan") {
       ctx.strokeStyle = spec.color + (hov ? "cc" : "44"); ctx.lineWidth = 1;
       ctx.beginPath(); ctx.arc(px, py, u.range * s, 0, 7); ctx.stroke();
     }
     const r = Math.max(5, s * 1.3);
+    if (people) { if (hov) unitHoverLabel(u, spec, px, py, r); continue; } // 0.52
     const uSp = SPRITE_CANVAS[u.kind];
     if ((u.deployT && u.deployT > 0) || u.extractT !== undefined) ctx.globalAlpha = 0.4;
     else if (u.ammo < 1) ctx.globalAlpha = 0.55;
@@ -1672,7 +1699,11 @@ function draw(now: number) {
       ctx.fillStyle = "#000"; ctx.fillRect(px - r, py + r + 3, 2 * r, 2.5);
       ctx.fillStyle = u.supplied ? "#ffb74d" : "#90caf9"; ctx.fillRect(px - r, py + r + 3, 2 * r * k, 2.5);
     }
-    if (hov) {
+    if (hov) unitHoverLabel(u, spec, px, py, r);
+  }
+  /** The hover line next to a unit: range, ammo, kills, aim, buffs, state. */
+  function unitHoverLabel(u: import("./sim").Unit, spec: C.UnitSpec, px: number, py: number, r: number) {
+    {
       const ammo = u.ammo === Infinity ? "∞ (in zone)" : `${Math.floor(u.ammo)}${u.supplied ? " (supplied)" : ""}`;
       const AI: Record<string, string> = { hunt: "hunting", hold: "holding", flee: "backing off", home: "going to reload", reload: "reloading", leave: "heading home" };
       const apc = u.ai && sim.phase === "battle" ? ` · ${AI[u.ai]}${u.hp !== undefined && u.hp !== Infinity ? ` · ${Math.max(0, Math.round(100 * u.hp / spec.mobile!.hp))}% armor` : ""}` : "";
@@ -1779,7 +1810,7 @@ function selOrbits(): Orbit[] { return sel.flatMap(e => "orbit" in e && sim.orbi
 function selAlive(): boolean {
   if (!sel.length) return false;
   const kept = pruneSelection(sel, entAlive);
-  if (kept.length !== sel.length) { sel = kept; if (!orderable().length) armedCmd = null; renderSelbar(); }
+  if (kept.length !== sel.length) { sel = kept; if (!orderable().length) armedCmd = null; renderActions(); }
   return sel.length > 0;
 }
 /** 0.45: the selected units that take orders. */
@@ -1790,7 +1821,7 @@ function removeSelected() {
     let refused = false;
     for (const e of sel) { if ("orbit" in e) continue; if (!sim.removeEntity(e)) refused = true; else log("info", "removed", { kind: "unit" in e ? e.unit.kind : e.support.kind }); }
     if (refused) say("Removing this Budget Office would exceed your budget.");
-    sel = sel.filter(entAlive); renderSelbar(); refreshUi(); return;
+    sel = sel.filter(entAlive); renderActions(); refreshUi(); return;
   }
   if (sim.phase !== "battle") return;
   const os = selOrbits(); // 0.46: Delete sends an AC-130 home (cancelled before it arrives: the charge comes back)
@@ -1804,7 +1835,7 @@ function removeSelected() {
   for (const e of sel) { if ("orbit" in e) continue; const r = sim.sellEntity(e); if (typeof r === "string") why = r; else secs = Math.max(secs, r); }
   if (secs) { tip("sell"); say(`Pulling ${sel.length > 1 ? "them" : "the unit"} out: ${secs.toFixed(0)} s. No fighting meanwhile; you get the cost back when out.`, 4000); log("info", "sell-in-battle", { secs }); }
   else if (why) say(why);
-  sel = sel.filter(entAlive); renderSelbar();
+  sel = sel.filter(entAlive); renderActions();
 }
 function cycleSelected() {
   if (!selAlive()) return;
@@ -1813,23 +1844,30 @@ function cycleSelected() {
   const m = sim.cycleTargetOf(us[0]);
   for (const u of us.slice(1)) u.mode = m;
   say(`${us.length > 1 ? "These units now shoot" : "This unit now shoots"} ${C.TARGET_LABEL[m]} first.`, 2500); log("info", "target-mode", { mode: m });
-  renderSelbar();
+  renderActions();
 }
 /** 0.45: carry out a command from a key or the bar. */
 function runIntent(it: import("./input").Intent) {
   const us = orderable();
-  if (it.k === "arm") { armedCmd = it.cmd; renderSelbar(); return; }
-  if (it.k === "cancel") { armedCmd = null; renderSelbar(); return; }
+  if (it.k === "arm") { armedCmd = it.cmd; renderActions(); return; }
+  if (it.k === "cancel") { armedCmd = null; renderActions(); return; }
   if (it.k === "stop") { for (const u of us) sim.stopUnit(u); say(us.length > 1 ? "Holding here." : "Holding here.", 1500); }
   else if (it.k === "standby") { for (const u of us) sim.standBy(u); say("Standing by: holding fire.", 2000); }
   log("info", "command", { k: it.k, n: us.length });
-  renderSelbar();
+  renderActions();
 }
 /** 0.45: the armed command lands where the player clicked. */
 function aimArmed(cx: number, cy: number) {
   const us = orderable(), cmd = armedCmd!, queue = keys.has("shift");
   if (!us.length) { armedCmd = null; return; }
   let e: string | null;
+  if (cmd === "fortify") { // 0.51: the Fortify button armed: this click picks the roof
+    const troops = us.filter(u => u.kind === "garrison" || u.kind === "sniper");
+    let why: string | null = null, ok = 0;
+    for (const u of troops) { const err = sim.issue(u, { k: "fortify", x: Math.floor(cx), y: Math.floor(cy) }, false); if (err) why = err; else ok++; }
+    if (!ok) { say(why ?? "Select Troops or Snipers."); return; }
+    armedCmd = null; renderActions(); return;
+  }
   if (cmd === "escort") {
     const k = sim.civAt(cx, cy, Math.max(0.8, 10 / cam.scale));
     if (k < 0) { say("Click a person to escort."); return; }
@@ -1838,27 +1876,31 @@ function aimArmed(cx: number, cy: number) {
   if (e) { say(e); return; }
   log("info", "order", { k: cmd, n: us.length, x: Math.floor(cx), y: Math.floor(cy), queue });
   if (!queue) armedCmd = null; // Shift keeps it armed for the next point
-  renderSelbar();
+  renderActions();
 }
-/** 0.50: the group bar (1-0, bottom right above the bottom bar, design ruling): each slot shows its main unit, how many are left and their health, or its zone. */
-const GROUP_SHORT: Record<string, string> = { para: "Para", battleship: "Ship", howitzer: "Howitzer" }; // names too long for a slot
+/** 0.50: the group tabs (0.54: 1-5, over the selection box, unit pictures): each slot shows its main unit, how many are left and their health, or its zone. */
 const MOCK_GROUPS = new URLSearchParams(location.search).get("mock") === "groupbar"; // design mockup only
 function renderGroupbar() {
-  const bar = $("groupbar");
-  const show = mode === "game";
+  const bar = $("grouptabs");
+  const show = mode === "game" && (MOCK_GROUPS || sim.groups.some(g => g)); // 0.51: the tabs show once a group exists (they'd cover the map for nothing)
   bar.hidden = !show;
   if (!show) return;
+  { const c = $("hud-sel").getBoundingClientRect(), m = bar.parentElement!.getBoundingClientRect(); bar.style.left = `${c.left + c.width / 2 - m.left}px`; } // 0.54: centered over the selection box (C)
   const selUnits = new Set(sel.flatMap(e => "unit" in e ? [e.unit] : []));
   bar.querySelectorAll<HTMLButtonElement>(".gslot").forEach((b, n) => {
     const key = b.dataset.key!;
     const sm = MOCK_GROUPS ? ([{ kind: "garrison", count: 4, health: 1 }, { kind: "garrison", count: 3, health: 0.62 }, { kind: "sniper", count: 2, health: 1 }, { kind: "apc", count: 2, health: 0.35 }, { zone: 0 }, null, { kind: "para", count: 5, health: 0.9 }, null, null, null] as ReturnType<typeof groupSummary>[])[n]
       : groupSummary(sim.groups[n], u => sim.groupAlive(u), u => { const sp = C.UNITS[u.kind]; return sp.mobile?.hp ?? sp.hp ?? 1; });
     const g = sim.groups[n], picked = !MOCK_GROUPS && g && "units" in g && g.units.some(u => selUnits.has(u)) || (!MOCK_GROUPS && g && "zone" in g && selZone === g.zone);
-    const label = !sm ? "" : "zone" in sm ? `Zone ${sm.zone + 1}` : (GROUP_SHORT[sm.kind] ?? (C.UNITS[sm.kind as C.UnitKind]?.name ?? sm.kind).split(" ")[0]).slice(0, 8);
-    const html = `<span class="gk">${key}</span>${sm && !("zone" in sm) ? `<span class="gn">${sm.count}</span>` : ""}<span class="gi">${label}</span>${sm && !("zone" in sm) ? `<span class="gh"><i style="width:${Math.round(sm.health * 100)}%;background:${sm.health > 0.6 ? "#4ade80" : sm.health > 0.3 ? "#fbbf24" : "#f87171"}"></i></span>` : ""}`;
+    // 0.54: a picture of the group's most common unit (a zone: the zone icon), the number top-left, count and health
+    const pic = !sm ? "" : "zone" in sm ? SPRITE_URL.zone ?? "" : SPRITE_URL[sm.kind as SpriteKey] ?? "";
+    const name = !sm ? "" : "zone" in sm ? `Zone ${sm.zone + 1}` : C.UNITS[sm.kind as C.UnitKind]?.name ?? sm.kind;
+    const html = `${pic ? `<img class="gp" src="${pic}" alt="">` : ""}<span class="gk">${key}</span>${sm && !("zone" in sm) ? `<span class="gn">${sm.count}</span>` : ""}${sm && !("zone" in sm) ? `<span class="gh"><i style="width:${Math.round(sm.health * 100)}%;background:${sm.health > 0.6 ? "#4ade80" : sm.health > 0.3 ? "#fbbf24" : "#f87171"}"></i></span>` : ""}`;
     if (b.innerHTML !== html) b.innerHTML = html;
+    b.hidden = !sm; // 0.54: only the groups you made show
+    b.dataset.tip = sm ? `Group ${key}: ${name}` : ""; b.dataset.tipkey = key;
     b.classList.toggle("on", !!sm); b.classList.toggle("sel", !!picked);
-    b.title = sm ? `Group ${key}: click selects, double-click jumps there (Ctrl+${key} saves the selection here)` : `Empty: select units or a zone, then Ctrl+${key}`;
+    b.dataset.tipdesc = "Click selects, double-click jumps there. Ctrl+" + key + " saves the selection here.";
   });
 }
 /** 0.50: battle-group keys. */
@@ -1868,7 +1910,7 @@ function runGroup(gi: { k: "assign" | "add" | "select" | "addsel"; n: number }) 
     sim.groups = assignGroup(sim.groups, gi.n, sel, selZone, gi.k === "add");
     const g = sim.groups[gi.n];
     say(!g ? `Group ${key} cleared.` : "zone" in g ? `Safe zone ${g.zone + 1} is on ${key}.` : `Group ${key}: ${g.units.length} unit${g.units.length > 1 ? "s" : ""}.`, 1600);
-    renderSelbar(); renderGroupbar(); return;
+    renderActions(); renderGroupbar(); return;
   }
   const g = sim.groups[gi.n], now = performance.now(), twice = lastGroupKey.n === gi.n && now - lastGroupKey.t < 350;
   lastGroupKey = { n: gi.n, t: now };
@@ -1876,14 +1918,14 @@ function runGroup(gi: { k: "assign" | "add" | "select" | "addsel"; n: number }) 
   if ("zone" in g) {
     if (gi.k === "select") { sel = []; selZone = g.zone; }
     if (twice && sim.zones[g.zone]) { const p = sim.zones[g.zone]; centerOn(p.reduce((a, q) => a + q[0], 0) / p.length, p.reduce((a, q) => a + q[1], 0) / p.length); following = false; }
-    renderSelbar(); return;
+    renderActions(); return;
   }
   const us = groupUnits(sim.groups, gi.n, u => sim.groupAlive(u));
   const ents: Entity[] = us.map(u => ({ unit: u }));
   sel = gi.k === "addsel" ? [...sel, ...ents.filter(e => !sel.some(x => "unit" in x && x.unit === (e as { unit: import("./sim").Unit }).unit))] : ents;
   selZone = -1; closePerson();
   if (twice && us.length) { centerOn(us.reduce((a, u) => a + u.x + 0.5, 0) / us.length, us.reduce((a, u) => a + u.y + 0.5, 0) / us.length); following = false; }
-  renderSelbar();
+  renderActions();
 }
 /** 0.45: right-click with units selected: move there (Shift adds it to their queue). 0.50: Troops/Snipers sent to a
  *  roof fortify it; a fortified squad sent to a street comes down first, then goes. */
@@ -1913,43 +1955,169 @@ function topUpSelected() {
   let done = 0, why = "";
   for (const e of sel) if ("unit" in e && e.unit.soldiers) { const err = sim.topUp(e.unit); if (err) why = err; else done++; }
   say(done ? `${done > 1 ? `${done} squads` : "Squad"} topped up.` : why || "Select a squad.", 1800);
-  refreshUi(); renderSelbar();
+  refreshUi(); renderActions();
 }
-function renderSelbar() {
+/** 0.51: the command card (bottom right). Nothing selected: the static tools page (#cmdtools, its buttons keep their
+ *  own handlers and states). Something selected (or a safe zone in battle): the orders page, from hud.commandCard. */
+/** 0.51: the selection panel (C): one squad lists its soldiers (click one for their card); several things list
+ *  as tiles (click narrows the selection to it, Shift-click drops it). */
+function renderSelection() {
+  const box = $("hud-sel");
+  const live = sel.filter(e => !("orbit" in e)) as ({ unit: import("./sim").Unit } | { support: import("./sim").Support })[];
+  const g = selectionGrid(live.map(e => "unit" in e
+    ? { kind: e.unit.kind, hp: e.unit.hp ?? 1, max: C.maxHp(C.UNITS[e.unit.kind]) ?? 1, soldiers: e.unit.soldiers?.map(so => ({ name: so.name, hp: so.hp, max: C.SOLDIER_HP, alive: so.alive })) }
+    : { kind: e.support.kind, hp: 1, max: 1 }));
+  const bar = (h: number) => `<span class="sh"><i style="width:${Math.round(h * 100)}%;background:${h > 0.6 ? "#4ade80" : h > 0.3 ? "#fbbf24" : "#f87171"}"></i></span>`;
+  let html = "";
+  if (g.mode === "squad") {
+    const u = (live[0] as { unit: import("./sim").Unit }).unit;
+    const card = selSoldier && u.soldiers!.includes(selSoldier) && selSoldier.alive ? soldierCardLines(u.kind, u.soldiers!, selSoldier) : null;
+    html = `<div class="sel-head">${C.UNITS[u.kind].name} <span class="hk">${u.soldiers!.filter(so => so.alive).length}/${u.soldiers!.length}</span></div>`
+      + g.soldiers.map((so, i) => `<button class="sel-row${so.alive ? "" : " dead"}${u.soldiers![i] === selSoldier ? " on" : ""}" data-so="${i}">${so.name}${bar(so.health)}</button>`).join("")
+      + (card ? `<div class="sel-card">${card.join(" · ")}</div>` : "");
+  } else if (g.mode === "units") {
+    html = `<div class="sel-head">${live.length} selected</div><div class="sel-grid">` + g.items.map(it => {
+      const name = (C.UNITS as Record<string, C.UnitSpec | undefined>)[it.kind]?.name ?? (C.SUPPORTS as Record<string, { name: string } | undefined>)[it.kind]?.name ?? it.kind, img = SPRITE_URL[it.kind as SpriteKey];
+      return `<button class="sel-tile" data-idx="${it.index}" title="${name}: click to select only this, Shift-click to drop it">${img ? `<img src="${img}" alt="">` : name.slice(0, 3)}${bar(it.health)}</button>`;
+    }).join("") + `</div>`;
+  } else if (selPerson < 0 && mode === "game" && squadsNow().length) { // 0.52: the roster: every squad and what it is doing
+    const qs = squadsNow(), n: Record<string, number> = {};
+    html = `<div class="sel-head">Squads <span class="hk">Tab</span></div>` + qs.map(u => {
+      n[u.kind] = (n[u.kind] ?? 0) + 1;
+      const st = stateOf(u), live = u.soldiers!.filter(so => so.alive).length;
+      return `<button class="sel-row roster" data-ru="${sim.units.indexOf(u)}" title="Click: select. Double-click: jump there."><span><i class="ring" style="border-color:${C.RING_COLOR[u.kind] ?? "#e2e8f0"}"></i>${C.UNITS[u.kind].name} ${n[u.kind]} <small class="st-${st.replace(/ /g, "-")}">${st}</small></span><span class="hk">${live}/${u.soldiers!.length}</span></button>`;
+    }).join("");
+  } else html = `<div class="sel-empty">${selPerson >= 0 ? "" : "Nothing selected"}</div>`;
+  if (box.innerHTML !== html) box.innerHTML = html;
+}
+// ---- 0.51.1: hover tooltip for the picture buttons (name, hotkey, price or count, what it does) ----
+let tipPt: [number, number] | null = null, tipEl: HTMLElement | null = null, tipT = 0;
+/** Re-read what is under the pointer; call after anything re-renders the buttons so the text stays live. */
+function updateTip() {
+  const box = $("uitip");
+  const el = tipPt ? (document.elementFromPoint(tipPt[0], tipPt[1]) as HTMLElement | null)?.closest<HTMLElement>("[data-tip]") ?? null : null;
+  if (!el) { tipEl = null; box.hidden = true; return; }
+  if (el !== tipEl) { if (!tipEl) tipT = performance.now(); tipEl = el; }
+  if (performance.now() - tipT < 250) { box.hidden = true; setTimeout(updateTip, 260); return; } // a short wait before the first one
+  const d = el.dataset, key = d.tipkey ? `<kbd>${esc(d.tipkey)}</kbd>` : "";
+  const html = `<b>${esc(d.tip!)}</b>${key}${d.tipsub ? `<br><span class="sub">${esc(d.tipsub)}</span>` : ""}${d.tipdesc ? `<span class="desc">${esc(d.tipdesc)}</span>` : ""}`;
+  if (box.innerHTML !== html) box.innerHTML = html;
+  box.hidden = false;
+  const r = el.getBoundingClientRect(), w = box.offsetWidth, h = box.offsetHeight;
+  const x = Math.max(4, Math.min(innerWidth - w - 4, r.left + r.width / 2 - w / 2));
+  const y = r.top - h - 6 >= 4 ? r.top - h - 6 : r.bottom + 6; // above the button (the panel sits at the bottom)
+  box.style.left = `${x}px`; box.style.top = `${y}px`;
+}
+addEventListener("pointermove", e => { if (e.pointerType === "touch") return; const was = tipPt; tipPt = [e.clientX, e.clientY]; if (!was || (e.target as HTMLElement).closest?.("[data-tip]") || tipEl) updateTip(); }, { passive: true });
+addEventListener("pointerdown", e => { if (e.pointerType === "touch") { tipPt = null; updateTip(); } });
+document.documentElement.addEventListener("pointerleave", () => { tipPt = null; updateTip(); });
+
+function renderActions() {
   renderGroupbar(); // 0.50: highlights the selected group
-  const bar = $("selbar");
-  if (!sel.length && selZone >= 0 && mode === "game" && sim.zones[selZone]) { // 0.50: a selected safe zone
-    const buy = sim.phase === "battle" ? `<button data-sel="buytroops">Buy Troops here ${C.money(sim.unitCost("garrison"))}</button><button data-sel="buysniper">Buy Sniper team here ${C.money(sim.unitCost("sniper"))}</button>` : "";
-    const html = `<b>Safe zone ${selZone + 1}</b> <span class="hk">Ctrl+1-0 makes it a group key</span>${buy}`;
-    if (bar.innerHTML !== html) bar.innerHTML = html;
-    bar.hidden = false; return;
-  }
-  if (!sel.length || mode !== "game") { bar.hidden = true; return; }
-  const us = orderable();
-  const first = sel[0];
-  const name = sel.length > 1 ? `${sel.length} selected` : "unit" in first ? C.UNITS[first.unit.kind].name : "support" in first ? C.SUPPORTS[first.support.kind].name : "AC-130";
+  renderSelection(); // 0.51
+  const tools = $("cmdtools"), orders = $("cmdorders");
+  const us = orderable(), os = selOrbits(), anySelected = sel.length > 0 && mode === "game";
+  const card = commandCard({ phase: sim.phase, anySelected, armed: armedCmd, tool, zone: !sel.length && selZone >= 0 && !!sim.zones[selZone],
+    orderable: us.map(u => ({ kind: u.kind, fort: u.fort, standby: u.standby, damaged: !!u.soldiers?.some(so => !so.alive) })) });
+  const toolsPage = card.length > 0 && card[0].tool !== undefined; // the tools list: show the static page
+  tools.hidden = !toolsPage; orders.hidden = toolsPage;
+  if (toolsPage) { if (tipEl) updateTip(); return; }
   const armedU = sel.find(e => "unit" in e && C.UNITS[e.unit.kind].range > 0) as { unit: import("./sim").Unit } | undefined;
-  const os = selOrbits(), onlyAir = os.length === sel.length;
-  const del = onlyAir ? (os.every(o => !o.arrived) ? "Cancel (charge back)" : "Send home") : sim.phase === "plan" ? "Remove" : "Pull out";
-  const cmds = us.length ? [["amove", "Attack-move", "A"], ["patrol", "Patrol", "P"], ["escort", "Escort", "E"], ["stop", "Stop", "S"], ["standby", "Stand by", "D"]]
-    .map(([k, l, h]) => `<button data-sel="${k}"${armedCmd === k || (k === "standby" && us.every(u => u.standby)) ? ' class="on"' : ""}>${l} <span class="hk">${h}</span></button>`).join("") : "";
-  const sq = sel.length === 1 && "unit" in first && first.unit.soldiers ? first.unit : null; // 0.49: a squad
-  const card = sq && selSoldier && sq.soldiers!.includes(selSoldier) && selSoldier.alive ? soldierCardLines(sq.kind, sq.soldiers!, selSoldier) : null;
-  const strength = sq ? ` <span class="hk">${card ? card.join(" · ") : `Squad ${sq.soldiers!.filter(so => so.alive).length}/${sq.soldiers!.length}`}</span>` : "";
-  const topUp = sq && sim.phase === "battle" && sq.soldiers!.some(so => !so.alive) ? `<button data-sel="topup">Top up ${C.money(Math.round((sq.squadPaid ?? sq.paid ?? 0) / sq.soldiers!.length))} <span class="hk">U</span></button>` : "";
-  const html = `<b>${name}</b>${strength}${topUp}${os.length ? ` <span class="hk">Move: right-click</span>` : ""}${armedU ? `<button data-sel="target">Target: ${C.TARGET_LABEL[armedU.unit.mode ?? "near"]} <span class="hk">T</span></button>` : ""}${cmds}${sim.phase === "over" ? "" : `<button data-sel="remove">${del} <span class="hk">Del</span></button>`}`;
-  if (bar.innerHTML !== html) bar.innerHTML = html;
-  bar.hidden = false;
+  const sq = us.find(u => u.soldiers?.some(so => !so.alive));
+  const onlyAir = os.length > 0 && os.length === sel.length;
+  const label = (b: CardButton) => b.id === "target" ? (armedU ? `Target: ${C.TARGET_LABEL[armedU.unit.mode ?? "near"]}` : "Target")
+    : b.id === "remove" && onlyAir ? (os.every(o => !o.arrived) ? "Cancel (charge back)" : "Send home")
+    : b.id === "topup" && sq ? `Top up ${C.money(Math.round((sq.squadPaid ?? sq.paid ?? 0) / sq.soldiers!.length))}`
+    : b.id === "buytroops" ? `Buy Troops ${C.money(sim.unitCost("garrison"))}` : b.id === "buysniper" ? `Buy Sniper team ${C.money(sim.unitCost("sniper"))}` : b.label;
+  // 0.51.1: pictures only; the name, hotkey and what it does show in the hover tooltip (data-tip*)
+  const icon = (b: CardButton) => b.id === "buytroops" ? SPRITE_URL.garrison ?? "" : b.id === "buysniper" ? SPRITE_URL.sniper ?? ""
+    : orderIcon(b.id === "fortify" && b.label === "Dismount" ? "dismount" : b.id);
+  const desc = (b: CardButton) => b.id === "remove" && onlyAir ? "Send the AC-130 home (before it arrives you get the charge back)."
+    : b.id === "remove" && sim.phase === "plan" ? "Remove it and get its cost back." : b.id === "remove" ? "A helicopter pulls it out; you get its cost back once it is out."
+    : CMD_DESC[b.id === "fortify" && b.label === "Dismount" ? "dismount" : b.id] ?? "";
+  const html = card.filter(b => b.id !== "target" || armedU).map(b => `<button class="cmd${b.on ? " on" : ""}" data-cmd="${b.id}" data-tip="${esc(label(b))}" data-tipkey="${b.key === "RMB" ? "Right-click" : b.key}" data-tipdesc="${esc(desc(b))}"><img src="${icon(b)}" alt="${esc(label(b))}" draggable="false">${b.key && b.key !== "RMB" ? `<span class="hk">${b.key}</span>` : ""}</button>`).join("");
+  if (orders.innerHTML !== html) orders.innerHTML = html;
+  if (tipEl) updateTip();
 }
-const ORDER_COLOR: Record<string, string> = { move: "#80cbc4", amove: "#f87171", patrol: "#fbbf24", escort: "#86efac" };
-/** 0.49: every soldier is a dot in the crowd: green soldiers, yellow snipers (zoomed-in models draw on top). */
-function drawSoldierDots(s: number) {
-  const r = Math.max(1.4, s * 0.32);
+const ORDER_COLOR: Record<string, string> = { move: "#80cbc4", amove: "#f87171", patrol: "#fbbf24", escort: "#86efac", fortify: "#4fc3f7" };
+/** 0.52: the squad's living soldier nearest a map point (for the soldier card). */
+function nearestSoldier(u: import("./sim").Unit, x: number, y: number) {
+  let best: import("./squads").Soldier | null = null, bd = Infinity;
+  for (const so of u.soldiers ?? []) if (so.alive) { const d = Math.hypot(so.x - x, so.y - y); if (d < bd) { bd = d; best = so; } }
+  return best;
+}
+/** 0.52: your squads (people units) still on the map, and each one's state for the roster and Tab. */
+function squadsNow() { return sim.units.filter(u => u.soldiers && u.extractT === undefined && u.soldiers.some(so => so.alive)); }
+function stateOf(u: import("./sim").Unit) {
+  // shotT -1 = never fired
+  return squadState({ firedAgo: u.shotT !== undefined && u.shotT >= 0 ? sim.time - u.shotT : Infinity, moving: u.movedT !== undefined && sim.time - u.movedT < 0.6,
+    fortified: sim.isFortified(u), ammo: u.ammo, maxAmmo: C.UNITS[u.kind].ammo });
+}
+/** 0.52: Tab / Shift+Tab: the next squad, idle ones first; selects it and centers the camera on it. */
+function cycleSquad(back: boolean) {
+  const qs = squadsNow(); if (!qs.length) { say("No squads yet.", 1500); return; }
+  const cur = sel.length === 1 && "unit" in sel[0] ? qs.indexOf((sel[0] as { unit: import("./sim").Unit }).unit) : -1;
+  const i = nextInTab(tabOrder(qs.map(stateOf)), cur, back), u = qs[i];
+  sel = [{ unit: u }]; selZone = -1; selSoldier = null; closePerson();
+  const [x, y] = sim.squadCenter(u); centerOn(x, y); following = false;
+  renderActions();
+}
+/** 0.52: the squad whose soldier is nearest a screen point, within SNAP_PX css px (soldiers win over everything). */
+const SNAP_PX = 12;
+let hoverSquad: import("./sim").Unit | null = null;
+function squadNearScreen(sx: number, sy: number): import("./sim").Unit | null {
+  const s = cam.scale, lim = SNAP_PX * devicePixelRatio;
+  let best: import("./sim").Unit | null = null, bd = lim * lim;
   for (const u of sim.units) {
-    if (!u.soldiers || (hasSquad(u.kind) && s >= SQUAD_ZOOM)) continue;
-    ctx.fillStyle = u.kind === "sniper" ? C.SNIPER_COLOR : C.SOLDIER_COLOR;
+    if (!u.soldiers || u.extractT !== undefined) continue;
+    for (const so of u.soldiers) {
+      if (!so.alive) continue;
+      const dx = cam.x + so.x * s - sx, dy = cam.y + so.y * s - sy, d = dx * dx + dy * dy;
+      if (d < bd) { bd = d; best = u; }
+    }
+  }
+  return best;
+}
+/** 0.52: every soldier is a green dot the size of a person, with a ring that says the job (C.RING_COLOR) and keeps a
+ *  readable size on screen. Fortified squads sit in sandbags; the selected squad gets white rings and a hull; the
+ *  hovered one lights up. No pictures for people units at any zoom (design ruling). */
+function drawSoldierDots(s: number) {
+  const dpr = devicePixelRatio, dot = Math.min(7, Math.max(1, s * 0.2)) * 1.15, r = Math.max(1.1 * dpr, dot / 2);
+  const ring = Math.max(3.6 * dpr, r + Math.max(1.3 * dpr, s * 0.14)), lw = Math.max(1.4 * dpr, s * 0.07);
+  const selected = new Set(sel.filter(e => "unit" in e).map(e => (e as { unit: import("./sim").Unit }).unit));
+  for (const u of sim.units) {
+    if (!u.soldiers) continue;
+    const spec = C.UNITS[u.kind], living = u.soldiers.filter(so => so.alive);
+    if (!living.length) continue;
+    const isSel = selected.has(u), isHov = hoverSquad === u;
     ctx.globalAlpha = (u.deployT && u.deployT > 0) || u.extractT !== undefined ? 0.45 : 1;
-    for (const so of u.soldiers) if (so.alive) { ctx.beginPath(); ctx.arc(cam.x + so.x * s, cam.y + so.y * s, r, 0, 7); ctx.fill(); }
+    const fb = sim.isFortified(u) ? sim.fortBoxOf(u) : null, onRoof = !!fb && sim.map.tile[sim.idx(Math.floor(u.x), Math.floor(u.y))] === BUILDING;
+    if (onRoof) { // 0.52.1: one sandbag fortification around the squad, drawn inside the roof (design ruling)
+      const [bx, by, bs] = fb!, lwS = Math.max(1.5 * dpr, s * 0.16), pad = lwS / 2 + s * 0.04;
+      ctx.strokeStyle = "#c69c5a"; ctx.lineWidth = lwS; ctx.setLineDash([Math.max(2.5 * dpr, s * 0.32), Math.max(1 * dpr, s * 0.09)]);
+      ctx.beginPath(); ctx.roundRect(cam.x + bx * s + pad, cam.y + by * s + pad, bs * s - pad * 2, bs * s - pad * 2, s * 0.25); ctx.stroke();
+      ctx.setLineDash([]);
+    }
+    const out = u.ammo < 1, low = !out && u.ammo !== Infinity && u.ammo < spec.ammo * 0.25;
+    const rc = out ? "#6b7280" : C.RING_COLOR[u.kind] ?? "#e2e8f0";
+    if (isSel && living.length > 1 && !onRoof) { // a thin hull: one circle around the squad (on a roof the sandbags show it)
+      const [cx, cy] = sim.squadCenter(u); let rr = 0;
+      for (const so of living) rr = Math.max(rr, Math.hypot(so.x - cx, so.y - cy));
+      ctx.strokeStyle = "rgba(255,255,255,0.55)"; ctx.lineWidth = Math.max(1, dpr); ctx.setLineDash([4 * dpr, 3 * dpr]);
+      ctx.beginPath(); ctx.arc(cam.x + cx * s, cam.y + cy * s, rr * s + ring + 3 * dpr, 0, 7); ctx.stroke(); ctx.setLineDash([]);
+    }
+    // 0.52.1: inside the sandbags the rings shrink to fit their cell so nothing hangs past the roof
+    const rg = onRoof ? Math.max(r + 0.6 * dpr, Math.min(ring, s * 0.36)) : ring, lwq = onRoof ? Math.min(lw, Math.max(0.8 * dpr, s * 0.06)) : lw;
+    for (const so of living) {
+      const x = cam.x + so.x * s, y = cam.y + so.y * s;
+      if (x < -20 || y < -20 || x > ctx.canvas.width + 20 || y > ctx.canvas.height + 20) continue;
+      if (isSel) { ctx.strokeStyle = "#ffffff"; ctx.lineWidth = lwq; ctx.beginPath(); ctx.arc(x, y, rg + lwq * 1.3, 0, 7); ctx.stroke(); }
+      ctx.strokeStyle = rc; ctx.lineWidth = isHov ? lwq * 1.8 : lwq;
+      const a = ctx.globalAlpha; if (low) ctx.globalAlpha = a * 0.5;
+      ctx.beginPath(); ctx.arc(x, y, rg, 0, 7); ctx.stroke(); ctx.globalAlpha = a;
+      ctx.fillStyle = C.SOLDIER_COLOR; ctx.beginPath(); ctx.arc(x, y, r, 0, 7); ctx.fill();
+      if (so.role === "grenadier" && (so.grenades ?? 0) > 0) { ctx.fillStyle = "#ffb74d"; ctx.beginPath(); ctx.arc(x, y, Math.max(0.7 * dpr, r * 0.55), 0, 7); ctx.fill(); } // 0.53: the M320 man
+    }
   }
   ctx.globalAlpha = 1;
 }
@@ -1963,9 +2131,10 @@ function drawSelection(s: number) {
       ctx.beginPath(); ctx.arc(cam.x + e.orbit.x * s, cam.y + e.orbit.y * s, Math.max(6, s * 1.5), 0, 7); ctx.stroke();
       continue;
     }
-    const o = "unit" in e ? e.unit : e.support;
-    const px = cam.x + (o.x + 0.5) * s, py = cam.y + (o.y + 0.5) * s;
-    ctx.strokeStyle = "unit" in e && e.unit.standby ? "#94a3b8" : "#80cbc4"; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(px, py, Math.max(8, s * 2), 0, 7); ctx.stroke();
+    const o = "unit" in e ? e.unit : e.support, squad = "unit" in e && !!e.unit.soldiers; // 0.52: squads are marked on their dots
+    const [ox, oy] = squad ? sim.squadCenter((e as { unit: import("./sim").Unit }).unit) : [o.x + 0.5, o.y + 0.5];
+    const px = cam.x + ox * s, py = cam.y + oy * s;
+    if (!squad) { ctx.strokeStyle = "unit" in e && e.unit.standby ? "#94a3b8" : "#80cbc4"; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(px, py, Math.max(8, s * 2), 0, 7); ctx.stroke(); }
     if (!("unit" in e) || !e.unit.orders?.length) continue;
     // its queue: a line through every point, colored by order
     let lx = px, ly = py;
@@ -1992,7 +2161,7 @@ function drawCursorInfo(s: number) {
   if (!lines) return;
   const est = estimateAt(sim, tool, hover[0], hover[1], draft);
   const rows: [string, string][] = lines.map(t => [t, "#e2e8f0"]);
-  if (armedCmd) rows.unshift([armedCmd === "amove" ? "Attack-move: click a spot" : armedCmd === "patrol" ? "Patrol: click a spot" : "Escort: click a person", ORDER_COLOR[armedCmd]]); // 0.45
+  if (armedCmd) rows.unshift([armedCmd === "amove" ? "Attack-move: click a spot" : armedCmd === "patrol" ? "Patrol: click a spot" : armedCmd === "fortify" ? "Fortify: click a roof" : "Escort: click a person", ORDER_COLOR[armedCmd]]); // 0.45 (0.51: fortify)
   if (est?.blocked) rows.push([est.blocked, "#fbbf24"]);
   else if (est && est.price !== null) rows.push([`Cost ${C.money(est.price)} · ${C.money(est.left!)} left`, est.left! < 0 ? "#f87171" : "#86efac"]);
   const dpr = devicePixelRatio, fs = 12 * dpr, lh = 16 * dpr, pad = 6 * dpr;
@@ -2233,19 +2402,50 @@ function drawTransports(now: number, s: number) {
   }
 }
 
-let lastInfoHtml = "";
+let lastInfoHtml = "", infoFloat = false, lastInfoKey = ""; // 0.52.1: infoFloat/lastInfoKey: the growing hover card
+/** 0.51: where the info panel looks for the selection: the first selected unit or building. */
+function selProbe(): { at: [number, number]; ent?: import("./sim").Unit } | null {
+  const e = sel.find(x => !("orbit" in x)); // an AC-130 has no card here; the first unit or building does
+  if (!e || !selAlive()) return null;
+  if ("unit" in e) return { at: [e.unit.x + 0.5, e.unit.y + 0.5], ent: e.unit };
+  if ("support" in e) return { at: [e.support.x + 0.5, e.support.y + 0.5] };
+  return null;
+}
+/** 0.51: the info panel with nothing selected or hovered: the zone you clicked, or what to do next. */
+function idleInfo() {
+  if (selZone >= 0 && sim.zones[selZone]) {
+    setInfoPanel(`<div class="ip-head"><span class="ip-title">Safe zone ${selZone + 1}</span></div><div class="ip-desc">${sim.phase === "battle" ? "Buy Troops or a Sniper team here: they deploy in this zone (command card)." : "Place Troops on its roofs or streets, build Evac Points and support buildings inside it."} Ctrl+1-0 puts it on a group key.</div>`, "#80cbc4");
+    return;
+  }
+  const nextT = sim.phase === "battle" && Number.isFinite(sim.nextWaveT) ? Math.max(0, Math.round(sim.nextWaveT - sim.time)) : null;
+  setInfoPanel(`<div class="ip-head"><span class="ip-title">${sim.phase === "plan" ? "Planning" : sim.phase === "battle" ? "Battle" : "Round over"}</span>${nextT !== null ? `<span class="ip-cost">Next horde ${nextT} s</span>` : ""}</div>`
+    + `<div class="ip-desc">${sim.phase === "plan" ? "Draw a safe zone, place units from the build panel, then Start Battle." : "Click a unit, a person or a safe zone to see it here. Drag a box to select several."}</div>`, "#64748b");
+}
 function setInfoPanel(html: string | null, accent = "#7cfc9a") {
-  const box = $("infopanel");
+  const box = $("infocard");
   if (!html || mode !== "game" || !stack.every(() => false)) {
     if (!box.hidden) { box.hidden = true; lastInfoHtml = ""; }
     return;
   }
   box.hidden = false;
   box.style.borderLeftColor = accent;
+  const key = html + (infoFloat ? "|f" : "");
   if (html !== lastInfoHtml) { box.innerHTML = stripCodexLinks(html); lastInfoHtml = html; } // the hover panel takes no clicks
+  if (key !== lastInfoKey) { lastInfoKey = key; layoutInfoCard(); }
 }
+/** 0.52.1: a hovered card too long for the info cell grows upward over the map (fixed, anchored to the cell's bottom,
+ *  same width) so all of it reads without scrolling; it drops back into the cell when the hover ends (design ruling). */
+function layoutInfoCard() {
+  const box = $("infocard"), cell = $("hud-info");
+  box.classList.remove("float"); box.style.left = box.style.width = box.style.bottom = "";
+  if (!infoFloat || box.hidden || box.scrollHeight <= cell.clientHeight - 4) return;
+  const r = cell.getBoundingClientRect();
+  box.classList.add("float");
+  box.style.left = `${r.left}px`; box.style.width = `${r.width}px`; box.style.bottom = `${innerHeight - r.bottom}px`;
+}
+addEventListener("resize", () => { lastInfoKey = ""; });
 
-/** Info HTML for a tool: used by the picker detail column and by hovering a bottom-bar control (0.19). */
+/** Info HTML for a tool: shown in the info panel when hovering a build tile or a command card tool (0.19; 0.51). */
 function toolInfoHtml(t: string): { html: string; accent: string } | null {
   const out = (html: string, accent = "#7cfc9a") => ({ html, accent });
   if ((C.BUILDABLE as string[]).includes(t)) {
@@ -2290,8 +2490,8 @@ function toolInfoHtml(t: string): { html: string; accent: string } | null {
       `<div class="ip-grid">` +
         `<div><span>Effect Radius</span><b>${spec.radius * C.CELL_M} m</b></div>` +
         `<div><span>Deploy Time</span><b>${spec.deploy}s (${info.transport})</b></div>` +
-        `<div style="grid-column:1/3"><span>Primary Effect</span><b>${info.effect}</b></div>` +
-        (count > 0 ? `<div style="grid-column:1/3"><span>Active in Zone</span><b>${count} operational</b></div>` : "") +
+        `<div style="grid-column:1/-1"><span>Primary Effect</span><b>${info.effect}</b></div>` +
+        (count > 0 ? `<div style="grid-column:1/-1"><span>Active in Zone</span><b>${count} operational</b></div>` : "") +
       `</div>` +
       `<div class="ip-tags">${info.specials.map(s => `<div>${s}</div>`).join("")}</div>`,
       spec.color
@@ -2334,7 +2534,7 @@ function toolInfoHtml(t: string): { html: string; accent: string } | null {
       `<div class="ip-grid">` +
         `<div><span>Arrival Delay</span><b>${k === "gunship" ? "Flies in from the nearest edge" : `${spec.delay} s`}</b></div>` +
         `<div><span>Aircraft</span><b>${platforms[k].split(" (")[0]}</b></div>` +
-        `<div style="grid-column:1/3"><span>Structure / Field Effect</span><b>${struct[k]}</b></div>` +
+        `<div style="grid-column:1/-1"><span>Structure / Field Effect</span><b>${struct[k]}</b></div>` +
       `</div>`,
       spec.color
     );
@@ -2345,10 +2545,10 @@ function toolInfoHtml(t: string): { html: string; accent: string } | null {
       gate: ["Gate / Wall Toggle [G]", `${sim.gateMaxHp()} / ${sim.wallMaxHp()} HP`, "Fortification · Access Control", "Gates (blue, 3,000 HP) let fleeing civilians enter while blocking infected. Walls (white, 8,000 HP) block everyone and withstand 2.6x more punishment. Close gates once civilians are inside.", "gate"],
       c4: ["Bridge Demolition Charge", `${C.money(C.C4_COST)}`, "Combat Engineering · River Denial", "Plant charges on river bridges or buildings during planning or battle, then detonate during battle. A bridge drops into the river (Swimmer mutants still swim across). A building comes down in a controlled demolition: rubble fills its footprint and spills into the street, slowing everyone. Block a road or clear a sight line. Not on safe zone buildings or roofs you hold.", "c4"],
       depot: ["Fuel Depot Detonation", `${sim.depots.filter(d => !d.used).length} remaining`, "Environmental Hazard · Massive Blast", "Pre-existing industrial fuel tanks (orange triangles). Click during battle for a 22 m explosion (5,000 dmg) that levels adjacent buildings into rubble and ignites fires.", "depot"],
-      remove: ["Remove / Helicopter Extraction", "100% Refund", "Logistics · Redeployment", "In Planning, removes a unit or support building immediately for a full refund. In Battle, dispatches an extraction helicopter (1.5x deploy time) to pull the unit out and refund its cost.", "remove"],
+      remove: ["Remove / Helicopter Extraction", "100% Refund", "Logistics · Redeployment", "In Planning, removes a unit or support building immediately for a full refund. In Battle, dispatches an extraction helicopter (1.5x deploy time; Troops 10 s) to pull the unit out and refund its cost.", "remove"],
       order: ["Unit Orders", "Free", "Command & Control", "Select mobile units with Move/Aim (click, Shift-click or drag a box). Right-click: move (straight there, shooting on the way). A: attack-move. P: patrol. E: escort a person and their family. S: stop. D: stand by (hold fire). Shift queues orders.", "order"],
-      pan: ["Move/Aim: Select & Command", "Click / Drag", "Command & Control", "Right-drag to pan, wheel to zoom. Click a unit or building to select it, drag a box to select mobile units. Right-click sends selected units (A attack-move, P patrol, E escort, S stop, D stand by; Shift queues) or a selected AC-130. T cycles target priority (Nearest, Wall Biters, Infected Chasing Civilians); Delete removes it (full refund in Planning, extraction in Battle).", "pan"],
-      heatmap: ["Spatial Kill Heatmap [H]", `${sim.kills.toLocaleString()} kills`, "Battlefield Intelligence", "Overlays a smoothed thermal density map of every infected kill. Hover a unit in the picker during battle to isolate kills made by that unit class.", "heatmap"],
+      pan: ["Move/Aim: Select & Command", "Click / Drag", "Command & Control", "Right-drag to pan, wheel to zoom. Click a unit or building to select it, drag a box to select mobile units. Right-click sends selected units (Q attack-move, R patrol, E escort, F stop, G stand by; Shift queues) or a selected AC-130. T cycles target priority (Nearest, Wall Biters, Infected Chasing Civilians); Delete removes it (full refund in Planning, extraction in Battle).", "pan"],
+      heatmap: ["Spatial Kill Heatmap [H]", `${sim.kills.toLocaleString()} kills`, "Battlefield Intelligence", "Overlays a smoothed thermal density map of every infected kill. Hover a unit in the build panel during battle to isolate kills made by that unit class.", "heatmap"],
       recall: ["Recall Units [Q]", sim.recalled ? "Recalled" : "Instant", "Command & Control", "Every APC, tank, squad, paratrooper and aircraft falls back to the nearest safe zone and holds there. Boats and street emplacements stay put. Press again to send them all back to their posts; a strike order sends one unit out on its own.", "order"],
       closegates: ["Lock Down All Gates", "Instant", "Emergency Perimeter Seal", "Immediately converts every intact blue Gate across all Safe Zones into a reinforced white Wall (scaling current HP proportionally).", "gate"],
       clear: ["Clear Safe Zone", "Full Refund", "Planning Reset", "Removes your drawn Safe Zone polygon and refunds its cost so you can redraw your perimeter from scratch (available during Planning phase).", "remove"],
@@ -2367,17 +2567,22 @@ function toolInfoHtml(t: string): { html: string; accent: string } | null {
   return null;
 }
 
-/** Populate the Tactical Hover Info Panel (#infopanel) from either a hovered sidebar button or a hovered map entity. */
-function updateInfoPanel() {
+/** Populate the Tactical Hover Info Panel (#infocard) from either a hovered sidebar button or a hovered map entity. */
+function updateInfoPanel(probe?: [number, number], prefer?: import("./sim").Unit) {
   if (mode !== "game" || stack.length > 0) { setInfoPanel(null); return; }
-
-  // 1. Bottom-bar control hover (the picker has its own detail column)
-  if (hoverNavTool) { const i = toolInfoHtml(hoverNavTool); if (i) { setInfoPanel(i.html, i.accent); return; } }
-
-  // 2. Map canvas hover: inspect placed units, support buildings, fuel depots, supply crates, or rubble/damaged structures
-  if (!hover) { setInfoPanel(null); return; }
-  const [hx, hy] = hover;
-  const u = sim.units.find(u => Math.abs(u.x + 0.5 - hx) < 1.6 && Math.abs(u.y + 0.5 - hy) < 1.6);
+  if (selPerson >= 0 && !probe) { setInfoPanel(null); return; } // 0.51: the person window has the info panel
+  // 0.51: the info panel (B) shows a hovered build item, else what's under the cursor, else the selection, else round status
+  const navInfo = !probe && hoverNavTool ? toolInfoHtml(hoverNavTool) : null;
+  const src = probe ? "selection" : infoSource(navInfo ? hoverNavTool : null, !!hover, sel.length > 0);
+  infoFloat = !probe && (src === "hover-item" || src === "hover-entity"); // 0.52.1: hover cards may grow over the map
+  if (src === "hover-item") { setInfoPanel(navInfo!.html, navInfo!.accent); return; }
+  if (src === "idle") { idleInfo(); return; }
+  const sp = !probe && src === "selection" ? selProbe() : null;
+  const pt = probe ?? (src === "hover-entity" ? hover! : sp?.at);
+  if (!pt) { idleInfo(); return; }
+  prefer ??= sp?.ent ?? (src === "hover-entity" && hoverSquad ? hoverSquad : undefined); // 0.51 review: the selected unit itself (0.52.1: or the hovered squad), not whatever stands nearest that point
+  const [hx, hy] = pt;
+  const u = prefer ?? sim.units.find(u => Math.abs(u.x + 0.5 - hx) < 1.6 && Math.abs(u.y + 0.5 - hy) < 1.6);
   if (u) {
     const spec = C.UNITS[u.kind], info = C.UNIT_INFO[u.kind];
     const effRate = spec.rate * (u.rateMul ?? 1);
@@ -2406,10 +2611,10 @@ function updateInfoPanel() {
         `<div><span>Fire Rate / DPS</span><b>${effRate.toFixed(1)}/s (${dps.toLocaleString()})</b></div>` +
         `<div><span>Damage</span><b>${spec.damage.toLocaleString()}${spec.splash ? ` (${(spec.splash * C.CELL_M).toFixed(1)}m)` : ""}</b></div>` +
         `<div><span>Target Mode</span><b>${C.TARGET_LABEL[u.mode ?? "near"]}</b></div>` +
-        `<div style="grid-column:1/3"><span>Ammunition</span><b>${ammoText}</b></div>` +
+        `<div style="grid-column:1/-1"><span>Ammunition</span><b>${ammoText}</b></div>` +
       `</div>` +
       `<div class="ip-bar"><i style="width:${ammoPct}%;background:${u.supplied ? "#ffb74d" : "#4fc3f7"}"></i></div>` +
-      (hpPct !== null ? `<div class="ip-grid"><div style="grid-column:1/3"><span>Hull / Squad Health</span><b>${Math.max(0, Math.round(u.hp!))} / ${hpMax} HP (${hpPct}%)</b></div></div><div class="ip-bar"><i style="width:${hpPct}%;background:${hpPct > 50 ? "#7cfc9a" : hpPct > 25 ? "#ffd54f" : "#ff5252"}"></i></div>` : "") +
+      (hpPct !== null ? `<div class="ip-grid"><div style="grid-column:1/-1"><span>Hull / Squad Health</span><b>${Math.max(0, Math.round(u.hp!))} / ${hpMax} HP (${hpPct}%)</b></div></div><div class="ip-bar"><i style="width:${hpPct}%;background:${hpPct > 50 ? "#7cfc9a" : hpPct > 25 ? "#ffd54f" : "#ff5252"}"></i></div>` : "") +
       `<div class="ip-tags">${(buffs.length ? buffs : [info.specials[0]]).map(s => `<div>${s}</div>`).join("")}</div>`,
       spec.color
     );
@@ -2485,7 +2690,7 @@ function updateInfoPanel() {
           `<div><span>Range / Dmg</span><b>${Math.round(wep.range * C.CELL_M)} m · ${wep.damage} dmg</b></div>` +
           `<div><span>Fire Rate</span><b>${wep.rate}/s</b></div>` +
           `<div><span>Aim / Fear</span><b>${effAcc}% acc · ${fearPct}% fear</b></div>` +
-          `<div style="grid-column:1/3"><span>Ammunition</span><b>${sim.civAmmo[ac]} rds remaining</b></div>` +
+          `<div style="grid-column:1/-1"><span>Ammunition</span><b>${sim.civAmmo[ac]} rds remaining</b></div>` +
         `</div>` +
         `<div class="ip-bar"><i style="width:${ammoPct}%;background:${militia ? "#aed581" : wep.color}"></i></div>`,
         militia ? "#aed581" : wep.color
@@ -2557,7 +2762,8 @@ function updateInfoPanel() {
     }
   }
 
-  setInfoPanel(null);
+  if (!probe) { const s2 = selProbe(); if (s2) { updateInfoPanel(s2.at, s2.ent); return; } } // nothing under the cursor: back to the selection
+  idleInfo();
 }
 
 // ---------- Sound events: read what changed in the sim since last frame ----------
@@ -2746,105 +2952,88 @@ const catTools: Record<string, string[]> = {};
 document.querySelectorAll<HTMLElement>("#tool-cards .dock-group[data-cat]").forEach(g => {
   catTools[g.dataset.cat!] = Array.from(g.querySelectorAll<HTMLElement>("[data-tool]")).map(b => b.dataset.tool!);
 });
-const PICKER_TOOLS = new Set(Object.values(catTools).flat());
 const catOf = (t: string) => Object.keys(catTools).find(c => catTools[c].includes(t)) ?? null;
-let pickerCat: string | null = null;
-const pickerSel: Record<string, string> = {};
+let buildCat: string | null = null; // 0.51: the build panel's open tab (null until first drawn: the first category)
 function sellAbility(k: C.AbilityKind) { if (sim.sellAbility(k)) { say(`Sold a ${C.ABILITIES[k].name.toLowerCase()}.`, 2000); refreshUi(); } }
-function pickerRow(t: string) {
+/** 0.51: one build tile: the tool's icon, lock and hotkey; name and price or charges go in its tooltip (0.51.1). From its hidden source card. */
+function buildTile(t: string) {
   const c = toolCard(t)!, img = c.querySelector("img")?.getAttribute("src") ?? "";
   const name = c.querySelector(".tc-name")?.textContent ?? toolName(t), sm = c.querySelector("small")?.textContent ?? "";
   const hk = c.querySelector(".hk")?.textContent;
-  const u = (C.UNITS as Record<string, C.UnitSpec | undefined>)[t];
-  const range = u ? ` · ${u.minRange ? `${u.minRange * C.CELL_M}-` : ""}${u.range * C.CELL_M} m` : "";
-  const cls = ["prow", c.classList.contains("locked") ? "locked" : "", c.disabled ? "off" : "", pickerSel[pickerCat!] === t ? "sel" : "", tool === t ? "on" : ""].join(" ");
-  return `<div class="${cls}" data-ptool="${t}"><img src="${img}" alt="" draggable="false"><div><b>${name}${hk ? ` <span class="hk">${hk}</span>` : ""}</b><small>${sm}${range}</small></div></div>`;
+  const hl = tut?.on ? tut.steps[tut.i]?.highlight : undefined, glow = hl?.kind === "tool" && hl.tool === t; // the tutorial points at it
+  const cls = ["btile", c.classList.contains("locked") ? "locked" : "", c.disabled ? "off" : "", tool === t ? "on" : "", glow ? "tut-glow" : ""].join(" ");
+  // 0.51.1: picture only; name, hotkey and price or charges show in the hover tooltip (full details in the info panel)
+  return `<button class="${cls}" data-ptool="${t}" data-tip="${esc(name)}" data-tipkey="${hk ?? ""}" data-tipsub="${esc(sm)}"><img src="${img}" alt="${esc(name)}" draggable="false">${hk ? `<span class="hk">${hk}</span>` : ""}</button>`;
 }
-function renderPickerDetail() {
-  if (!pickerCat) return;
-  const t = pickerSel[pickerCat], i = t ? toolInfoHtml(t) : null, d = document.getElementById("pdetail");
-  if (!d) return;
-  d.style.borderLeftColor = i?.accent ?? "#7cfc9a";
-  const locked = t && !isOpen(t) ? `<div class="plock">Unlocks at ${P.UNLOCK_XP[t].toLocaleString()} XP. You have ${(save.xp ?? 0).toLocaleString()}.</div>` : "";
-  const how = t && isAbility(t as Tool)
-    ? (sim.phase === "plan" ? "Click to buy a charge, right-click to sell one back. Drag to the quick bar." : "Click to use it (buys one if none are left). Drag to the quick bar.")
-    : "Click to place it on the map. Drag to the quick bar.";
-  d.innerHTML = (i?.html ?? "") + locked + `<div class="phow">${how}</div>`;
+/** 0.51: the build panel: category tabs over the open category's tiles (always shown; replaces the pop-up picker). */
+function renderBuild() {
+  const bt = buildTabs(catTools, buildCat); buildCat = bt.open;
+  const tabs = bt.cats.map(c => `<button data-cat="${c}"${c === buildCat ? ' class="on"' : ""}>${c}</button>`).join("");
+  const grid = catTools[buildCat].map(buildTile).join("");
+  if ($("btabs").innerHTML !== tabs) $("btabs").innerHTML = tabs;
+  if ($("bgrid").innerHTML !== grid) $("bgrid").innerHTML = grid;
+  if (tipEl) updateTip();
 }
-function renderPicker() {
-  const box = $("picker");
-  if (!pickerCat) { box.hidden = true; return; }
-  pickerSel[pickerCat] ??= catTools[pickerCat][0];
-  box.hidden = false;
-  box.innerHTML = `<div class="plist"><h3>${pickerCat}</h3>${catTools[pickerCat].map(pickerRow).join("")}</div><div id="pdetail"></div><button class="pclose" title="Esc">✕</button>`;
-  renderPickerDetail();
+/** 0.51: the B key: no safe zone yet, pick up the Safe Zone tool; otherwise step through the build tabs. */
+function buildKey() {
+  if (!sim.zones.length && sim.phase === "plan") { setTool("zone"); say("Safe Zone: click the corners, Enter or click the first corner to close it.", 2500); return; }
+  const cats = Object.keys(catTools), i = buildCat ? cats.indexOf(buildCat) : -1;
+  setBuildTab(cats[(i + 1) % cats.length]);
 }
-function openPicker(cat: string | null) {
-  if (cat) tip("quickbar"); // 0.41
-  pickerCat = cat && catTools[cat] ? cat : null;
-  if (!pickerCat) hoverUnitHeatmap = null;
-  document.querySelectorAll<HTMLButtonElement>("#classes button").forEach(b => b.classList.toggle("on", b.dataset.cat === pickerCat));
-  renderPicker();
-}
-/** setTool() calls this: highlight the row if its class is open; never opens the picker by itself. */
-function openCatFor(t: string) {
-  if (pickerCat && catOf(t) === pickerCat) { pickerSel[pickerCat] = t; renderPicker(); }
-}
+function setBuildTab(cat: string) { if (catTools[cat]) { buildCat = cat; tip("build"); renderBuild(); } }
+/** setTool() calls this: open the tab of the tool picked (a key or a tile) so its tile shows as on. */
+function openCatFor(t: string) { const c = catOf(t); if (c && c !== buildCat) buildCat = c; renderBuild(); }
 function pickTool(t: string) {
-  if (isAbility(t as Tool)) {
-    const k = t as C.AbilityKind;
-    abilityButton(k);
-    if (sim.phase === "battle") openPicker(null); // buying in planning keeps it open
-    else renderPicker();
-    return;
-  }
-  const before = tool;
+  if (isAbility(t as Tool)) { abilityButton(t as C.AbilityKind); renderBuild(); return; }
   toggleTool(t as Tool);
-  if (tool !== before) openPicker(null);
 }
-document.querySelectorAll<HTMLButtonElement>("#classes button").forEach(b => b.addEventListener("click", () => openPicker(pickerCat === b.dataset.cat ? null : b.dataset.cat!)));
+$("btabs").addEventListener("click", e => { const b = (e.target as HTMLElement).closest<HTMLButtonElement>("[data-cat]"); if (b) setBuildTab(b.dataset.cat!); });
 {
-  const box = $("picker");
+  const box = $("bgrid");
   box.addEventListener("pointerover", e => {
-    const r = (e.target as HTMLElement).closest<HTMLElement>(".prow"); if (!r || !pickerCat) return;
+    const r = (e.target as HTMLElement).closest<HTMLElement>(".btile"); if (!r) return;
     const t = r.dataset.ptool!;
+    hoverNavTool = t as Tool; // the info panel shows it
     hoverUnitHeatmap = (C.BUILDABLE as string[]).includes(t) && sim.phase !== "plan" ? t as C.UnitKind : null;
-    if (pickerSel[pickerCat] === t) return;
-    pickerSel[pickerCat] = t;
-    box.querySelectorAll(".prow").forEach(x => x.classList.toggle("sel", x === r));
-    renderPickerDetail();
   });
-  box.addEventListener("pointerleave", () => { hoverUnitHeatmap = null; });
+  box.addEventListener("pointerleave", () => { hoverNavTool = null; hoverUnitHeatmap = null; });
   box.addEventListener("click", e => {
-    if ((e.target as HTMLElement).closest(".pclose")) { openPicker(null); return; }
-    const r = (e.target as HTMLElement).closest<HTMLElement>(".prow");
+    const r = (e.target as HTMLElement).closest<HTMLElement>(".btile");
     if (r && !dragJustEnded()) pickTool(r.dataset.ptool!);
   });
   box.addEventListener("contextmenu", e => {
     e.preventDefault();
-    const r = (e.target as HTMLElement).closest<HTMLElement>(".prow");
-    if (r && isAbility(r.dataset.ptool as Tool)) { sellAbility(r.dataset.ptool as C.AbilityKind); renderPicker(); }
+    const r = (e.target as HTMLElement).closest<HTMLElement>(".btile");
+    if (r && isAbility(r.dataset.ptool as Tool)) { sellAbility(r.dataset.ptool as C.AbilityKind); renderBuild(); }
   });
-  box.addEventListener("wheel", e => e.stopPropagation());
 }
-let dragEndT = 0;
-const dragJustEnded = () => performance.now() - dragEndT < 50;
 
-// ---- Quick bar (0.19; 7 slots on Z X C V B N M since 0.22): slots the player fills by dragging from the picker. Saved in save.json. ----
-let quick: Slots = cleanQuickbar(save.settings.quickbar, t => PICKER_TOOLS.has(t));
-var quickReady = true; // var: refreshUi() can run before this line during startup; it skips the bar until then
-function storeQuickbar() { save.settings.quickbar = quick; Save.store(save); }
+let dragEndT = 0;
+function dragJustEnded() { return performance.now() - dragEndT < 50; }
+
+// ---- Quick bar (0.19; back in 0.54: 5 slots under the build grid, keys 6-0 by default, every key rebindable). Saved in the profile. ----
+var quick: Slots = cleanQuickbar(save.settings.quickbar, t => buildToolSet().has(t)); // var: refreshUi() can run before this line
+var quickKeys: (string | null)[] = cleanQuickKeys(save.settings.quickKeys);
+var rebindSlot: number | null = null; // a slot waiting for its new key (right-click it, press a key)
+var quickReady = true;
+function buildToolSet() { return new Set(Object.values(catTools).flat()); }
+function storeQuickbar() { save.settings.quickbar = quick; save.settings.quickKeys = quickKeys; Save.store(save); }
 function renderQuickbar() {
-  if (!quickReady) return;
+  if (!quickReady || typeof quick === "undefined") return;
   document.querySelectorAll<HTMLButtonElement>("#quickbar .qslot").forEach(b => {
-    const t = quick[Number(b.dataset.slot)], c = t ? toolCard(t) : null;
+    const i = Number(b.dataset.slot), t = quick[i], c = t ? toolCard(t) : null, key = keyLabel(quickKeys[i]);
     b.classList.toggle("full", !!c);
     b.classList.toggle("locked", !!c && (c.classList.contains("locked") || c.disabled));
     b.classList.toggle("on", !!t && tool === t);
-    const html = c ? `<img src="${c.querySelector("img")?.getAttribute("src") ?? ""}" alt="" draggable="false"><small>${c.querySelector("small")?.textContent ?? ""}</small>` : "";
+    b.classList.toggle("rebind", rebindSlot === i);
+    const html = `${c ? `<img src="${c.querySelector("img")?.getAttribute("src") ?? ""}" alt="" draggable="false">` : ""}<span class="hk">${rebindSlot === i ? "?" : key}</span>`;
     if (b.innerHTML !== html) b.innerHTML = html;
-    b.title = t ? toolName(t) : "Drag a unit here from the picker";
+    b.dataset.tip = rebindSlot === i ? "Press a key for this slot" : t ? toolName(t) : `Quick bar slot ${i + 1}`;
+    b.dataset.tipkey = key;
+    b.dataset.tipsub = c ? c.querySelector("small")?.textContent ?? "" : "";
+    b.dataset.tipdesc = rebindSlot === i ? "Esc keeps the old key, Backspace clears it." : t ? "Click or press its key. Drag it off the bar to clear. Right-click: change its key." : "Drag a tile here from the build grid. Right-click: change its key.";
   });
+  if (tipEl) updateTip();
 }
 function useSlot(i: number) {
   const t = quick[i];
@@ -2854,10 +3043,21 @@ function useSlot(i: number) {
 }
 document.querySelectorAll<HTMLButtonElement>("#quickbar .qslot").forEach(b => {
   const i = Number(b.dataset.slot);
-  b.addEventListener("click", () => { if (!dragJustEnded()) useSlot(i); });
-  b.addEventListener("contextmenu", e => { e.preventDefault(); const t = quick[i]; if (t && isAbility(t as Tool)) { sellAbility(t as C.AbilityKind); renderQuickbar(); } });
+  b.addEventListener("click", () => { if (!dragJustEnded() && rebindSlot === null) useSlot(i); });
+  b.addEventListener("contextmenu", e => { e.preventDefault(); rebindSlot = rebindSlot === i ? null : i; renderQuickbar(); }); // 0.54: rebind its key
 });
-// Drag: from a picker row (put it in a slot) or from a slot (swap, or drop off the bar to clear). Pointer events, so
+// 0.54: the next key press goes to the slot being rebound (captured before the game's own keys)
+addEventListener("keydown", e => {
+  if (rebindSlot === null) return;
+  e.preventDefault(); e.stopImmediatePropagation();
+  const i = rebindSlot, k = e.key.toLowerCase();
+  if (k === "escape") { rebindSlot = null; renderQuickbar(); return; }
+  if (k === "backspace" || k === "delete") { quickKeys[i] = null; rebindSlot = null; storeQuickbar(); renderQuickbar(); return; }
+  const why = bindProblem(k, i, quickKeys);
+  if (why) { say(why, 2200); return; }
+  quickKeys[i] = k; rebindSlot = null; storeQuickbar(); renderQuickbar(); say(`Slot ${i + 1}: ${keyLabel(k)}.`, 1500);
+}, { capture: true });
+// Drag: from a build tile (put it in a slot) or from a slot (swap, or drop off the bar to clear). Pointer events, so
 // the browser and the Windows app behave the same. A drag never counts as a click.
 {
   let drag: { t: string; from: number | null; x: number; y: number; ghost: HTMLImageElement | null } | null = null;
@@ -2865,7 +3065,7 @@ document.querySelectorAll<HTMLButtonElement>("#quickbar .qslot").forEach(b => {
   addEventListener("pointerdown", e => {
     if (e.button !== 0) return;
     const el = e.target as HTMLElement;
-    const row = el.closest<HTMLElement>("#picker .prow"), slot = el.closest<HTMLElement>("#quickbar .qslot");
+    const row = el.closest<HTMLElement>("#bgrid .btile"), slot = el.closest<HTMLElement>("#quickbar .qslot");
     const t = row ? row.dataset.ptool! : slot ? quick[Number(slot.dataset.slot)] : null;
     if (!t || (row && !isOpen(t))) return;
     drag = { t, from: slot ? Number(slot.dataset.slot) : null, x: e.clientX, y: e.clientY, ghost: null };
@@ -2919,7 +3119,6 @@ document.querySelectorAll<HTMLButtonElement>("[data-tool]").forEach(b => {
   });
 });
 // 0.22.1: anything picked from the command section closes the units window
-document.querySelectorAll<HTMLButtonElement>("#controls button:not([data-speed])").forEach(b => b.addEventListener("click", () => { if (pickerCat) openPicker(null); }));
 $("recall").addEventListener("click", () => { // 0.24
   if (sim.phase !== "battle") { say("Recall works during the battle."); return; }
   const n = sim.recallAll();
@@ -2943,16 +3142,33 @@ $("startbtn").addEventListener("click", () => {
 $("heatmapbtn").addEventListener("click", () => { showHeatmap = !showHeatmap; refreshUi(); });
 $("end-heatmap").addEventListener("click", () => { showHeatmap = true; $("end").hidden = true; refreshUi(); say("Showing kill heatmap. Press H or Menu when done.", 5000); });
 $("closegates").addEventListener("click", () => { const n = sim.closeAllGates(); buildZone(); log("info", "close-all-gates", { closed: n, t: +sim.time.toFixed(1), phase: sim.phase }); say(n ? (sim.phase === "battle" ? `Closing ${n} gate cells (${C.GATE_CLOSE_S}s).` : "All gates closed.") : "No open gates left."); });
-$("groupbar").addEventListener("click", e => { // 0.50: click a slot = its key; twice quickly jumps there
+$("grouptabs").addEventListener("click", e => { // 0.50: click a slot = its key; twice quickly jumps there
   const b = (e.target as HTMLElement).closest<HTMLButtonElement>(".gslot"); if (!b) return;
   runGroup({ k: keys.has("shift") ? "addsel" : "select", n: Number(b.dataset.n) }); renderGroupbar();
 });
-$("selbar").addEventListener("click", e => { // 0.44/0.45
-  const b = (e.target as HTMLElement).closest<HTMLButtonElement>("[data-sel]"); if (!b) return;
-  const k = b.dataset.sel!;
-  if (k === "topup") topUpSelected(); // 0.49
-  if ((k === "buytroops" || k === "buysniper") && selZone >= 0) { const e = sim.placeFromZone(k === "buytroops" ? "garrison" : "sniper", selZone); if (e) say(e); else { snd.radio(); refreshUi(); renderSelbar(); } } // 0.50
-  if (k === "remove") removeSelected(); else if (k === "target") cycleSelected();
+$("hud-sel").addEventListener("click", e => { // 0.51: the selection panel
+  const t = e.target as HTMLElement, row = t.closest<HTMLButtonElement>("[data-so]"), tile = t.closest<HTMLButtonElement>("[data-idx]");
+  const live = sel.filter(x => !("orbit" in x));
+  if (row && live[0] && "unit" in live[0]) { const so = live[0].unit.soldiers?.[Number(row.dataset.so)]; selSoldier = so && so.alive ? so : null; renderActions(); }
+  else if (tile) { const it = live[Number(tile.dataset.idx)]; if (!it) return; sel = keys.has("shift") || e.shiftKey ? sel.filter(x => x !== it) : [it]; renderActions(); }
+  else { const r = t.closest<HTMLButtonElement>("[data-ru]"), u = r ? sim.units[Number(r.dataset.ru)] : undefined; if (u) { sel = [{ unit: u }]; selZone = -1; selSoldier = null; renderActions(); } } // 0.52: roster
+});
+$("hud-sel").addEventListener("dblclick", e => { // 0.52: roster double-click jumps there
+  const r = (e.target as HTMLElement).closest<HTMLButtonElement>("[data-ru]"), u = r ? sim.units[Number(r.dataset.ru)] : undefined;
+  if (u) { const [x, y] = sim.squadCenter(u); centerOn(x, y); following = false; }
+});
+$("cmdorders").addEventListener("click", e => { // 0.51: the orders page of the command card
+  const b = (e.target as HTMLElement).closest<HTMLButtonElement>("[data-cmd]"); if (!b) return;
+  const k = b.dataset.cmd!;
+  if (k === "move") say("Right-click on the map where to send them (Shift queues).", 2500);
+  else if (k === "topup") topUpSelected(); // 0.49
+  else if ((k === "buytroops" || k === "buysniper") && selZone >= 0) { const e = sim.placeFromZone(k === "buytroops" ? "garrison" : "sniper", selZone); if (e) say(e); else { snd.radio(); refreshUi(); renderActions(); } } // 0.50
+  else if (k === "remove") removeSelected(); else if (k === "target") cycleSelected();
+  else if (k === "fortify") { // Dismount when they're all up; otherwise the next click on a roof fortifies it
+    const troops = orderable().filter(u => u.kind === "garrison" || u.kind === "sniper");
+    if (troops.length && troops.every(u => u.fort === "up")) { for (const u of troops) { const err = sim.dismount(u); if (err) say(err); } renderActions(); }
+    else runIntent({ k: "arm", cmd: "fortify" });
+  }
   else if (k === "amove" || k === "patrol" || k === "escort") runIntent({ k: "arm", cmd: k });
   else if (k === "stop" || k === "standby") runIntent({ k, queue: false });
 });
@@ -3164,7 +3380,7 @@ for (const k of C.SUPPORT_KINDS) $(`cost-${k}`).textContent = C.money(C.SUPPORTS
 let saving = false;
 const fmtT = (t: number) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, "0")}`;
 const fmtMB = (b: number) => b >= 1e6 ? `${(b / 1e6).toFixed(1)} MB` : `${Math.max(1, Math.round(b / 1e3))} KB`;
-const esc = (t: string) => t.replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]!));
+function esc(t: string) { return t.replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]!)); } // hoisted: the command card uses it at startup
 /** Everything the page needs besides the Sim to carry on a saved battle (plain data). */
 function pageState(): Snap.PageState {
   return { cityId: city?.id ?? null, dailyDate, customName: customMap?.name ?? null, mutators: [...activeMutators], seed, xpGiven, roundShown,
@@ -3205,7 +3421,7 @@ async function loadBattle(n: number) {
   loadSeq++; // 0.36: drop any area load still pending
   const areaKey = typeof p.cityId === "string" && p.cityId.includes("/") ? p.cityId : null;
   if (areaKey) { try { await loadRealArea(areaKey); } catch { /* the snapshot carries its own map; Retry needs the area */ } } // review #2: Retry/Restart build a new Sim from it
-  openPicker(null); clearTicker();
+  clearTicker();
   mode = "game"; showHeatmap = false;
   city = typeof p.cityId === "string" ? C.cityById(p.cityId) ?? null : null; // 0.35: daily cities too
   dailyDate = typeof p.dailyDate === "string" ? p.dailyDate : null;
@@ -3236,7 +3452,7 @@ async function loadBattle(n: number) {
 /** The slot's profile is now the game's: settings, quick bar and speed follow it. */
 function applyProfile() {
   if (save.xp == null) { save.xp = P.grandfatherXp(save.best); Save.store(save); }
-  quick = cleanQuickbar(save.settings.quickbar, t => PICKER_TOOLS.has(t)); renderQuickbar();
+  quick = cleanQuickbar(save.settings.quickbar, t => buildToolSet().has(t)); quickKeys = cleanQuickKeys(save.settings.quickKeys); renderQuickbar(); // 0.54
   pausedSpeed = save.settings.speed ?? 1;
   showRanges = save.settings.showRanges;
   applyVolumes(); applyFullscreen(); updateDailyButton(); syncDifficultyButtons(); syncDev();
@@ -3359,7 +3575,7 @@ if (SHOTS) {
       case "key": key(op.key); break;
       case "click":
         if (op.button === "left") click(op.x + 0.5, op.y + 0.5);
-        else if (armedCmd) { armedCmd = null; renderSelbar(); }
+        else if (armedCmd) { armedCmd = null; renderActions(); }
         else if (tool === "pan" && (orderable().length || selOrbits().length)) moveOrder(op.x + 0.5, op.y + 0.5);
         else setTool("pan");
         break;

@@ -11,7 +11,7 @@ test("squad sizes", () => {
   expect(squadSize("sniper")).toBe(2);
   expect(squadSize("para")).toBe(5);
   expect(squadSize("apc")).toBe(0);
-  expect(SQUAD_KINDS).toEqual(["garrison", "sniper", "para"]);
+  expect(SQUAD_KINDS).toEqual(["garrison", "sniper", "para", "police", "militia"]); // 0.52: police and militia
 });
 
 test("a full squad fires what the old single unit fired", () => {
@@ -388,3 +388,110 @@ test("Design ruling: GARRISON_FIRE_MUL scales a Garrison rifleman's damage, nobo
     expect(soldierStats("sniper", "sniper").damage).toBe(C.UNITS.sniper.damage!);
   } finally { C.TUNABLE.GARRISON_FIRE_MUL[1](was); }
 });
+
+// ---------- 0.52: soldiers are dots ----------
+import { fireTeamForm, roofShuffle, squadSize as sz052, soldierStats as st052, SQUAD_KINDS as SK052 } from "../src/squads";
+
+test("0.52: police and militia are squads with a ring color each; every people kind has a ring", () => {
+  expect(sz052("police")).toBe(3); expect(sz052("militia")).toBe(4);
+  for (const k of SK052) expect(C.RING_COLOR[k]).toMatch(/^#[0-9a-f]{6}$/);
+  expect(new Set(SK052.map(k => C.RING_COLOR[k])).size).toBe(SK052.length); // all different
+  expect(st052("police", "rifle").hp).toBeCloseTo(C.UNITS.police.mobile!.hp / 3, 6); // the unit's hp shared out
+  expect(st052("militia", "rifle").rate * 4).toBeCloseTo(C.UNITS.militia.rate!, 6); // the squad fires what the unit fired
+});
+
+test("0.52: fire team: the leader at the point, file lines up behind the heading, wedge fans out", () => {
+  const file = fireTeamForm(1, 0, 4, true);
+  expect(Math.hypot(file[0][0], file[0][1])).toBe(0);
+  for (let i = 1; i < 4; i++) { expect(file[i][0]).toBeLessThan(file[i - 1][0]); expect(Math.abs(file[i][1])).toBeLessThan(1e-9); }
+  const wedge = fireTeamForm(0, 1, 5, false); // walking south: the rest are north of the leader, spread east-west
+  for (let i = 1; i < 5; i++) expect(wedge[i][1]).toBeLessThan(0);
+  expect(Math.sign(wedge[1][0])).toBe(-Math.sign(wedge[2][0]));
+  expect(fireTeamForm(0, 0, 3, false).length).toBe(3); // standing still: still a shape
+});
+
+test("0.52: an idle rooftop soldier moves only to a free firing point", () => {
+  const slots: [number, number][] = [[1, 1], [2, 1], [3, 1]];
+  expect(roofShuffle(slots, [[1.5, 1.5], [2.5, 1.5]], 0.99)).toEqual([3, 1]);
+  expect(roofShuffle(slots, [[1.5, 1.5], [2.5, 1.5], [3.4, 1.2]], 0.5)).toBeNull();
+});
+
+test("0.52: street width and the lean toward the nearer building front", () => {
+  const w = 120, h = 60, tile = new Uint8Array(w * h).fill(BUILDING), height = new Uint8Array(w * h).fill(3);
+  for (let y = 20; y < 32; y++) for (let x = 0; x < w; x++) { tile[y * w + x] = ROAD; height[y * w + x] = 0; } // a 12-cell avenue
+  for (let y = 0; y < h; y++) for (let x = 50; x < 53; x++) { tile[y * w + x] = ROAD; height[y * w + x] = 0; } // a 3-cell alley
+  const s = new Sim(1, { customMap: { w, h, seed: 1, tile, height } } as any) as any;
+  expect(s.streetWidth(80.5, 26.5, [1, 0])).toBeGreaterThanOrEqual(12);
+  expect(s.streetWidth(51.5, 10.5, [0, 1])).toBeLessThan(4); // the alley: file
+  const lean = s.hugWall(80.5, 23.5, [1, 0]); // 3 cells off the north front, 8 off the south one: lean north
+  expect(lean[1]).toBeLessThan(0); expect(lean[0]).toBeGreaterThan(0.8);
+  expect(s.hugWall(80.5, 21.5, [1, 0])).toEqual([1, 0]); // one cell off the front: walk straight
+  expect(s.hugWall(51.5, 10.5, [0, 1])).toEqual([0, 1]); // narrow: no lean
+});
+
+test("0.52: a rooftop squad jostles inside its sandbags: wanders when quiet, leans toward its targets in a fight", () => {
+  const { s, u } = battleGarrison();
+  const ids = new Set(u.soldiers!.map(so => (s as any).buildingId[s.idx(Math.floor(so.x), Math.floor(so.y))]));
+  expect(ids.size).toBe(1);
+  const start = u.soldiers!.map(so => [so.x, so.y]);
+  u.shotT = -1e9; // nothing to shoot
+  let moved = false;
+  for (let i = 0; i < 20 * 20; i++) {
+    u.shotT = -1e9; s.step();
+    u.soldiers!.forEach((so, k) => { if (Math.hypot(so.x - start[k][0], so.y - start[k][1]) > 0.5) moved = true; });
+    for (const so of u.soldiers!) expect(ids.has((s as any).buildingId[s.idx(Math.floor(so.x), Math.floor(so.y))])).toBe(true);
+  }
+  expect(moved).toBe(true);
+  // 0.52.1: in a fight they keep jostling, shifting toward the side facing their targets, and never leave the sandbags
+  const fb = u.fortBox!; const east = fb[0] + 40;
+  for (let i = 0; i < 20 * 12; i++) { u.shotT = s.time; for (const so of u.soldiers!) { so.shotT = s.time; so.shotX = east; so.shotY = fb[1] + 1; } s.step();
+    for (const so of u.soldiers!) { expect(so.x).toBeGreaterThanOrEqual(fb[0]); expect(so.x).toBeLessThanOrEqual(fb[0] + fb[2]); expect(so.y).toBeGreaterThanOrEqual(fb[1]); expect(so.y).toBeLessThanOrEqual(fb[1] + fb[2]); } }
+  const meanX = u.soldiers!.reduce((a, so) => a + so.x, 0) / u.soldiers!.length;
+  expect(meanX).toBeGreaterThan(fb[0] + fb[2] / 2); // leaning to the east side, where the targets are
+}, 120_000);
+
+test("0.52.1: a rooftop squad holds one 2x2 sandbag block of its own roof, one soldier per cell", () => {
+  const { fortBlock } = require("../src/squads");
+  const w = 10, ids = new Int32Array(w * 6).fill(-1);
+  for (let y = 1; y <= 4; y++) for (let x = 2; x <= 6; x++) ids[y * w + x] = 7; // a 5x4 roof
+  const fb = fortBlock(ids, w, 7, 6, 1, 4); // placed on the corner
+  expect(fb.size).toBe(2);
+  for (const [x, y] of fb.slots) expect(ids[y * w + x]).toBe(7); // all on the roof
+  expect(new Set(fb.slots.map(([x, y]: number[]) => x + "," + y)).size).toBe(4);
+  expect(fb.x).toBe(5); expect(fb.y).toBe(1); // nearest block that fits, not hanging off the corner
+  const tiny = new Int32Array(w * 6).fill(-1); tiny[2 * w + 3] = 9;
+  expect(fortBlock(tiny, w, 9, 3, 2, 2)).toEqual({ x: 3, y: 2, size: 1, slots: [[3, 2], [3, 2]] });
+});
+
+// ---------- 0.53: Troops anywhere by helicopter, elite Paratroopers with a grenadier ----------
+test("0.53: Troops go on any roof, street or park (inside or outside a zone); Snipers keep the zone rule", () => {
+  const s = new Sim(42, { budget: 400_000_000 });
+  s.setZone(zoneAt(s));
+  let out: [number, number] | null = null;
+  for (let i = 0; i < s.inZone.length && !out; i++) if (s.inZone[i] === 0 && s.map.tile[i] === ROAD) { const x = i % s.w, y = (i / s.w) | 0; if (!s.canPlace("garrison", x, y)) out = [x, y]; }
+  expect(out).not.toBeNull();
+  expect(s.canPlace("sniper", out![0], out![1])).toMatch(/inside a safe zone/);
+  expect(s.place("garrison", out![0], out![1])).toBeNull();
+  expect(C.UNITS.garrison.deploy).toBe(20);
+  expect(C.ABILITIES.para.delay).toBe(3);
+  expect(C.UNITS.para.mobile!.hp).toBe(500); expect(C.UNITS.para.damage).toBe(130);
+  expect(C.ABILITIES.para.cost).toBe(2_400_000);
+});
+
+test("0.53: the paratroopers' grenadier lobs M320 rounds into a pack, kills several at once, then runs out", () => {
+  const { s, p } = landedPara();
+  const g = p.soldiers!.find(so => so.role === "grenadier")!;
+  expect(g).toBeTruthy(); expect(g.grenades).toBe(C.GREN_AMMO);
+  expect(p.soldiers!.filter(so => so.role === "grenadier").length).toBe(1);
+  const before = g.grenades!;
+  // a tight pack 10 cells off
+  let at: [number, number] | null = null;
+  for (let d = 9; d <= 12 && !at; d++) for (const [dx, dy] of [[d, 0], [-d, 0], [0, d], [0, -d]]) { const x = Math.floor(g.x + dx), y = Math.floor(g.y + dy); if (!at && s.map.tile[s.idx(x, y)] === ROAD && s.inZone[s.idx(x, y)] === 0) at = [x + 0.5, y + 0.5]; }
+  expect(at).not.toBeNull();
+  for (let k = 0; k < 8; k++) s.spawnInfected(at![0] + (k % 3) * 0.3 - 0.3, at![1] + Math.floor(k / 3) * 0.3 - 0.3, 100);
+  let blasts = 0;
+  for (let i = 0; i < 20 * 3; i++) { s.step(); blasts += (s as any).blasts.filter((b: any) => b.color === "#ffb74d" && b.t === s.time).length; }
+  expect(g.grenades!).toBeLessThan(before);
+  expect(blasts).toBeGreaterThan(0);
+  g.grenades = 0; const left = g.grenades; s.step(); expect(g.grenades).toBe(left); // out: rifle only
+}, 120_000);

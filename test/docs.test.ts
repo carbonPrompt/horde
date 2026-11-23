@@ -13,7 +13,7 @@ test("0.46.1: How to Play covers selection, orders, the minimap, the cursor labe
   for (const s of ["drag a box", "minimap", "Delete", "attack-move", "Stand by".toLowerCase(), "flies in by itself", "Gatling", "next to the cursor"])
     expect(howto.toLowerCase()).toContain(s.toLowerCase());
   const controls = allEntries().find(e => e.id === "controls-all")!.body;
-  for (const s of ["A attack-move", "P patrol", "E escort", "S stop", "D stand by", "Delete", "T target"]) expect(controls).toContain(s);
+  for (const s of ["Q attack-move", "R patrol", "E escort", "F stop", "G stand by", "Delete", "T target"]) expect(controls).toContain(s); // 0.54 key map
   expect(howto).not.toContain("—");
 });
 
@@ -28,10 +28,10 @@ test("0.46.1: the gunship hint no longer promises a fixed arrival delay", () => 
   expect(C.ABILITIES.gunship.hint).toMatch(/nearest edge/);
 });
 
-test("0.50: the controls name F1-F3 speed and Ctrl+1-0 battle groups; 1/2/3 are no longer speed", () => {
+test("0.50: the controls name F1-F3 speed and Ctrl+1-5 battle groups (0.54); 1/2/3 are no longer speed", () => {
   const controls = allEntries().find(e => e.id === "controls-all")!.body;
   expect(controls).toContain("F1");
-  expect(controls).toContain("Ctrl+1-0");
+  expect(controls).toContain("Ctrl+1-5");
   expect(controls).not.toContain("1/2/3 speed");
   const speed = allEntries().find(e => e.id === "speed")!;
   expect(speed.body).toContain("F1"); expect(speed.summary).not.toMatch(/^1, 2 and 3/);

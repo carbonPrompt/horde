@@ -1,22 +1,22 @@
 {
  "battle-horde-arrow": {
-  "version": "0.47.0",
+  "version": "0.54.0",
   "rev": 1,
-  "recipeHash": "dd4140a2548f",
-  "bytes": 60480,
+  "recipeHash": "1553a18b10db",
+  "bytes": 35707,
   "w": 960,
-  "h": 372
+  "h": 276
  },
  "battle-minimap-alerts": {
-  "version": "0.48.0",
+  "version": "0.54.0",
   "rev": 1,
-  "recipeHash": "db62bae7237b",
-  "bytes": 18753,
-  "w": 236,
-  "h": 184
+  "recipeHash": "57f63bc6af4e",
+  "bytes": 8811,
+  "w": 150,
+  "h": 164
  },
  "battle-money-bar": {
-  "version": "0.49.0",
+  "version": "0.54.0",
   "rev": 1,
   "recipeHash": "982c0dff80f3",
   "bytes": 9454,
@@ -24,154 +24,154 @@
   "h": 76
  },
  "battle-overview": {
-  "version": "0.47.0",
+  "version": "0.54.0",
   "rev": 1,
-  "recipeHash": "6a4a1ca903c6",
-  "bytes": 56259,
+  "recipeHash": "15908a7175bd",
+  "bytes": 29767,
   "w": 960,
-  "h": 372
+  "h": 276
  },
  "clip-ac130-arrives": {
-  "version": "0.47.0",
+  "version": "0.54.0",
   "rev": 1,
-  "recipeHash": "89fcb58de2a5",
-  "bytes": 186737,
+  "recipeHash": "221f5db92f3b",
+  "bytes": 148955,
   "w": 800,
-  "h": 310
+  "h": 230
  },
  "clip-airstrike": {
-  "version": "0.47.0",
+  "version": "0.54.0",
   "rev": 1,
-  "recipeHash": "1fdde475cb62",
-  "bytes": 225142,
+  "recipeHash": "04da71b4e89a",
+  "bytes": 151656,
   "w": 800,
-  "h": 310
+  "h": 230
  },
  "clip-attack-move": {
-  "version": "0.47.0",
+  "version": "0.54.0",
   "rev": 1,
-  "recipeHash": "6a49148a9cda",
-  "bytes": 139728,
+  "recipeHash": "451d0a7cbfcc",
+  "bytes": 153937,
   "w": 800,
-  "h": 310
+  "h": 230
  },
  "clip-box-select-move": {
-  "version": "0.47.0",
+  "version": "0.54.0",
   "rev": 1,
-  "recipeHash": "f240204bbeed",
-  "bytes": 134982,
+  "recipeHash": "f8db543c7c8c",
+  "bytes": 159477,
   "w": 800,
-  "h": 310
+  "h": 230
  },
  "clip-c4-bridge": {
-  "version": "0.47.0",
+  "version": "0.54.0",
   "rev": 1,
-  "recipeHash": "b51280ebfbad",
-  "bytes": 108163,
+  "recipeHash": "af7f5d391505",
+  "bytes": 43660,
   "w": 800,
-  "h": 310
+  "h": 230
  },
  "clip-draw-zone": {
-  "version": "0.47.0",
+  "version": "0.54.0",
   "rev": 1,
-  "recipeHash": "ad95c466db2a",
-  "bytes": 27852,
+  "recipeHash": "80dc4a58731b",
+  "bytes": 21985,
   "w": 800,
-  "h": 310
+  "h": 230
  },
  "clip-evac-lift": {
-  "version": "0.47.0",
+  "version": "0.54.0",
   "rev": 1,
-  "recipeHash": "7a5eb18a0dc8",
-  "bytes": 342459,
+  "recipeHash": "8b334fc4c189",
+  "bytes": 280569,
   "w": 800,
-  "h": 310
+  "h": 230
  },
  "clip-gate-to-wall": {
-  "version": "0.47.0",
+  "version": "0.54.0",
   "rev": 1,
-  "recipeHash": "5dfd5338a67c",
-  "bytes": 284643,
+  "recipeHash": "eafe777812cd",
+  "bytes": 260726,
   "w": 800,
-  "h": 310
+  "h": 230
  },
  "clip-troops-fortify": {
-  "version": "0.50.0",
-  "rev": 1,
-  "recipeHash": "30a6c2333d8f",
-  "bytes": 388120,
+  "version": "0.54.0",
+  "rev": 2,
+  "recipeHash": "44b160bff3aa",
+  "bytes": 357252,
   "w": 800,
-  "h": 310
+  "h": 240
  },
  "controls-groupbar": {
-  "version": "0.50.0",
-  "rev": 1,
-  "recipeHash": "14c4e9b22aff",
-  "bytes": 9815,
-  "w": 576,
-  "h": 72
+  "version": "0.54.0",
+  "rev": 2,
+  "recipeHash": "77f2fd69f0fe",
+  "bytes": 7375,
+  "w": 600,
+  "h": 58
  },
- "controls-quickbar": {
-  "version": "0.50.0",
-  "rev": 1,
-  "recipeHash": "b2f68bc653c1",
-  "bytes": 15418,
+ "controls-hud": {
+  "version": "0.54.0",
+  "rev": 3,
+  "recipeHash": "c592a900893b",
+  "bytes": 28468,
   "w": 960,
-  "h": 92
+  "h": 168
  },
  "people-person-window": {
-  "version": "0.47.0",
-  "rev": 1,
-  "recipeHash": "42d4687d25f7",
-  "bytes": 73706,
+  "version": "0.54.0",
+  "rev": 4,
+  "recipeHash": "a6da53861da2",
+  "bytes": 59875,
   "w": 960,
   "h": 540
  },
  "start-cursor-label": {
-  "version": "0.47.0",
+  "version": "0.54.0",
   "rev": 1,
-  "recipeHash": "e2aba619176e",
-  "bytes": 51491,
+  "recipeHash": "632c3c95af2c",
+  "bytes": 30626,
   "w": 960,
-  "h": 372
+  "h": 276
  },
  "start-heights": {
-  "version": "0.47.0",
+  "version": "0.54.0",
   "rev": 1,
-  "recipeHash": "26081c7a4e76",
-  "bytes": 46647,
+  "recipeHash": "dfa090b72663",
+  "bytes": 27892,
   "w": 960,
-  "h": 372
+  "h": 276
  },
  "support-radius": {
-  "version": "0.47.0",
+  "version": "0.54.0",
   "rev": 1,
-  "recipeHash": "ed1d2c156477",
-  "bytes": 56598,
+  "recipeHash": "efa68adfca71",
+  "bytes": 33340,
   "w": 960,
-  "h": 372
+  "h": 276
  },
  "units-ac130-orbit": {
-  "version": "0.47.0",
+  "version": "0.54.0",
   "rev": 1,
-  "recipeHash": "1f1a2aff30c0",
-  "bytes": 54661,
+  "recipeHash": "27bf104f5db8",
+  "bytes": 31141,
   "w": 960,
-  "h": 372
+  "h": 276
  },
  "units-ranges": {
-  "version": "0.50.0",
+  "version": "0.54.0",
   "rev": 1,
-  "recipeHash": "6c2ca6e09f02",
-  "bytes": 49913,
+  "recipeHash": "6ce03a3253d8",
+  "bytes": 27809,
   "w": 960,
-  "h": 372
+  "h": 276
  },
  "units-selected-card": {
-  "version": "0.47.0",
-  "rev": 1,
-  "recipeHash": "1b4127e55fca",
-  "bytes": 64894,
+  "version": "0.54.0",
+  "rev": 4,
+  "recipeHash": "c76a9007cf50",
+  "bytes": 73750,
   "w": 960,
   "h": 540
  }

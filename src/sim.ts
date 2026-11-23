@@ -16,7 +16,7 @@ import { navOf } from "./nav";
 import { REAL_CITY_MAPS } from "./realcities";
 import { realAreaMap } from "./realcity/load";
 import { GROUPS, pruneGroups, type GroupSlot } from "./groups";
-import { labelBuildings, roofSlots, makeSquad, squadSize, soldierStats, type Soldier } from "./squads";
+import { labelBuildings, makeSquad, squadSize, soldierStats, type Soldier, fireTeamForm, fortBlock } from "./squads";
 /** 0.36: levels that count for the roof range bonus (real towers stay tall but don't outrange the map). */
 export const roofLv = (lv: number) => Math.min(lv, C.ROOF_BONUS_MAX_LV);
 
@@ -55,6 +55,7 @@ export interface Unit {
   kind: C.UnitKind;
   x: number; y: number; // cell
   soldiers?: Soldier[]; // 0.49: Garrison, Sniper team, Paratroopers
+  fortBox?: [number, number, number]; // 0.52.1: a rooftop squad's sandbag fortification: top-left cell and size
   squadPaid?: number; // 0.49: what the squad first cost (top-ups are priced from it)
   // 0.50: Troops/Sniper roof state: climb (going up, FORTIFY_S), up (fortified), descend (coming down, DISMOUNT_S);
   // undefined = on the ground. fortT: seconds left climbing/descending; fortAt: the roof (climb) or street (descend) cell.
@@ -153,14 +154,14 @@ export interface TrainRun {
 }
 
 const hyp = (a: number, b: number) => Math.sqrt(a * a + b * b);
+/** 0.52: rooftop shuffle: quiet for this long, one soldier moves every ~4 s at a slow walk (cells/s). */
+const ROOF_IDLE_S = 3, ROOF_SHUFFLE_TICKS = 80, ROOF_WALK = 0.7, CLIMB_WALK = 1.6; // CLIMB_WALK: to the foot of the building (cells/s)
 const BUCKET = 4; // cells per spatial bucket
 const ERRAND_HOLD = "hold" as const; // 0.40: an errand says stand here
 /** 0.28: distance-field units. A straight step costs FIELD_STEP, a diagonal FIELD_DIAG (~sqrt 2), and a cell
  *  under a standing ground unit adds FIELD_OCC (walk around it unless it plugs the only way). */
 export const FIELD_STEP = 10, FIELD_DIAG = 14, FIELD_OCC = 300;
 const BITE_P3 = 1 - Math.pow(1 - C.BITE_CHANCE, 3); // bite checked every 3rd tick
-/** 0.49: a ground squad's loose formation around its point (cells). */
-const SQUAD_FORM: [number, number][] = [[0, 0], [1.1, 0.7], [-1.1, 0.7], [0.9, -0.9], [-0.9, -0.9]];
 /** exp(x) for the crowd's pushes, cheap: (1 + x/32)^32, good to a fraction of a percent for x in [-6, 2]. */
 function fexp(x: number) { let y = 1 + x / 32; if (y <= 0) return 0; y *= y; y *= y; y *= y; y *= y; y *= y; return y; }
 
@@ -1350,7 +1351,8 @@ export class Sim {
     const spec = C.UNITS[kind];
     const t = this.tileAt(x, y);
     const troop = kind === "garrison" || kind === "sniper"; // 0.50: a roof (fortified) or a street inside a zone (on the ground)
-    if (troop && t !== BUILDING && !(walkable(t) && this.inZone[this.idx(x, y)] === 1)) return kind === "garrison" ? "Troops go on a roof, or a street inside a safe zone." : "Snipers go on a roof, or a street inside a safe zone.";
+    if (kind === "garrison" && t !== BUILDING && !walkable(t)) return "Troops go on a roof, a street or a park."; // 0.53: anywhere, flown in by helicopter
+    if (kind === "sniper" && t !== BUILDING && !(walkable(t) && this.inZone[this.idx(x, y)] === 1)) return "Snipers go on a roof, or a street inside a safe zone.";
     if (!troop && spec.on === "building" && t !== BUILDING) return `${spec.name}s go on buildings.`;
     if (spec.on === "ground" && !walkable(t) && !(spec.roof && t === BUILDING)) return `${spec.name}s go on streets or parks${spec.roof ? " or rooftops" : ""}.`;
     if (spec.on === "water" && t !== WATER) return `${spec.name}s go on the river.`;
@@ -1401,6 +1403,15 @@ export class Sim {
   /** 0.50: climbing up or coming down: count down, then land on the roof (fortified) or the street (ground squad). */
   private stepFort(u: Unit, dt: number) {
     u.fortT = (u.fortT ?? 0) - dt;
+    if (u.fort === "climb" && u.fortAt) { // 0.52: the dots walk to the foot of the building while they climb (dots don't animate a climb)
+      const tx = u.fortAt[0] + 0.5, ty = u.fortAt[1] + 0.5, st = CLIMB_WALK * dt;
+      for (const so of u.soldiers ?? []) {
+        if (!so.alive) continue;
+        const dx = tx - so.x, dy = ty - so.y, d = hyp(dx, dy); if (d < 0.6) continue;
+        const nx = so.x + dx / d * st, ny = so.y + dy / d * st;
+        if (this.openAt(nx, ny)) { so.x = nx; so.y = ny; } else if (this.openAt(nx, so.y)) so.x = nx; else if (this.openAt(so.x, ny)) so.y = ny;
+      }
+    }
     if (u.fortT > 0) return;
     const spec = C.UNITS[u.kind], [x, y] = u.fortAt!, living = (u.soldiers ?? []).filter(so => so.alive);
     if (u.fort === "climb") {
@@ -1409,13 +1420,13 @@ export class Sim {
         u.fort = undefined; u.fortAt = undefined; u.ai = "hold"; u.orders = []; u.cmd = false; u.holdAt = [Math.floor(u.x), Math.floor(u.y)];
         return;
       }
-      const slots = roofSlots(this.buildingId, this.w, this.buildingId[this.idx(x, y)], x, y, living.length);
-      living.forEach((so, i) => { so.x = slots[i][0] + 0.5; so.y = slots[i][1] + 0.5; });
-      u.x = x; u.y = y; u.fort = "up";
+      const fb = fortBlock(this.buildingId, this.w, this.buildingId[this.idx(x, y)], x, y, living.length); // 0.52.1: one fortification
+      living.forEach((so, i) => { so.x = fb.slots[i][0] + 0.5; so.y = fb.slots[i][1] + 0.5; });
+      u.x = x; u.y = y; u.fort = "up"; u.fortBox = [fb.x, fb.y, fb.size];
     } else {
       const slots = this.groundSlots(x, y, living.length);
       living.forEach((so, i) => { so.x = slots[i][0] + 0.5; so.y = slots[i][1] + 0.5; });
-      u.x = x; u.y = y; u.fort = undefined; u.ai = "hold"; u.holdAt = [x, y]; u.post = [x, y];
+      u.x = x; u.y = y; u.fort = undefined; u.ai = "hold"; u.holdAt = [x, y]; u.post = [x, y]; u.fortBox = undefined;
     }
     const carryOn = u.fort === undefined && !!u.orders?.length; // down on the street with somewhere to go (0.50 review C1)
     u.fortT = undefined; u.fortAt = undefined; u.goal = undefined; u.nav = undefined;
@@ -1429,7 +1440,7 @@ export class Sim {
     const n = squadSize(kind);
     if (!n) return undefined;
     const seed = hash32(this.seed, x * 7919 + y * 104729 + this.units.length);
-    if (C.UNITS[kind].on === "building" && this.map.tile[this.idx(x, y)] === BUILDING) return makeSquad(kind, roofSlots(this.buildingId, this.w, this.buildingId[this.idx(x, y)], x, y, n), seed);
+    if (C.UNITS[kind].on === "building" && this.map.tile[this.idx(x, y)] === BUILDING) return makeSquad(kind, fortBlock(this.buildingId, this.w, this.buildingId[this.idx(x, y)], x, y, n).slots, seed); // 0.52.1
     return makeSquad(kind, this.groundSlots(x, y, n), seed);
   }
   /** 0.49: n open cells (not buildings or water) around x,y, nearest first, spread in a loose ring. */
@@ -1708,7 +1719,7 @@ export class Sim {
       if (u.kind === "para") return "Paratroopers can't be sold. They walk home when out of ammo.";
       if (u.kind === "police" || u.kind === "militia") return "Squads from support buildings or APCs can't be sold directly.";
       if (u.extractT !== undefined) return "Already being pulled out.";
-      u.extractT = Math.max(5, C.UNITS[u.kind].deploy * C.EXTRACT_MUL);
+      u.extractT = u.kind === "garrison" ? C.TROOPS_EXTRACT_S : Math.max(5, C.UNITS[u.kind].deploy * C.EXTRACT_MUL); // 0.53.1: Troops 10 s
       if (C.UNITS[u.kind].on !== "water") {
         this.spawnHelo("helo_extract", u.x + 0.5, u.y + 0.5, u.extractT + 1.2, u.extractT * 0.4, "#cfd8dc", `EVAC: ${C.UNITS[u.kind].name}`);
       }
@@ -3492,6 +3503,7 @@ export class Sim {
     this.stepSupports(dt);
     this.fireUnits(dt);
     this.stepSquadMoves(dt); // 0.49
+    this.stepRoofShuffle(dt); // 0.52
     this.stepSquadBites(dt, infHpScale, r); // 0.49
     if ((this.tick & 1) === 0) this.stepGuards(dt * 2);
     this.scanEvents();
@@ -4153,6 +4165,7 @@ export class Sim {
                 cooldown: 0.3, kills: 0, shotX: 0, shotY: 0, shotT: -1,
                 mode: ukind === "militia" ? "wall" : "civ",
                 post: [spot[0], spot[1]], hp: uspec.mobile!.hp, ai: "hunt", thinkT: 0, parentSupport: b,
+                soldiers: this.squadFor(ukind, spot[0], spot[1]), // 0.52: officers / militiamen are people (dots that can be bitten)
               });
               aurasChanged = true;
             }
@@ -4428,6 +4441,66 @@ export class Sim {
     }
   }
 
+  /** 0.52: a fortified squad that has not fired for ROOF_IDLE_S shuffles: now and then one soldier walks (slowly) to a
+   *  free firing point of its building. Cosmetic; each soldier fires from wherever it stands. Stops when shooting starts. */
+  private stepRoofShuffle(dt: number) {
+    for (const u of this.units) {
+      if (!u.soldiers || u.fort !== "up" && !(this.isFortified(u) && !C.UNITS[u.kind].mobile)) continue;
+      const fb = u.fortBox ?? this.fortBoxOf(u); if (!fb) continue;
+      const quiet = u.shotT === undefined || u.shotT < 0 || this.time - u.shotT > ROOF_IDLE_S; // shotT -1 = never fired
+      for (const so of u.soldiers) {
+        if (!so.alive || !so.to) continue;
+        const tx = so.to[0] + 0.5, ty = so.to[1] + 0.5, dx = tx - so.x, dy = ty - so.y, d = hyp(dx, dy), st = ROOF_WALK * (quiet ? 1 : 1.6) * dt;
+        if (d <= st) { so.x = tx; so.y = ty; so.to = undefined; } else { so.x += dx / d * st; so.y += dy / d * st; }
+      }
+      // 0.52.1 (design ruling): they jostle inside the sandbags all the time; in a fight each one shifts toward the side facing what
+      // it shoots (a better firing position), when quiet they wander. One soldier picks a new spot every so often.
+      if ((this.tick + Math.floor(u.x * 31)) % (quiet ? ROOF_SHUFFLE_TICKS : ROOF_SHUFFLE_TICKS / 2) !== 0) continue;
+      const living = u.soldiers.filter(so => so.alive && !so.to);
+      if (!living.length) continue;
+      const roll = hash32(this.seed, this.tick * 977 + Math.floor(u.x) * 31 + Math.floor(u.y)) / 4294967296;
+      const r2 = hash32(this.seed, this.tick * 131 + 7) / 4294967296;
+      const so = living[Math.floor(roll * living.length) % living.length];
+      const inset = fb[2] > 1 ? 0.35 : 0.3, lo = inset, hi = fb[2] - inset, cx = fb[0] + fb[2] / 2, cy = fb[1] + fb[2] / 2;
+      let px: number, py: number;
+      if (!quiet && this.time - so.shotT < ROOF_IDLE_S) { // toward its target's side, a little jitter so they don't stack
+        const ax = so.shotX - cx, ay = so.shotY - cy, l = hyp(ax, ay) || 1, reach = (hi - lo) / 2;
+        px = cx + ax / l * reach + (roll - 0.5) * 0.5; py = cy + ay / l * reach + (r2 - 0.5) * 0.5;
+      } else { px = fb[0] + lo + roll * (hi - lo); py = fb[1] + lo + r2 * (hi - lo); }
+      px = Math.max(fb[0] + lo, Math.min(fb[0] + hi, px)); py = Math.max(fb[1] + lo, Math.min(fb[1] + hi, py));
+      so.to = [px - 0.5, py - 0.5]; // a spot inside the sandbags (to + 0.5 = position)
+    }
+  }
+  /** 0.52.1: a rooftop squad's fortification (computed once for squads placed straight onto a roof). */
+  fortBoxOf(u: Unit): [number, number, number] | null {
+    if (u.fortBox) return u.fortBox;
+    const x = Math.floor(u.x), y = Math.floor(u.y), id = this.buildingId[this.idx(x, y)];
+    if (id < 0 || !u.soldiers) return null;
+    const fb = fortBlock(this.buildingId, this.w, id, x, y, u.soldiers.length);
+    return (u.fortBox = [fb.x, fb.y, fb.size]);
+  }
+  /** 0.52: open street across a heading at (x,y): cells to the nearest building or water on each side, summed (max 12). */
+  streetWidth(x: number, y: number, hd: [number, number]): number {
+    return this.sideRoom(x, y, -hd[1], hd[0]) + this.sideRoom(x, y, hd[1], -hd[0]) + 1;
+  }
+  /** 0.52: open cells from (x,y) along (px,py) before a building or water, up to 6. */
+  private sideRoom(x: number, y: number, px: number, py: number): number {
+    for (let k = 1; k <= 6; k++) { if (!this.openAt(x + px * k, y + py * k)) return k - 1; }
+    return 6;
+  }
+  /** 0.52: people (out in the city or in the zone) within r of (x,y), up to cap. */
+  private civNear(x: number, y: number, r: number, cap: number): number {
+    const b0x = Math.max(0, ((x - r) / BUCKET) | 0), b1x = Math.min(this.bw - 1, ((x + r) / BUCKET) | 0);
+    const b0y = Math.max(0, ((y - r) / BUCKET) | 0), b1y = Math.min(this.bh - 1, ((y + r) / BUCKET) | 0);
+    let n = 0;
+    for (let by = b0y; by <= b1y; by++) for (let bx = b0x; bx <= b1x; bx++)
+      for (let k = this.headC[by * this.bw + bx]; k !== -1; k = this.next[k]) {
+        if (this.state[k] !== CIV && this.state[k] !== SAFE_CIV) continue;
+        const dx = this.ax[k] - x, dy = this.ay[k] - y;
+        if (dx * dx + dy * dy <= r * r && ++n >= cap) return n;
+      }
+    return n;
+  }
   /** 0.49: the middle of a squad's living soldiers (the unit's point when it has none). */
   squadCenter(u: Unit): [number, number] {
     let x = 0, y = 0, n = 0;
@@ -4441,9 +4514,15 @@ export class Sim {
     for (const u of this.units) {
       if (!u.soldiers || this.isFortified(u) || u.fort) continue; // 0.50: up, climbing or descending: no walking
       const sp = (C.UNITS[u.kind].mobile?.speed ?? 2.4) * 1.4 * dt, cx = u.x + 0.5, cy = u.y + 0.5;
-      u.soldiers.forEach((so, i) => {
+      // 0.52: a fire team: wedge in the open, file in a narrow or crowded street, turned to the way it walks
+      const hd: [number, number] = u.headX !== undefined ? [u.headX, u.headY ?? 0] : [0, 1], living = u.soldiers.filter(so => so.alive);
+      const moving = u.movedT !== undefined && this.time - u.movedT < 0.6; // halted: close up into a wedge
+      const narrow = moving && (this.streetWidth(cx, cy, hd) < 4 || this.civNear(cx, cy, 2.5, 8) >= 8);
+      const form = fireTeamForm(hd[0], hd[1], living.length, narrow);
+      let li = 0;
+      u.soldiers.forEach((so) => {
         if (!so.alive) return;
-        const [fx, fy] = SQUAD_FORM[i % SQUAD_FORM.length];
+        const [fx, fy] = form[li++];
         let tx = cx + fx, ty = cy + fy;
         if (!this.openAt(tx, ty)) { tx = cx; ty = cy; }
         const dx = tx - so.x, dy = ty - so.y, d = hyp(dx, dy);
@@ -4514,7 +4593,7 @@ export class Sim {
     const st = soldierStats(u.kind, dead.role);
     if (this.isFortified(u)) { // 0.50 review I2: back on the squad's roof (it may have died down on the street)
       const id = this.buildingId[this.idx(Math.floor(u.x), Math.floor(u.y))], i = u.soldiers.indexOf(dead);
-      const slot = roofSlots(this.buildingId, this.w, id, Math.floor(u.x), Math.floor(u.y), u.soldiers.length)[i];
+      const slot = fortBlock(this.buildingId, this.w, id, Math.floor(u.x), Math.floor(u.y), u.soldiers.length).slots[i]; // 0.52.1
       dead.x = slot[0] + 0.5; dead.y = slot[1] + 0.5;
     } else [dead.x, dead.y] = this.squadCenter(u);
     Object.assign(dead, { alive: true, hp: st.hp, ammo: st.ammo, cooldown: 0.5, lag: 0 });
@@ -4541,6 +4620,19 @@ export class Sim {
       if (!so.alive) continue;
       const st = soldierStats(u.kind, so.role);
       so.cooldown -= dt;
+      if (so.role === "grenadier" && (so.grenades ?? 0) > 0) { // 0.53: an M320 round into the biggest pack in range
+        so.gCool = (so.gCool ?? 0) - dt;
+        if (so.gCool <= 0) {
+          const t = this.packTarget(so.x, so.y, st.range * boost);
+          if (t) {
+            so.grenades!--; so.gCool = C.GREN_EVERY_S;
+            const fl = this.shoot(u, t[0], t[1], SHOT_SHELL, 75, 0, so.x, so.y);
+            so.shotX = u.shotX = t[0]; so.shotY = u.shotY = t[1]; so.shotT = u.shotT = this.time;
+            this.impacts.push({ x: t[0], y: t[1], r: C.GREN_SPLASH, dmg: C.GREN_DMG, maxHits: C.GREN_MAX_HITS, sDmg: 0, u, t: this.time + fl, color: "#ffb74d" });
+            continue; // the launcher this beat, not the rifle
+          }
+        }
+      }
       while (so.cooldown <= 0 && u.ammo >= 1) {
         const t = this.pickTarget(u, so.x, so.y, st.range * boost);
         if (t < 0) { so.cooldown = 0; break; }
@@ -4555,6 +4647,22 @@ export class Sim {
     }
   }
 
+  /** 0.53: the grenadier's aim point: the infected in range with the most infected within the blast (at least
+   *  GREN_MIN_PACK), outside the no-fire band and clear of the zone; null when nothing is worth a round. */
+  private packTarget(x: number, y: number, R: number): [number, number] | null {
+    const b0x = Math.max(0, ((x - R) / BUCKET) | 0), b1x = Math.min(this.bw - 1, ((x + R) / BUCKET) | 0);
+    const b0y = Math.max(0, ((y - R) / BUCKET) | 0), b1y = Math.min(this.bh - 1, ((y + R) / BUCKET) | 0);
+    let best: [number, number] | null = null, bn = C.GREN_MIN_PACK - 1, seen = 0;
+    for (let by = b0y; by <= b1y; by++) for (let bx = b0x; bx <= b1x; bx++)
+      for (let k = this.head[by * this.bw + bx]; k !== -1 && seen < 60; k = this.next[k]) {
+        if (this.state[k] !== INF) continue;
+        const dx = this.ax[k] - x, dy = this.ay[k] - y; if (dx * dx + dy * dy > R * R || dx * dx + dy * dy < 4) continue; // not on top of himself
+        seen++;
+        const n = this.countInf(this.ax[k], this.ay[k], C.GREN_SPLASH, 20);
+        if (n > bn && this.clearOfZone(this.ax[k], this.ay[k], C.GREN_SPLASH) && !this.inNoFire(this.ax[k], this.ay[k])) { bn = n; best = [this.ax[k], this.ay[k]]; }
+      }
+    return best;
+  }
   /** Target for a direct-fire unit, by its priority. */
   private pickTarget(u: Unit, ox?: number, oy?: number, range?: number) {
     const x = ox ?? u.x + 0.5, y = oy ?? u.y + 0.5, R = range ?? u.range, mode = u.mode ?? "near"; // 0.49: per soldier
@@ -4704,6 +4812,7 @@ export class Sim {
         this.units.push({
           kind: "militia", x: sx, y: sy, range: mspec.range, ammo: 240, cooldown: 0.25, kills: 0,
           shotX: 0, shotY: 0, shotT: -1, mode: "near", post: [sx, sy], hp: 260, ai: "hunt", thinkT: 0, parentUnit: u,
+          soldiers: this.squadFor("militia", sx, sy), // 0.52: the dismount team gets out as dots (design ruling)
         });
       }
     }
@@ -4837,10 +4946,22 @@ export class Sim {
     // 0.33: a tank or APC never rolls onto people: it waits for them to step aside
     // (0.33: it can nudge into a person or two at its edge, who then shuffle out; a crowd in front, it waits)
     const ok = spec.crushSlow === undefined ? okc : (x: number, y: number) => okc(x, y) && this.civOnNewCells(spec.foot, u.x, u.y, x, y) <= C.VEH_NUDGE;
+    if (u.soldiers && !water) d = this.hugWall(u.x + 0.5, u.y + 0.5, d); // 0.52: fire teams walk along building fronts
     const nx = u.x + d[0] * sp, ny = u.y + d[1] * sp;
+    const x0 = u.x, y0 = u.y;
     if (ok(nx, ny)) { u.x = nx; u.y = ny; }
     else if (ok(nx, u.y)) u.x = nx;
     else if (ok(u.x, ny)) u.y = ny;
+    if (u.soldiers) { const mx = u.x - x0, my = u.y - y0, l = hyp(mx, my); if (l > 1e-4) { u.headX = mx / l; u.headY = my / l; u.movedT = this.time; } }
+  }
+  /** 0.52: in a street wider than 4 cells, lean toward the nearer building front until about one cell off it. */
+  private hugWall(x: number, y: number, d: [number, number]): [number, number] {
+    const hd: [number, number] = [d[0], d[1]], a = this.sideRoom(x, y, -d[1], d[0]), b = this.sideRoom(x, y, d[1], -d[0]);
+    if (a + b + 1 < 4) return d;
+    const [px, py, room] = a <= b ? [-d[1], d[0], a] : [d[1], -d[0], b];
+    if (room <= 1 || room >= 6) return d; // already along a front, or open ground (a park, a square)
+    const k = 0.35, gx = hd[0] + px * k, gy = hd[1] + py * k, l = hyp(gx, gy);
+    return [gx / l, gy / l];
   }
 
   /** Off the route field (pushed into a corner): head for the neighboring cell that is on it, closest to the goal. */

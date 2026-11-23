@@ -44,7 +44,8 @@ export function statRows(key: string): [string, string][] {
       ["Fire rate", `${s.rate} per s`],
       ["Ammo", s.ammo === Infinity ? "Unlimited" : s.ammo.toLocaleString("en-US") + (s.reloadsInZone ? " (unlimited in the zone)" : "")],
       ["Setup time", `${s.deploy} s`]];
-    const squad = k === "garrison" ? "4 soldiers, one fortified squad per building" : k === "sniper" ? "Sniper + spotter, one team per building" : k === "para" ? "5 soldiers" : ""; // 0.49
+    const squad = k === "garrison" ? `${C.SQUAD_GARRISON} soldiers, one fortified squad per building` : k === "sniper" ? "Sniper + spotter, one team per building" : k === "para" ? `${C.SQUAD_PARA} soldiers`
+      : k === "police" ? `${C.SQUAD_POLICE} officers` : k === "militia" ? `${C.SQUAD_MILITIA} fighters` : ""; // 0.49 (0.52: police, militia)
     if (squad) rows.splice(1, 0, ["Squad", squad]);
     if (s.mobile) rows.push(["Armor", s.mobile.hp === Infinity ? "Can't be hit" : `${s.mobile.hp} HP`], ["Speed", `${+(s.mobile.speed * C.CELL_M).toFixed(1)} m/s`]);
     else if (s.hp) rows.push(["Armor", `${s.hp} HP`]);

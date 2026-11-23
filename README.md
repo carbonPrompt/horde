@@ -22,15 +22,19 @@ every release, and Settings can install updates automatically. Your save is back
 - **Hordes.** Then hordes walk in from outside the city on real land routes (highways, rail, bridges; swimmers use
   the river). They come almost on a rhythm, but not quite, and grow bigger and more frequent as time passes and the
   city empties.
-- **Squads.** Troops are four riflemen, Sniper teams a sniper and a spotter, Paratroopers five soldiers, every one a
-  dot that fires on its own. Right-click a roof and Troops walk over, climb up and fortify, out of reach of the
-  infected; right-click a street and they come down and fight. Lost soldiers can be replaced mid-battle.
-- **Command.** Battle groups like StarCraft: Ctrl+1 to Ctrl+0 saves a group (or a safe zone), the number selects it
-  and twice jumps there, with a group bar in the corner. Select units with a click or a dragged box and give orders: right-click to move (they
-  shoot what's in range on the way and never get dragged off chasing), attack-move, patrol, escort a family, stop,
-  stand by, Shift to queue. A minimap sits in the top right, and the cursor label tells you what's under it and what
-  things cost. The AC-130 flies in from the map edge, picks its 25 mm, 40 mm or 105 mm gun by target, and can be sent
-  to a new spot or home.
+- **Squads.** Troops are four riflemen flown in anywhere by UH-60 Black Hawk, Sniper teams a sniper and a spotter,
+  Paratroopers five elite soldiers with an M320 grenadier, dropped anywhere in 3 s. Every soldier is a dot with a
+  colored ring that fires on its own. Right-click a roof and Troops climb up and dig in behind a sandbag fort, out of
+  reach of the infected; right-click a street and they come down and fight as a fire team. Lost soldiers can be
+  replaced mid-battle.
+- **Command.** A classic RTS bottom panel: minimap, info card, selection, build tabs and the selected units' orders,
+  every button a picture with its hotkey (hover for name, key and price). WASD always moves the camera; orders sit
+  around it (Q attack-move, R patrol, E escort, F stop, G stand by, C fortify), map tools on Z X C V. Battle groups:
+  Ctrl+1 to Ctrl+5 saves a group (or a safe zone), the number selects it and twice jumps there, shown as tabs with
+  unit pictures. Keys 6 to 0 are a quick bar you fill by dragging build tiles, and any slot can be rebound. Select
+  units with a click or a dragged box: right-click to move (they shoot what's in range on the way and never get
+  dragged off chasing), Shift to queue. The cursor label tells you what's under it and what things cost. The AC-130
+  flies in from the map edge, picks its 25 mm, 40 mm or 105 mm gun by target, and can be sent to a new spot or home.
 - **People.** Every dot is a person with a family and a story: some go home first to gather their kids, some carry
   guns, a few refuse to leave until a unit talks them out.
 - **Round end.** The round ends when everyone left alive is out. You get a score out of 100 (people saved, speed,
