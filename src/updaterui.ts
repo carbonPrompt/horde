@@ -17,7 +17,7 @@ export function initUpdater(o: { save: () => SaveData; go: (id: string) => void;
 
   // Coming back up from an older version: offer the newer progress that was backed up on the way down.
   const s0 = o.save(), wroteIt = s0.gameVersion;
-  const offer = d!.restoreOffer?.(wroteIt);
+  const offer = wroteIt && Save.activeSlot() ? d!.restoreOffer?.(wroteIt) : null; // 0.56.1: no slot or no version = nothing came down
   s0.gameVersion = C.VERSION; Save.store(s0);
   if (offer && confirm(`Your save was last written by an older version${wroteIt ? ` (${wroteIt})` : ""}. Restore your progress from ${offer.version} (backed up ${offer.stamp.slice(0, 4)}-${offer.stamp.slice(4, 6)}-${offer.stamp.slice(6, 8)})? Your current save is kept as a backup too.`)) {
     if (d!.restoreBackup!(offer.name)) { o.log("save-restored", { from: offer.name }); location.reload(); return; }

@@ -55,9 +55,11 @@ function backupsToPrune(names, keep = 20) {
   return list.slice(keep).map(b => b.name);
 }
 /** Coming back up from an older version: the newest backup made by a version newer than the one that wrote the
- *  current save (and not newer than the running game). null when there is nothing to offer. */
+ *  current save (and not newer than the running game). null when there is nothing to offer, including a save with
+ *  no version (0.56.1: a new or empty slot, or no slot picked, is not a trip back). */
 function restoreOffer(saveVersion, current, backups) {
-  const from = isVersion(saveVersion) ? saveVersion : "0.0.0";
+  if (!isVersion(saveVersion)) return null;
+  const from = saveVersion;
   const c = backups.filter(b => b && isVersion(b.version) && cmpVersion(b.version, from) > 0 && cmpVersion(b.version, current) <= 0);
   if (!c.length) return null;
   c.sort((a, b) => cmpVersion(b.version, a.version) || (a.stamp < b.stamp ? 1 : -1));

@@ -3496,7 +3496,7 @@ function applyProfile() {
 function pickSlot(n: number) {
   const empty = !Save.listSlots()[n - 1]?.data, keep = save.settings;
   save = Save.selectSlot(n);
-  if (empty) { save.settings = { ...keep }; Save.store(save); } // a new player keeps this computer's settings
+  if (empty) { save.settings = { ...keep }; save.gameVersion = C.VERSION; Save.store(save); } // a new player keeps this computer's settings; 0.56.1: stamped so the next start sees this version
   log("info", "slot-picked", { slot: n, empty });
   applyProfile();
 }

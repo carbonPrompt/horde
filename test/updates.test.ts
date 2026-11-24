@@ -51,9 +51,10 @@ test("restore is offered only after coming back up from an older version", () =>
   expect(U.restoreOffer("0.26.0", "0.27.0", [b("0.26.0", "20261110-100000")])).toBeNull();
   // running an older version: never offer a backup from a newer one
   expect(U.restoreOffer("0.27.0", "0.26.0", [b("0.27.0", "20261110-100000")])).toBeNull();
-  // a save with no version (written by 0.25 or older after a trip back): newest backup not above this version
-  expect(U.restoreOffer(undefined, "0.27.0", [b("0.26.0", "20261110-090000"), b("0.27.0", "20261110-100000")])?.version).toBe("0.27.0");
+  // 0.56.1: a save with no version is a new or empty slot (or no slot picked), not a trip back: never offer
+  expect(U.restoreOffer(undefined, "0.27.0", [b("0.26.0", "20261110-090000"), b("0.27.0", "20261110-100000")])).toBeNull();
   expect(U.restoreOffer(undefined, "0.27.0", [])).toBeNull();
+  expect(U.restoreOffer("junk", "0.27.0", [b("0.27.0", "20261110-100000")])).toBeNull();
 });
 
 test("download: a good file is kept, a tampered or short one is deleted and never kept", async () => {
