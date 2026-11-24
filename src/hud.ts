@@ -1,14 +1,14 @@
 // 0.51: the RTS bottom panel's rules: what the command card offers, what the selection panel lists, which build tab is
 // open and what the info panel shows. Pure (no DOM, no Sim): main.ts draws it.
-import { ORDER_KEYS, TOOL_KEYS } from "./keymap";
+import { keyFor, keyLabel } from "./keymap";
 
 export interface CardButton { id: string; label: string; key: string; on?: boolean; off?: boolean; tool?: string }
 
-const K = (k: string) => k.toUpperCase();
-const TOOLS: [string, string, string, boolean][] = [ // id, label, key, is a map tool (0.54: every one has a key, keymap.ts)
-  ["zone", "Safe Zone", K(TOOL_KEYS.zone), true], ["gate", "Gate/Wall", K(TOOL_KEYS.gate), true], ["remove", "Sell/Evac", K(TOOL_KEYS.remove), true], ["order", "Order", K(TOOL_KEYS.order), true],
-  ["pan", "Move/Aim", K(TOOL_KEYS.pan), true], ["heatmap", "Heatmap", K(TOOL_KEYS.heatmap), false], ["recall", "Recall", K(TOOL_KEYS.recall), false], ["closegates", "Lock Gates", K(TOOL_KEYS.closegates), false],
-  ["clear", "Clear Zone", K(TOOL_KEYS.clear), false],
+const K = (id: string) => keyLabel(keyFor(id)); // 0.55: the live binding
+const TOOLS = (): [string, string, string, boolean][] => [ // id, label, key, is a map tool (0.54: every one has a key, keymap.ts)
+  ["zone", "Safe Zone", K("tool.zone"), true], ["gate", "Gate/Wall", K("tool.gate"), true], ["remove", "Sell/Evac", K("tool.remove"), true], ["order", "Order", K("tool.order"), true],
+  ["pan", "Move/Aim", K("tool.pan"), true], ["heatmap", "Heatmap", K("view.heatmap"), false], ["recall", "Recall", K("tool.recall"), false], ["closegates", "Lock Gates", K("tool.closegates"), false],
+  ["clear", "Clear Zone", K("tool.clear"), false],
 ];
 
 /** 0.51.1: the one line under a command's name in its hover tooltip (the card shows pictures only). */
@@ -40,19 +40,19 @@ export const CMD_DESC: Record<string, string> = {
  *  nothing that takes orders (a building, an emplacement): targeting and remove/pull out. */
 export function commandCard(ctx: { phase: "plan" | "battle" | "over"; orderable: { kind: string; fort?: string; standby?: boolean; damaged?: boolean }[]; anySelected: boolean; armed: string | null; tool: string; zone?: boolean }): CardButton[] {
   if (!ctx.anySelected && ctx.zone && ctx.phase === "battle") return [{ id: "buytroops", label: "Buy Troops here", key: "" }, { id: "buysniper", label: "Buy Sniper team here", key: "" }]; // a selected safe zone
-  if (!ctx.anySelected) return TOOLS.map(([id, label, key, isTool]) => ({ id, label, key, ...(isTool ? { tool: id, on: ctx.tool === id } : {}) }));
+  if (!ctx.anySelected) return TOOLS().map(([id, label, key, isTool]) => ({ id, label, key, ...(isTool ? { tool: id, on: ctx.tool === id } : {}) }));
   const out: CardButton[] = [];
   const us = ctx.orderable;
   if (us.length) {
-    out.push({ id: "move", label: "Move", key: "RMB" }, { id: "amove", label: "Attack-move", key: K(ORDER_KEYS.amove), on: ctx.armed === "amove" },
-      { id: "patrol", label: "Patrol", key: K(ORDER_KEYS.patrol), on: ctx.armed === "patrol" }, { id: "escort", label: "Escort", key: K(ORDER_KEYS.escort), on: ctx.armed === "escort" },
-      { id: "stop", label: "Stop", key: K(ORDER_KEYS.stop) }, { id: "standby", label: "Stand by", key: K(ORDER_KEYS.standby), on: us.every(u => u.standby) });
+    out.push({ id: "move", label: "Move", key: "RMB" }, { id: "amove", label: "Attack-move", key: K("order.amove"), on: ctx.armed === "amove" },
+      { id: "patrol", label: "Patrol", key: K("order.patrol"), on: ctx.armed === "patrol" }, { id: "escort", label: "Escort", key: K("order.escort"), on: ctx.armed === "escort" },
+      { id: "stop", label: "Stop", key: K("order.stop") }, { id: "standby", label: "Stand by", key: K("order.standby"), on: us.every(u => u.standby) });
     const troops = us.filter(u => u.kind === "garrison" || u.kind === "sniper");
-    if (troops.length) out.push({ id: "fortify", label: troops.every(u => u.fort === "up") ? "Dismount" : "Fortify", key: K(ORDER_KEYS.fortify), on: ctx.armed === "fortify" });
-    if (ctx.phase === "battle" && us.some(u => u.damaged)) out.push({ id: "topup", label: "Top up", key: K(ORDER_KEYS.topup) });
+    if (troops.length) out.push({ id: "fortify", label: troops.every(u => u.fort === "up") ? "Dismount" : "Fortify", key: K("order.fortify"), on: ctx.armed === "fortify" });
+    if (ctx.phase === "battle" && us.some(u => u.damaged)) out.push({ id: "topup", label: "Top up", key: K("order.topup") });
   }
-  out.push({ id: "target", label: "Target", key: K(ORDER_KEYS.target) });
-  if (ctx.phase !== "over") out.push({ id: "remove", label: ctx.phase === "plan" ? "Remove" : "Pull out", key: K(ORDER_KEYS.remove) });
+  out.push({ id: "target", label: "Target", key: K("order.target") });
+  if (ctx.phase !== "over") out.push({ id: "remove", label: ctx.phase === "plan" ? "Remove" : "Pull out", key: K("order.remove") });
   return out;
 }
 

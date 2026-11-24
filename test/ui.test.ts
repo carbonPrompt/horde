@@ -284,10 +284,9 @@ test("0.39: the top bar clock shows time of day, battle time on hover", () => {
 
 import { needsTimePick } from "../src/people";
 
-test("0.39: the time picker shows for a normal city, never in the tutorial or attract mode", () => {
-  expect(needsTimePick(false, false)).toBe(true);
-  expect(needsTimePick(true, false)).toBe(false);
-  expect(needsTimePick(false, true)).toBe(false);
+test("0.39: the time picker shows for every city, never in attract mode (0.56: no tutorial exception)", () => {
+  expect(needsTimePick(false)).toBe(true);
+  expect(needsTimePick(true)).toBe(false);
 });
 
 test("0.39: save clean keeps a valid plan start time and drops junk", () => {
@@ -379,7 +378,8 @@ import * as UC from "../src/config";
 import { PL_SCHOOL as UPL_SCHOOL } from "../src/people";
 
 test("0.41: How to Play is current (J for heights, people and Follow, the no-fire band, the time pick)", async () => {
-  const page = (await import("../src/codex")).allEntries().map(e => e.title + " " + e.body).join("\n"); // 0.47: the Codex
+  const { withKeys } = await import("../src/keymap"); // 0.56: keys are tokens, read as shown
+  const page = (await import("../src/codex")).allEntries().map(e => withKeys(e.title + " " + e.body)).join("\n"); // 0.47: the Codex
   expect(page).not.toContain("press V");
   expect(page).toContain("press J");
   expect(page).toContain("Follow");
@@ -402,7 +402,8 @@ test("0.41: a kid at school reads right, and their walk with the class shows in 
 import { planWords as uPlanWords, personState as uPersonState } from "../src/personui";
 import { endStatsLines } from "../src/personui";
 test("0.42: How to Play explains refusers and age", async () => {
-  const page = (await import("../src/codex")).allEntries().map(e => e.title + " " + e.body).join("\n"); // 0.47: the Codex
+  const { withKeys } = await import("../src/keymap"); // 0.56: keys are tokens, read as shown
+  const page = (await import("../src/codex")).allEntries().map(e => withKeys(e.title + " " + e.body)).join("\n"); // 0.47: the Codex
   expect(page).toContain("refuse to leave");
   expect(page).toContain("talk them out");
   expect(page).toContain("elderly");
@@ -533,7 +534,50 @@ test("0.52: selecting without pause: click snap, Tab, roster", () => {
   const main = require("fs").readFileSync(import.meta.dir + "/../src/main.ts", "utf8") as string;
   const click = main.slice(main.indexOf("function click(cx: number, cy: number)"), main.indexOf('  if (tool === "order") {'));
   expect(click.indexOf("squadNearScreen(")).toBeLessThan(click.indexOf("sim.entityAt(")); // soldiers win
-  expect(main).toMatch(/k === "Tab" && mode === "game"[^\n]*cycleSquad\(e\.shiftKey\)/);
+  expect(main).toMatch(/act === "squad.next" && mode === "game"[^\n]*cycleSquad\(e\.shiftKey\)/);
   expect(main).toContain('data-ru="${sim.units.indexOf(u)}"');
   expect(main).toMatch(/firedAgo: u\.shotT !== undefined && u\.shotT >= 0/); // -1 = never fired
+});
+
+test("0.55: the build panel has three menus holding every build item once, in keymap order", () => {
+  const html = require("fs").readFileSync(import.meta.dir + "/../index.html", "utf8") as string;
+  const K = require("../src/keymap");
+  const a = html.indexOf('id="tool-cards"'), seg = html.slice(a, html.indexOf("</nav>", a));
+  const groups = [...seg.matchAll(/<div class="dock-group[^"]*" data-cat="([^"]+)"([\s\S]*?)(?=<div class="dock-group|$)/g)].map(m => [m[1], [...m[2].matchAll(/data-tool="([a-z0-9_]+)"/g)].map(x => x[1])] as [string, string[]]);
+  expect(groups.map(g => g[0])).toEqual(["Units", "Actions", "Support"]);
+  expect(groups[0][1]).toEqual(K.MENU_ITEMS.units);
+  expect(groups[1][1]).toEqual(K.MENU_ITEMS.actions);
+  expect(groups[2][1]).toEqual(K.MENU_ITEMS.support);
+});
+
+test("0.55: Settings has a Controls page", () => {
+  const html = require("fs").readFileSync(import.meta.dir + "/../index.html", "utf8") as string;
+  for (const id of ["s-controls", "controls-list", "controls-reset", "controls-msg", "opt-controls"]) expect(html).toContain(`id="${id}"`);
+});
+
+test("0.55 review #2/#4: build menu keys run before the always-keys; a rebind refreshes every key label", () => {
+  const main = require("fs").readFileSync(import.meta.dir + "/../src/main.ts", "utf8") as string;
+  const kd = main.slice(main.indexOf('addEventListener("keydown", e => {\n  const k = e.key;'));
+  expect(kd.indexOf("menuStep(armedMenu, kk)")).toBeGreaterThan(0);
+  expect(kd.indexOf("menuStep(armedMenu, kk)")).toBeLessThan(kd.indexOf('act === "fullscreen"'));
+  const ab = main.slice(main.indexOf("function applyBinds("), main.indexOf("function ctxNow("));
+  for (const s of ["codex?.refresh()", "renderHelpKeys()", "labelSpeedKeys()"]) expect(ab).toContain(s); // 0.56: no tutorial banner to refresh
+  const boot = main.slice(main.indexOf("setBinds(cleanKeys(save.settings.keys"), main.indexOf("setBinds(cleanKeys(save.settings.keys") + 300);
+  expect(boot).toContain("renderHelpKeys()");
+  expect(main).not.toContain("Press H or Menu");
+  const html = require("fs").readFileSync(import.meta.dir + "/../index.html", "utf8") as string;
+  expect(html).not.toMatch(/Save game \(F5\)/);
+});
+
+test("0.56: the tutorial is gone", () => {
+  const fs = require("fs");
+  expect(fs.existsSync(import.meta.dir + "/../src/tutorial.ts")).toBe(false);
+  const main = fs.readFileSync(import.meta.dir + "/../src/main.ts", "utf8") as string;
+  for (const s of ["startTut", "showTut", "tutTrack", 'from "./tutorial"']) expect(main).not.toContain(s);
+  const html = fs.readFileSync(import.meta.dir + "/../index.html", "utf8") as string;
+  for (const s of ['id="tut"', "p-tutorial", "tut-glow"]) expect(html).not.toContain(s);
+  const { needsTimePick } = require("../src/people");
+  expect(needsTimePick(false)).toBe(true); expect(needsTimePick(true)).toBe(false);
+  const { shouldTip } = require("../src/tips");
+  expect(shouldTip("horde", [], true)).toBe(true); expect(shouldTip("horde", ["horde"], true)).toBe(false); expect(shouldTip("horde", [], false)).toBe(false);
 });

@@ -1,14 +1,14 @@
 {
  "battle-horde-arrow": {
-  "version": "0.54.0",
+  "version": "0.56.0",
   "rev": 1,
   "recipeHash": "1553a18b10db",
-  "bytes": 35707,
+  "bytes": 35988,
   "w": 960,
   "h": 276
  },
  "battle-minimap-alerts": {
-  "version": "0.54.0",
+  "version": "0.55.0",
   "rev": 1,
   "recipeHash": "57f63bc6af4e",
   "bytes": 8811,
@@ -24,10 +24,10 @@
   "h": 76
  },
  "battle-overview": {
-  "version": "0.54.0",
+  "version": "0.56.0",
   "rev": 1,
   "recipeHash": "15908a7175bd",
-  "bytes": 29767,
+  "bytes": 29600,
   "w": 960,
   "h": 276
  },
@@ -48,18 +48,18 @@
   "h": 230
  },
  "clip-attack-move": {
-  "version": "0.54.0",
+  "version": "0.56.0",
   "rev": 1,
   "recipeHash": "451d0a7cbfcc",
-  "bytes": 153937,
+  "bytes": 154544,
   "w": 800,
   "h": 230
  },
  "clip-box-select-move": {
-  "version": "0.54.0",
+  "version": "0.55.0",
   "rev": 1,
   "recipeHash": "f8db543c7c8c",
-  "bytes": 159477,
+  "bytes": 158972,
   "w": 800,
   "h": 230
  },
@@ -72,31 +72,31 @@
   "h": 230
  },
  "clip-draw-zone": {
-  "version": "0.54.0",
+  "version": "0.56.0",
   "rev": 1,
   "recipeHash": "80dc4a58731b",
-  "bytes": 21985,
+  "bytes": 21994,
   "w": 800,
   "h": 230
  },
  "clip-evac-lift": {
-  "version": "0.54.0",
+  "version": "0.56.0",
   "rev": 1,
   "recipeHash": "8b334fc4c189",
-  "bytes": 280569,
+  "bytes": 282876,
   "w": 800,
   "h": 230
  },
  "clip-gate-to-wall": {
-  "version": "0.54.0",
+  "version": "0.56.0",
   "rev": 1,
   "recipeHash": "eafe777812cd",
-  "bytes": 260726,
+  "bytes": 260300,
   "w": 800,
   "h": 230
  },
  "clip-troops-fortify": {
-  "version": "0.54.0",
+  "version": "0.56.0",
   "rev": 2,
   "recipeHash": "44b160bff3aa",
   "bytes": 357252,
@@ -112,39 +112,183 @@
   "h": 58
  },
  "controls-hud": {
-  "version": "0.54.0",
+  "version": "0.56.0",
   "rev": 3,
   "recipeHash": "c592a900893b",
-  "bytes": 28468,
+  "bytes": 29161,
   "w": 960,
   "h": 168
  },
+ "howto-1-battle": {
+  "version": "0.56.0",
+  "rev": 1,
+  "recipeHash": "aca99c52643d",
+  "bytes": 29266,
+  "w": 960,
+  "h": 276
+ },
+ "howto-1-plan": {
+  "version": "0.56.0",
+  "rev": 1,
+  "recipeHash": "d613ef05bd62",
+  "bytes": 69188,
+  "w": 960,
+  "h": 540
+ },
+ "howto-10-late": {
+  "version": "0.56.0",
+  "rev": 1,
+  "recipeHash": "f9b5a35cb857",
+  "bytes": 29340,
+  "w": 960,
+  "h": 276
+ },
+ "howto-10-locked": {
+  "version": "0.56.0",
+  "rev": 1,
+  "recipeHash": "32c5a6ab12a2",
+  "bytes": 29761,
+  "w": 960,
+  "h": 276
+ },
+ "howto-11-menu": {
+  "version": "0.56.0",
+  "rev": 1,
+  "recipeHash": "455902688c7d",
+  "bytes": 13631,
+  "w": 480,
+  "h": 168
+ },
+ "howto-11-nofire": {
+  "version": "0.56.0",
+  "rev": 1,
+  "recipeHash": "7ce790c21d36",
+  "bytes": 30750,
+  "w": 960,
+  "h": 276
+ },
+ "howto-12-pause": {
+  "version": "0.56.0",
+  "rev": 1,
+  "recipeHash": "836bece728ec",
+  "bytes": 114136,
+  "w": 960,
+  "h": 540
+ },
+ "howto-2-day": {
+  "version": "0.56.0",
+  "rev": 1,
+  "recipeHash": "9aaa149756d1",
+  "bytes": 32911,
+  "w": 960,
+  "h": 276
+ },
+ "howto-2-night": {
+  "version": "0.56.0",
+  "rev": 1,
+  "recipeHash": "2d4451e531f7",
+  "bytes": 32097,
+  "w": 960,
+  "h": 276
+ },
+ "howto-3-heights": {
+  "version": "0.56.0",
+  "rev": 1,
+  "recipeHash": "f2036d0cd9a1",
+  "bytes": 27333,
+  "w": 960,
+  "h": 276
+ },
+ "howto-3-map": {
+  "version": "0.56.0",
+  "rev": 1,
+  "recipeHash": "f024578bb4d3",
+  "bytes": 32911,
+  "w": 960,
+  "h": 276
+ },
+ "howto-4-big": {
+  "version": "0.56.0",
+  "rev": 1,
+  "recipeHash": "302edcf48e37",
+  "bytes": 40032,
+  "w": 960,
+  "h": 352
+ },
+ "howto-4-good": {
+  "version": "0.56.0",
+  "rev": 1,
+  "recipeHash": "6434dc9372d0",
+  "bytes": 28878,
+  "w": 960,
+  "h": 276
+ },
+ "howto-5-gates": {
+  "version": "0.56.0",
+  "rev": 1,
+  "recipeHash": "7027de3bd5bb",
+  "bytes": 26512,
+  "w": 960,
+  "h": 276
+ },
+ "howto-6-ranges": {
+  "version": "0.56.0",
+  "rev": 1,
+  "recipeHash": "552a8f8ace64",
+  "bytes": 33317,
+  "w": 960,
+  "h": 276
+ },
+ "howto-6-sniper": {
+  "version": "0.56.0",
+  "rev": 1,
+  "recipeHash": "b6e20d8cb81a",
+  "bytes": 30153,
+  "w": 960,
+  "h": 276
+ },
+ "howto-7-streets": {
+  "version": "0.56.0",
+  "rev": 1,
+  "recipeHash": "26f1f6e7feea",
+  "bytes": 28009,
+  "w": 960,
+  "h": 276
+ },
+ "howto-8-padcost": {
+  "version": "0.56.0",
+  "rev": 1,
+  "recipeHash": "be979f30ae44",
+  "bytes": 31801,
+  "w": 960,
+  "h": 276
+ },
+ "howto-9-alert": {
+  "version": "0.56.0",
+  "rev": 1,
+  "recipeHash": "3f520f4f4cb7",
+  "bytes": 173003,
+  "w": 800,
+  "h": 230
+ },
  "people-person-window": {
-  "version": "0.54.0",
+  "version": "0.56.0",
   "rev": 4,
   "recipeHash": "a6da53861da2",
-  "bytes": 59875,
+  "bytes": 60626,
   "w": 960,
   "h": 540
  },
  "start-cursor-label": {
-  "version": "0.54.0",
+  "version": "0.56.0",
   "rev": 1,
   "recipeHash": "632c3c95af2c",
   "bytes": 30626,
   "w": 960,
   "h": 276
  },
- "start-heights": {
-  "version": "0.54.0",
-  "rev": 1,
-  "recipeHash": "dfa090b72663",
-  "bytes": 27892,
-  "w": 960,
-  "h": 276
- },
  "support-radius": {
-  "version": "0.54.0",
+  "version": "0.56.0",
   "rev": 1,
   "recipeHash": "efa68adfca71",
   "bytes": 33340,
@@ -168,10 +312,10 @@
   "h": 276
  },
  "units-selected-card": {
-  "version": "0.54.0",
+  "version": "0.55.0",
   "rev": 4,
   "recipeHash": "c76a9007cf50",
-  "bytes": 73750,
+  "bytes": 74609,
   "w": 960,
   "h": 540
  }

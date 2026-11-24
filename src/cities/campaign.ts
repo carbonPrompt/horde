@@ -1,5 +1,5 @@
 // 0.35: the nine campaign cities (design 2026-11-12). Every one is built around its water, laid out on a grid,
-// and has 2 to 4 stand points with different trade-offs. Stand points are for the checker and the City 1 tutorial
+// and has 2 to 4 stand points with different trade-offs. Stand points are for the checker
 // only; players are never shown them.
 import type { CityRecipe, Grid } from "./recipe";
 
@@ -8,7 +8,7 @@ const BIG: Grid = { block: [20, 14], street: 3, avenueEvery: 3, avenue: 6 };
 const all = (w: number, h: number) => ({ x: 0, y: 0, w, h });
 
 export const CAMPAIGN_RECIPES: Record<string, CityRecipe> = {
-  // 1. Basics. A gentle river with three bridges; the town green on the north bank is the tutorial's stand.
+  // 1. Basics. A gentle river with three bridges; the town green on the north bank is the obvious stand.
   fairhaven: {
     id: "fairhaven", w: 400, h: 300, seed: 101, grid: SMALL, pocketParks: 0.04,
     water: [{ kind: "river", axis: "x", at: 172, width: 14, bends: [[150, 6], [280, -2]], rough: 3 }],

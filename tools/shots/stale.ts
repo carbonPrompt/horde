@@ -25,9 +25,8 @@ export const mediaFile = (r: Pick<Recipe, "id" | "kind">) => `assets/codex/${r.i
 export function staleReport(recipes: Recipe[], manifest: Record<string, ManifestRow>, entries: CodexEntry[],
   exists: (f: string) => boolean): { id: string; why: StaleWhy }[] {
   const out: { id: string; why: StaleWhy }[] = [], byId = new Map(recipes.map(r => [r.id, r])), used = new Set<string>();
-  for (const e of entries) {
-    const m = e.media;
-    if (!m || m.kind === "diagram") continue;
+  for (const e of entries) for (const m of [...(e.media ? [e.media] : []), ...(e.figs ?? [])]) { // 0.56: figures in the text too
+    if (m.kind === "diagram") continue;
     used.add(m.id);
     const r = byId.get(m.id), row = manifest[m.id];
     if (!r) out.push({ id: m.id, why: "no-recipe" });

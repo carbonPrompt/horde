@@ -110,3 +110,13 @@ test("0.52: squad state words and the Tab order (idle first)", () => {
   expect(nextInTab(order, 1, true)).toBe(4);
   expect(nextInTab([], -1, false)).toBe(-1);
 });
+
+test("0.55: the command card shows the live keys", () => {
+  const K = require("../src/keymap");
+  K.setBinds({ ...K.defaultBinds(), "order.stop": "o", "tool.zone": "p" });
+  try {
+    expect(commandCard({ ...base, anySelected: true, orderable: [{ kind: "apc" }] }).find(b => b.id === "stop")!.key).toBe("O");
+    expect(commandCard({ ...base }).find(b => b.id === "zone")!.key).toBe("P");
+    expect(commandCard({ ...base }).find(b => b.id === "heatmap")!.key).toBe("H"); // the heatmap view key
+  } finally { K.setBinds(K.defaultBinds()); }
+});

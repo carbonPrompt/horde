@@ -5,7 +5,7 @@ import { CIV, INF, SAFE_CIV, SHOT_CANNON, SHOT_ROCKET, SHOT_SHELL, SHOT_SNIPER, 
 import type { Score, Entity, Orbit, Unit } from "./sim";
 import { groupsToPlan, groupsFromPlan, pruneGroups, assignGroup, groupUnits, groupSummary } from "./groups";
 import { commandCard, selectionGrid, infoSource, buildTabs, CMD_DESC, squadState, tabOrder, nextInTab, type CardButton } from "./hud";
-import { ORDER_KEYS, TOOL_KEYS, VIEW_KEYS, ALERT_KEY, QUICK_SLOTS, keyLabel, bindProblem, cleanQuickKeys } from "./keymap";
+import { QUICK_SLOTS, keyLabel, keyFor, keyOf, actionFor, setBinds, cleanKeys, overrides, bindProblem, binds, withKeys, menuStep, menuOfTool, MENU_NAME, controlsRows, resetGroup, defaultBinds, type Group, type Binds, type Ctx, type MenuId } from "./keymap";
 import { orderIcon } from "./ordericons";
 import { cleanQuickbar, setSlot, swapSlots, clearSlot, type Slots } from "./quickbar";
 import { describeCell, estimateAt } from "./cursorinfo";
@@ -34,7 +34,6 @@ import { loadRealArea, realAreaMap } from "./realcity/load";
 import { areaCardInfo, bindCityMap, cityMapModel, drawCityMap, fitView, type CityMapUi } from "./citymapui";
 import { soundDue, zoomGain } from "./audiotiming";
 import { airHalfPx, drawAirframe, smoothHeading } from "./aircraft";
-import { tutorialSteps, currentStep, wantTutorial, type TutStep, type TutState } from "./tutorial";
 import { drawDepot, drawModel, drawSquad, drawSupport, drawWrecks, hasModel, hasSquad, MODEL_ZOOM, noteUnits, SQUAD_ZOOM } from "./models";
 import { clockSpan, START_CHOICES, randomStart, needsTimePick, formatClock } from "./people";
 import { personHtml, followable, followEndLine, endStatsLines } from "./personui";
@@ -51,10 +50,13 @@ document.querySelectorAll<HTMLImageElement>("img[data-sprite]").forEach(img => {
   if (SPRITE_URL[k]) img.src = SPRITE_URL[k];
 });
 document.querySelectorAll<HTMLImageElement>("img[data-oicon]").forEach(img => { img.src = orderIcon(img.dataset.oicon!); }); // 0.51.1
-document.querySelectorAll<HTMLElement>("#cmdtools button").forEach(b => { // 0.54: every tool's key from the key map, top-left on the button
-  const k = b.dataset.tool ?? (b.id === "heatmapbtn" ? "heatmap" : b.id); b.dataset.tipdesc = CMD_DESC[k] ?? "";
-  const key = keyLabel((TOOL_KEYS as Record<string, string>)[k]); b.dataset.tipkey = key; const hk = b.querySelector(".hk"); if (hk) hk.textContent = key;
-});
+/** 0.54: every tool's key top-left on its button (0.55: the live binding; re-run after a rebind). */
+function labelToolCards() {
+  document.querySelectorAll<HTMLElement>("#cmdtools button").forEach(b => {
+    const k = b.dataset.tool ?? (b.id === "heatmapbtn" ? "heatmap" : b.id); b.dataset.tipdesc = CMD_DESC[k] ?? "";
+    const key = keyLabel(keyFor(k === "heatmap" ? "view.heatmap" : `tool.${k}`)); b.dataset.tipkey = key; const hk = b.querySelector(".hk"); if (hk) hk.textContent = key;
+  });
+}
 const perf = new Perf();
 
 type Tool = "pan" | "order" | "zone" | "gate" | C.UnitKind | C.SupportKind | "remove" | C.AbilityKind | "c4" | "depot";
@@ -76,6 +78,8 @@ addEventListener("keydown", () => snd.unlock());
 document.addEventListener("click", e => { if ((e.target as HTMLElement).closest("button")) snd.click(); }); // map + agents on the graphics card; 2D canvas on top for the rest
 
 let save = Save.load();
+setBinds(cleanKeys(save.settings.keys, save.settings.quickKeys)); // 0.55: every key settable (keymap.ts)
+labelToolCards(); renderHelpKeys(); labelSpeedKeys();
 const slotVersions = new Map<number | null, string | undefined>(); // 0.47.1: per slot, the version that wrote it before this session (Codex badges)
 slotPrevVersion(slotVersions, Save.activeSlot(), save.gameVersion); // read before the updater stamps the current version
 if (save.xp == null) { save.xp = P.grandfatherXp(save.best); Save.store(save); } // players from before XP keep their access
@@ -281,6 +285,7 @@ function importPlanInner(p: Plan) {
   if (doubled) say(`${doubled === 1 ? "A Troops squad or Sniper team shared a building" : `${doubled} Troops squads or Sniper teams shared buildings`} in this plan; one per building now, the extra ${doubled === 1 ? "one was" : "ones were"} left out.`, 6000);
 }
 function newSim(keepPlan: boolean, newSeed = false) {
+  armedMenu = null; // 0.55
   clearTicker(); closePerson();
   const plan = keepPlan ? exportPlan() : null;
   if (newSeed) seed = Math.floor(Math.random() * 1e9);
@@ -293,8 +298,6 @@ function newSim(keepPlan: boolean, newSeed = false) {
   syncDev();
   buildBase(); buildZone(); fitCamera();
   $("end").hidden = true;
-  startTut(); // 0.35: Retry/Fresh map on City 1 starts the prompts again (steps already done are skipped)
-  if (tut && tut.steps[tut.i].id === "look") setTool("pan"); // 0.41
   refreshUi();
 }
 
@@ -306,10 +309,11 @@ function show(id: string | null) {
   if (id === "cities") renderCities();
   if (id === "settings") { syncSettings(); renderMods(); const vb = document.getElementById("versions-btn") as HTMLButtonElement | null; if (vb) { vb.disabled = mode === "game"; $("ver-ingame").hidden = mode !== "game"; } }
   if (id === "record") renderRecord();
+  if (id === "controls") { promptAct = null; renderControls(); setControlsMsg(""); } // 0.55
   if (id === "slots") renderSlots();
   if (id === "howto") codexShown();
 }
-function go(id: string) { stack.push(id); show(id); }
+function go(id: string) { armedMenu = null; stack.push(id); show(id); }
 // ---------- 0.47: the Codex (How to Play) ----------
 let codex: ReturnType<typeof mountCodex> | null = null;
 const cxLink = (id: string) => `<a class="cx-link" data-cx="${id}" title="Open in the Codex">?</a>`;
@@ -447,7 +451,7 @@ function applyFullscreen() {
 // ---------- 0.39: the person window and Follow ----------
 let selPerson = -1, following = false, lastPersonHtml = "";
 function selectPerson(k: number) {
-  selPerson = k; lastPersonHtml = ""; tutTrack.person = true;
+  selPerson = k; lastPersonHtml = "";
   if (sim.refuser[k] === 1 && tipPossible("refuse")) tip("refuse"); // 0.44: the refuser tip comes with their window (no rings)
   if (following) following = followable(sim, k);
   renderPerson();
@@ -486,7 +490,6 @@ $("person").addEventListener("click", ev => {
 
 function startAttract() {
   loadSeq++; // a pending area load must not pull the player back into a battle
-  tut = null; showTut(); // 0.35: no tutorial banner over the menus
   $("timepick").hidden = true; closePerson(); // 0.39
   clearTicker();
   mode = "attract"; city = null; customMap = null; dailyDate = null; showHeatmap = false;
@@ -503,59 +506,6 @@ function startAttract() {
   snd.music("title");
 }
 
-// ---------- 0.35: City 1 guided tutorial (steps in src/tutorial.ts) ----------
-let tut: { steps: TutStep[]; i: number; on: boolean; t0: number; ts0: number; vis: boolean } | null = null;
-// 0.41: what the tutorial watches for: gate cells flipped by hand, strikes called, a person window, a speed change, a horde
-const tutTrack = { toWall: 0, toGate: 0, strikes: 0, person: false, speed: false, horde: false };
-/** (Re)start or clear the tutorial for the current city; `replay` = the player asked for it. */
-function startTut(replay = false) {
-  const c = city;
-  tut = mode === "game" && c && c.recipe && wantTutorial({ first: c === C.CITIES[0], medal: anyMedal(save.best, c.id), daily: !!dailyDate, replay })
-    ? { steps: tutorialSteps(c.recipe.stands[0]), i: 0, on: true, t0: performance.now(), ts0: 0, vis: true } : null;
-  Object.assign(tutTrack, { toWall: 0, toGate: 0, strikes: 0, person: false, speed: false, horde: false });
-  showTut();
-}
-function tutState(): TutState {
-  const zr = tut?.steps.find(st => st.id === "zone")?.highlight?.rect;
-  let cells = 0, inside = 0, gates = 0;
-  if (zr) for (let y = zr.y; y < zr.y + zr.h; y++) for (let x = zr.x; x < zr.x + zr.w; x++) {
-    if (x < 0 || y < 0 || x >= sim.w || y >= sim.h) continue;
-    const i = sim.idx(x, y); if (sim.map.tile[i] === 1 || sim.map.tile[i] === 3) continue; // buildings, water
-    cells++; if (sim.inZone[i] === 1) inside++;
-  }
-  for (let i = 0; i < sim.inZone.length; i++) if (sim.inZone[i] === 3) { gates++; break; }
-  const n = (k: string) => sim.units.filter(u => u.kind === k).length;
-  const gatesOpen = sim.openGateCells(); // 0.41 review: a broken gate can't be closed, so it doesn't count
-  const c = sim.counts();
-  return { zoneCells: sim.zoneCells, zoneOverlap: cells ? inside / cells : 0, gates, garrisons: n("garrison"), snipers: n("sniper"),
-    evacs: sim.supports.filter(b => b.kind === "evac").length, phase: sim.phase === "plan" ? "plan" : sim.phase === "battle" ? "battle" : "over", lifts: sim.liftsFlown,
-    toWall: tutTrack.toWall, toGate: tutTrack.toGate, gatesOpen, strikes: tutTrack.strikes, personOpened: tutTrack.person, speedChanged: tutTrack.speed || speedLocked(), // 0.48: nothing to change on Hard/Insane
-    safeShare: sim.civN ? (c.safe + sim.evacuated) / sim.civN : 0, hordeAnnounced: tutTrack.horde,
-    stepT: !tut ? 0 : sim.phase === "battle" ? sim.time - tut.ts0 : (performance.now() - tut.t0) / 1000 }; // battle steps count game time (pausing stops them)
-}
-function showTut() {
-  const box = $("tut");
-  document.querySelectorAll(".tut-glow").forEach(e => e.classList.remove("tut-glow"));
-  if (!tut || !tut.on || !tut.vis) { box.hidden = true; return; }
-  const st = tut.steps[tut.i];
-  box.hidden = false;
-  $("tut-text").textContent = `${tut.i + 1}/${tut.steps.length}  ${st.text}`;
-  $("tut-next").hidden = st.id !== "look";
-  if (st.highlight?.kind === "button") document.getElementById(st.highlight.button)?.classList.add("tut-glow"); // 0.41
-  if (st.highlight?.kind === "tool") {
-    document.querySelectorAll(`[data-tool="${st.highlight.tool}"]`).forEach(e => e.classList.add("tut-glow"));
-    const cat = catOf(st.highlight.tool!); // 0.51: open its build tab (the tile glows from buildTile) and light the tab
-    if (cat) { setBuildTab(cat); document.querySelectorAll(`#btabs [data-cat="${cat}"]`).forEach(e => e.classList.add("tut-glow")); }
-  }
-}
-function stepTut() {
-  if (!tut || !tut.on || mode !== "game") return;
-  const ts = tutState();
-  const i = currentStep(tut.steps, ts, tut.i), moved = i !== tut.i;
-  if (moved) { tut.i = i; tut.t0 = performance.now(); tut.ts0 = sim.time; ts.stepT = 0; log("info", "tutorial-step", { step: tut.steps[i].id }); }
-  const vis = tut.steps[i].show?.(ts) ?? true; // 0.41: some steps wait for the right moment
-  if (moved || vis !== tut.vis) { tut.vis = vis; showTut(); }
-}
 
 /** 0.36: a real area's map is decoded on first use (async); everything else starts at once. */
 // Each start bumps loadSeq; an area decode that finishes after another start (Daily, Load battle, Title) is dropped.
@@ -587,8 +537,7 @@ function playCityNow(c: C.CityDef | null, seedOverride?: number) {
   const firstTime = !!c?.recipe && !anyMedal(save.best, c.id);
   if (c?.intro && firstTime) setTimeout(() => say(c.intro!.join(" "), 12000), 600); // 0.35: what this city teaches
   else if (c?.trial && !P.unlocked(c.trial, save.xp ?? 0)) setTimeout(() => say(`Field trial: ${toolName(c.trial!)} is on loan to you in ${c.name}. Earn ${P.UNLOCK_XP[c.trial!].toLocaleString()} XP to keep it everywhere.`, 9000), 600);
-  startTut(); // 0.35: City 1 tutorial
-  if (!needsTimePick(!!tut, false)) startMin = 600;
+  if (!needsTimePick(false)) startMin = 600;
   sim.setStartTime(startMin); // 0.40 (the picker re-places when a time is chosen)
   Object.assign(perf, new Perf()); // perf numbers cover play time only
   draft = []; pings = []; speed = 1; tipGates = false; lastWave = 0; warnedWave = -1; warnShown = false; outbreakShown = false; xpGiven = 0; roundShown = false;
@@ -602,9 +551,8 @@ function playCityNow(c: C.CityDef | null, seedOverride?: number) {
   const mutStr = activeMutators.size ? ` Active mutators: ${[...activeMutators].map(m => C.MUTATORS[m].name).join(", ")}.` : "";
   const planMsg = (saved ? `Your last plan is loaded. Change it or press Start.`
     : "Plan your defense: draw a safe zone, add gates, place units, then Start.") + mutStr;
-  if (needsTimePick(!!tut, false)) openTimePick(saved?.start ?? startMin, () => say(planMsg, 6000));
-  else if (!tut) say(planMsg, 6000); // 0.41: the tutorial banner says it
-  if (tut && tut.steps[tut.i].id === "look") setTool("pan"); // 0.41: left-drag moves the map while looking around
+  if (needsTimePick(false)) openTimePick(saved?.start ?? startMin, () => say(planMsg, 6000));
+  else say(planMsg, 6000);
 }
 
 // ---------- 0.39: start-time picker ----------
@@ -673,12 +621,12 @@ function playDaily() {
 }
 
 function pause() {
+  if (armedMenu) setMenu(null); // 0.55
   if (mode !== "game") return;
   codexBack = null;
   log("info", "pause", { phase: sim.phase, t: +sim.time.toFixed(1) });
   if (!speedLocked()) speed = 0; // 0.48: on Hard/Insane the menu opens but the battle carries on
   refreshUi();
-  $("p-tutorial").hidden = !(city && city === C.CITIES[0] && !dailyDate); // 0.35
   stack.length = 0; go("pause");
 }
 function resume() {
@@ -738,14 +686,14 @@ let tickerBusy = false;
 /** until: sim time after which the alert is stale and skipped (horde warnings). */
 function notify(text: string, urgent = false, until?: number) { alerts.push(text, urgent, until); runTicker(); }
 /** 0.41: a one-line tip the first time something shows up (once per save; Settings > Tips switches them off). */
-/** Cheap check before any costly test for a tip (tips on, no tutorial banner up, not seen yet). */
-function tipPossible(id: TipId) { return mode === "game" && save.settings.tips !== false && !(tut?.on && tut.vis) && !(save.settings.tipsSeen ?? []).includes(id); }
+/** Cheap check before any costly test for a tip (tips on, not seen yet). */
+function tipPossible(id: TipId) { return mode === "game" && save.settings.tips !== false && !(save.settings.tipsSeen ?? []).includes(id); }
 function tip(id: TipId) {
   if (mode !== "game") return;
   const seen = save.settings.tipsSeen ?? [];
-  if (!shouldTip(id, seen, !!(tut?.on && tut.vis), save.settings.tips !== false)) return;
+  if (!shouldTip(id, seen, save.settings.tips !== false)) return;
   save.settings.tipsSeen = [...seen, id]; Save.store(save);
-  notify(`Tip: ${TIPS[id]}`, false, sim.time + 25);
+  notify(`Tip: ${withKeys(TIPS[id])}`, false, sim.time + 25);
 }
 function runTicker() {
   if (tickerBusy) return;
@@ -882,7 +830,7 @@ function click(cx: number, cy: number) {
     case "gate": {
       const before = x >= 0 && y >= 0 && x < sim.w && y < sim.h ? sim.inZone[sim.idx(x, y)] : 0;
       const e = sim.toggleGate(x, y);
-      if (e) say(e); else { buildZone(); if (before === 3) tutTrack.toWall++; else if (before === 2) tutTrack.toGate++; } // 0.41: the tutorial watches
+      if (e) say(e); else buildZone();
       break;
     }
     case "remove": if (!sim.removeAt(x, y)) say("No unit or support building there (or removing a Budget Office would exceed your budget)."); break;
@@ -941,7 +889,6 @@ function click(cx: number, cy: number) {
       strikeStart = null;
       if (e) { say(e); break; }
       log("info", "ability", { kind: tool, x: Math.round(sx), y: Math.round(sy), t: +sim.time.toFixed(1), left: sim.charges[tool] });
-      if (sim.phase === "battle") tutTrack.strikes++; // 0.41
       say(`${C.ABILITIES[tool].name} inbound.`, 2500);
       if (tool === "nuke") setTool("pan");
       break;
@@ -953,6 +900,7 @@ function click(cx: number, cy: number) {
 let drag: { x: number; y: number; moved: boolean; pan: boolean } | null = null;
 canvas.addEventListener("contextmenu", e => e.preventDefault());
 canvas.addEventListener("pointerdown", e => {
+  if (armedMenu) setMenu(null); // 0.55: a click on the map lets go of a waiting build menu
   if (mode !== "game") return;
   canvas.setPointerCapture(e.pointerId);
   drag = { x: e.clientX, y: e.clientY, moved: false, pan: e.button !== 0 }; // 0.45: left-drag with Move/Aim draws a selection box; right/middle-drag pans
@@ -1076,13 +1024,23 @@ let loggedEjects = 0;
 addEventListener("keydown", e => {
   const k = e.key;
   if (typingInField(e.target) && k !== "Escape" && !/^F\d+$/.test(k)) return; // 0.47.1: typing in a search box is not WASD
-  keys.add(k.toLowerCase());
+  const kk = keyOf(e), act = actionFor(kk, sel.length ? "selected" : "idle"); // 0.55: the live bindings
+  keys.add(kk);
+  // 0.55: build menus: menu key, then the item's letter. First of all game keys (review #2): a letter wins over any
+  // always-key bound to it while its menu waits, and any other key lets go of the menu.
+  if (mode === "game" && !stack.length && !e.ctrlKey && !e.metaKey && !e.altKey && rebindSlot === null && !e.repeat && !typingInField(e.target)) {
+    const ms = menuStep(armedMenu, kk);
+    if (ms.armed !== armedMenu) setMenu(ms.armed);
+    if (ms.pick) { e.preventDefault(); pickTool(ms.pick); return; }
+    if (!ms.passThrough) { e.preventDefault(); return; }
+  }
   if (k === "F10") { e.preventDefault(); toggleDevPanel(); return; }
-  if (k === "F11") { e.preventDefault(); save.settings.fullscreen = !save.settings.fullscreen; Save.store(save); applyFullscreen(); return; }
-  if (k === "F5") { e.preventDefault(); void saveGame(); return; } // 0.33: quick save
-  if (k === "Tab" && mode === "game" && !stack.length) { e.preventDefault(); cycleSquad(e.shiftKey); return; } // 0.52
-  if (k === "F1" || k === "F2" || k === "F3") { e.preventDefault(); if (mode === "game" && !stack.length) setSpeed(k === "F1" ? 0.5 : k === "F2" ? 1 : 2); return; } // 0.50: speed moved off 1/2/3
+  if (act === "fullscreen") { e.preventDefault(); save.settings.fullscreen = !save.settings.fullscreen; Save.store(save); applyFullscreen(); return; }
+  if (act === "quicksave") { e.preventDefault(); void saveGame(); return; } // 0.33: quick save
+  if (act === "squad.next" && mode === "game" && !stack.length) { e.preventDefault(); cycleSquad(e.shiftKey); return; } // 0.52
+  if (act === "speed.half" || act === "speed.normal" || act === "speed.fast") { e.preventDefault(); if (mode === "game" && !stack.length) setSpeed(act === "speed.half" ? 0.5 : act === "speed.normal" ? 1 : 2); return; } // 0.50: speed moved off 1/2/3
   if (k === "Escape") {
+    if (!stack.length && mode === "game" && armedMenu) { setMenu(null); return; } // 0.55: a waiting build menu first
     if (stack.length) { const top = stack[stack.length - 1]; if (top !== "title" && !(top === "slots" && !Save.activeSlot())) back(); return; }
     if (mode === "game" && selPerson >= 0) { closePerson(); return; } // 0.39
     if (mode === "game" && armedCmd) { armedCmd = null; renderActions(); return; } // 0.45: an armed command first
@@ -1098,38 +1056,36 @@ addEventListener("keydown", e => {
   if (tgt && (tgt.tagName === "INPUT" || tgt.tagName === "TEXTAREA" || tgt.tagName === "SELECT")) return; // 0.44: typing is not a command
   // 0.54: the key map (keymap.ts, design ruling): WASD camera always, 1-5 groups, 6-0 quick bar, orders around WASD
   const kl = k.toLowerCase(), plain = !e.ctrlKey && !e.metaKey && !e.altKey;
-  if ((k === "Delete" || k === "Backspace" || (kl === ORDER_KEYS.remove && plain)) && sel.length) { e.preventDefault(); removeSelected(); return; }
-  if (kl === ORDER_KEYS.target && sel.length && plain) { cycleSelected(); return; }
-  { const gi = groupIntent(e.code, { shift: e.shiftKey, ctrl: e.ctrlKey || e.metaKey, alt: e.altKey }); // 0.50: battle groups (0.54: 1-5)
+  if ((k === "Delete" || k === "Backspace" || (act === "order.remove" && plain)) && sel.length) { e.preventDefault(); removeSelected(); return; }
+  if (act === "order.target" && sel.length && plain) { cycleSelected(); return; }
+  { const gi = groupIntent(kk, { shift: e.shiftKey, ctrl: e.ctrlKey || e.metaKey, alt: e.altKey }); // 0.50: battle groups (0.54: 1-5)
     if (gi) { e.preventDefault(); runGroup(gi); return; } }
-  if (plain && !rebindSlot && quickKeys.includes(kl)) { e.preventDefault(); useSlot(quickKeys.indexOf(kl)); return; } // 0.54: quick bar
-  { const it = keyIntent(k, { shift: e.shiftKey, ctrl: e.ctrlKey || e.metaKey, alt: e.altKey }, orderable().length > 0); // 0.45
+  if (plain && rebindSlot === null && act?.startsWith("quick.")) { e.preventDefault(); useSlot(Number(act.slice(6)) - 1); return; } // 0.54: quick bar
+  { const it = keyIntent(kk, { shift: e.shiftKey, ctrl: e.ctrlKey || e.metaKey, alt: e.altKey }, orderable().length > 0); // 0.45
     if (it) { e.preventDefault(); runIntent(it); return; } }
-  if (kl === ORDER_KEYS.topup && plain && sel.length) { topUpSelected(); return; } // 0.49
-  if (k === " ") { e.preventDefault(); if (sim.phase === "battle") setSpeed(speed ? 0 : battleSpeed()); return; }
+  if (act === "order.topup" && plain && sel.length) { topUpSelected(); return; } // 0.49
+  if (act === "pause") { e.preventDefault(); if (sim.phase === "battle") setSpeed(speed ? 0 : battleSpeed()); return; }
   if (!plain) return;
-  if (k === ALERT_KEY || e.code === "Backquote") { if (sim.phase === "battle") jumpToPing(); return; } // 0.48 (0.54: was F)
-  if (kl === VIEW_KEYS.heights) showHeights = !showHeights;
-  else if (kl === VIEW_KEYS.ranges) showRanges = !showRanges;
-  else if (kl === VIEW_KEYS.heatmap) { showHeatmap = !showHeatmap; refreshUi(); }
+  if (act === "alert") { if (sim.phase === "battle") jumpToPing(); return; } // 0.48 (0.54: was F)
+  if (act === "view.heights") showHeights = !showHeights;
+  else if (act === "view.ranges") showRanges = !showRanges;
+  else if (act === "view.heatmap") { showHeatmap = !showHeatmap; refreshUi(); }
   else if (k === "Enter" && tool === "zone" && draft.length) closeDraft();
-  else if (kl === TOOL_KEYS.zone) setTool("zone");
-  else if (kl === TOOL_KEYS.remove) setTool("remove");
-  else if (kl === TOOL_KEYS.order) setTool("order");
-  else if (kl === TOOL_KEYS.pan) setTool("pan");
-  else if (kl === TOOL_KEYS.gate) setTool("gate"); // 0.41
-  else if (kl === TOOL_KEYS.recall) $("recall").click();
-  else if (kl === TOOL_KEYS.closegates) $("closegates").click(); else if (kl === TOOL_KEYS.clear) $("clear").click();
-  else if (kl === TOOL_KEYS.build) buildKey(); // 0.51: B = build (StarCraft)
+  else if (act === "tool.zone") setTool("zone");
+  else if (act === "tool.remove") setTool("remove");
+  else if (act === "tool.order") setTool("order");
+  else if (act === "tool.pan") setTool("pan");
+  else if (act === "tool.gate") setTool("gate"); // 0.41
+  else if (act === "tool.recall") $("recall").click();
+  else if (act === "tool.closegates") $("closegates").click(); else if (act === "tool.clear") $("clear").click();
 });
-addEventListener("keyup", e => keys.delete(e.key.toLowerCase()));
+addEventListener("keyup", e => { keys.delete(keyOf(e)); keys.delete(e.key.toLowerCase()); });
 
 /** 0.48: Hard and Insane lock the clock once the battle starts (no pause, 1x) until the round is scored. */
 function speedLocked() { return mode === "game" && sim.phase === "battle" && sim.diff.noPause && !sim.roundResult; }
 function battleSpeed() { return speedLocked() ? 1 : pausedSpeed || 1; }
 function setSpeed(s: number, dev = false) {
   if (speedLocked() && !dev && s !== 1) { say(`${sim.diff.name}: the battle runs in real time. No pause, no speed change.`, 2500); s = 1; }
-  if (sim.phase === "battle" && s !== speed) tutTrack.speed = true; // 0.41
   speed = s === 4 ? 2 : s;
   if (speed === 0.5 || speed === 1 || speed === 2) { if (pausedSpeed !== speed) { pausedSpeed = speed; if (mode === "game") { save.settings.speed = speed; Save.store(save); } } }
   refreshUi();
@@ -1171,7 +1127,7 @@ function refreshUi() {
   document.querySelectorAll<HTMLButtonElement>("[data-speed]").forEach(b => {
     const lockOut = speedLocked() && Number(b.dataset.speed) !== 1; // 0.48: Hard/Insane, real time only
     b.disabled = planning || lockOut; b.classList.toggle("on", !planning && Number(b.dataset.speed) === speed);
-    b.title = lockOut ? `${sim.diff.name}: no pause or speed change in battle` : b.dataset.speed === "0" ? "Space" : b.dataset.speed === "0.5" ? "1" : b.dataset.speed === "1" ? "2" : "3";
+    b.title = lockOut ? `${sim.diff.name}: no pause or speed change in battle` : (b.dataset.key ?? ""); // 0.55: the live key (labelSpeedKeys)
   });
   document.querySelectorAll<HTMLButtonElement>("[data-tool]").forEach(b => {
     const t = b.dataset.tool as Tool;
@@ -1252,7 +1208,7 @@ function hud(now: number) {
       log("info", "wave", { n: sim.wave, routes, count: sim.lastWaveCount, big: sim.lastWaveBig, t: +sim.time.toFixed(1), evacuated: sim.evacuated, ...c });
       snd.horn();
       if (sim.lastWaveBig) notify("A big one is coming.", true, sim.time + 20);
-      notify(`Horde #${sim.wave} (${sim.lastWaveCount.toLocaleString()}) coming in ${routes}!`, true, sim.time + 20); tutTrack.horde = true; tip("horde");
+      notify(`Horde #${sim.wave} (${sim.lastWaveCount.toLocaleString()}) coming in ${routes}!`, true, sim.time + 20); tip("horde");
     }
     const left = sim.nextWaveT - sim.time;
     if (left > 0 && left < C.WAVE_WARN_S && warnedWave !== sim.wave) { warnedWave = sim.wave; notify(`Next horde in ${Math.ceil(left)} s, ${routeNames(sim.upcoming)}.`, true, sim.nextWaveT); }
@@ -1463,12 +1419,6 @@ function draw(now: number) {
     ctx.lineWidth = 2; ctx.setLineDash([5, 3]);
     ctx.strokeRect(cam.x + x0 * s, cam.y + y0 * s, (x1 - x0 + 1) * s, (y1 - y0 + 1) * s); ctx.setLineDash([]);
     if (s > 1.2) label("DEMO", cam.x + (x1 + 1) * s + 4, cam.y + ((y0 + y1) / 2) * s);
-  }
-  // 0.35: tutorial highlight on the map
-  const th = tut && tut.on ? tut.steps[tut.i].highlight : undefined;
-  if (th?.rect) {
-    ctx.strokeStyle = `rgba(250,204,21,${0.55 + 0.45 * Math.sin(now / 250)})`; ctx.lineWidth = 3; ctx.setLineDash([8, 5]);
-    ctx.strokeRect(cam.x + th.rect.x * s, cam.y + th.rect.y * s, th.rect.w * s, th.rect.h * s); ctx.setLineDash([]);
   }
 
   // Agents.
@@ -2473,7 +2423,7 @@ function toolInfoHtml(t: string): { html: string; accent: string } | null {
         (spec.mobile ? `<div><span>Armor / Speed</span><b>${spec.mobile.hp === Infinity ? "Invulnerable" : `${spec.mobile.hp} HP`} · ${(spec.mobile.speed * C.CELL_M).toFixed(1)}m/s</b></div>` : spec.hp ? `<div><span>Armor</span><b>${spec.hp} HP · blocks the street</b></div>` : "") +
         (sim.phase !== "plan" ? `<div><span>Active / Kills</span><b>${activeCount} deployed · ${classKills.toLocaleString()} kills</b></div>` : "") +
       `</div>` +
-      `<div class="ip-tags">${info.specials.map(s => `<div>${s}</div>`).join("")}</div>`,
+      `<div class="ip-tags">${info.specials.map(s => `<div>${withKeys(s)}</div>`).join("")}</div>`,
       spec.color
     );
   }
@@ -2493,7 +2443,7 @@ function toolInfoHtml(t: string): { html: string; accent: string } | null {
         `<div style="grid-column:1/-1"><span>Primary Effect</span><b>${info.effect}</b></div>` +
         (count > 0 ? `<div style="grid-column:1/-1"><span>Active in Zone</span><b>${count} operational</b></div>` : "") +
       `</div>` +
-      `<div class="ip-tags">${info.specials.map(s => `<div>${s}</div>`).join("")}</div>`,
+      `<div class="ip-tags">${info.specials.map(s => `<div>${withKeys(s)}</div>`).join("")}</div>`,
       spec.color
     );
   }
@@ -2615,7 +2565,7 @@ function updateInfoPanel(probe?: [number, number], prefer?: import("./sim").Unit
       `</div>` +
       `<div class="ip-bar"><i style="width:${ammoPct}%;background:${u.supplied ? "#ffb74d" : "#4fc3f7"}"></i></div>` +
       (hpPct !== null ? `<div class="ip-grid"><div style="grid-column:1/-1"><span>Hull / Squad Health</span><b>${Math.max(0, Math.round(u.hp!))} / ${hpMax} HP (${hpPct}%)</b></div></div><div class="ip-bar"><i style="width:${hpPct}%;background:${hpPct > 50 ? "#7cfc9a" : hpPct > 25 ? "#ffd54f" : "#ff5252"}"></i></div>` : "") +
-      `<div class="ip-tags">${(buffs.length ? buffs : [info.specials[0]]).map(s => `<div>${s}</div>`).join("")}</div>`,
+      `<div class="ip-tags">${(buffs.length ? buffs : [info.specials[0]]).map(s => `<div>${withKeys(s)}</div>`).join("")}</div>`,
       spec.color
     );
     return;
@@ -2862,19 +2812,19 @@ function applyVolumes() {
 
 // ---------- Loop ----------
 let acc = 0, last = performance.now(), drawErrors = 0, slowWarned = 0, slowTipShown = false;
-let tutTick = 0;
+let frameTick = 0;
 function frame(now: number) {
   const real = Math.min(0.1, (now - last) / 1000); last = now;
-  if (++tutTick % 10 === 0) stepTut();
-  if (tutTick % 30 === 0) renderGroupbar(); // 0.50: counts and health (about twice a second)
+  if (++frameTick % 30 === 0) renderGroupbar(); // 0.50: counts and health (about twice a second)
   // keyboard panning
   const pan = 600 * real * devicePixelRatio;
   const ord = orderable().length > 0, held = (k: string) => keys.has(k) && cameraKeysActive(k, ord); // 0.45: A/S/D are commands while units are selected
-  if (held("a") || held("arrowleft")) cam.x += pan;
-  if (held("d") || held("arrowright")) cam.x -= pan;
-  if (held("w") || held("arrowup")) cam.y += pan;
-  if (held("s") || held("arrowdown")) cam.y -= pan;
-  if (following && ["a", "d", "w", "s", "arrowleft", "arrowright", "arrowup", "arrowdown"].some(k => keys.has(k))) following = false; // 0.39: panning by hand stops a follow
+  const hb = (id: string) => { const k = keyFor(id); return !!k && held(k); }; // 0.55: the camera bindings (arrows always)
+  if (hb("camera.left") || held("arrowleft")) cam.x += pan;
+  if (hb("camera.right") || held("arrowright")) cam.x -= pan;
+  if (hb("camera.up") || held("arrowup")) cam.y += pan;
+  if (hb("camera.down") || held("arrowdown")) cam.y -= pan;
+  if (following && [keyFor("camera.left"), keyFor("camera.right"), keyFor("camera.up"), keyFor("camera.down"), "arrowleft", "arrowright", "arrowup", "arrowdown"].some(k => !!k && keys.has(k))) following = false; // 0.39: panning by hand stops a follow
   if (mode === "game" && !following && !stack.length && save.settings.edgeScroll && mouse && document.hasFocus()) {
     const m = 6;
     if (mouse[0] <= m) cam.x += pan; else if (mouse[0] >= innerWidth - 1 - m) cam.x -= pan;
@@ -2959,27 +2909,25 @@ function sellAbility(k: C.AbilityKind) { if (sim.sellAbility(k)) { say(`Sold a $
 function buildTile(t: string) {
   const c = toolCard(t)!, img = c.querySelector("img")?.getAttribute("src") ?? "";
   const name = c.querySelector(".tc-name")?.textContent ?? toolName(t), sm = c.querySelector("small")?.textContent ?? "";
-  const hk = c.querySelector(".hk")?.textContent;
-  const hl = tut?.on ? tut.steps[tut.i]?.highlight : undefined, glow = hl?.kind === "tool" && hl.tool === t; // the tutorial points at it
-  const cls = ["btile", c.classList.contains("locked") ? "locked" : "", c.disabled ? "off" : "", tool === t ? "on" : "", glow ? "tut-glow" : ""].join(" ");
+  const hk = keyLabel(keyFor(`build.${t}`)), m = menuOfTool(t), mk = m ? keyLabel(keyFor(`menu.${m}`)) : ""; // 0.55: menu key + letter
+  const cls = ["btile", c.classList.contains("locked") ? "locked" : "", c.disabled ? "off" : "", tool === t ? "on" : "", m && armedMenu === m ? "armed" : ""].join(" ");
   // 0.51.1: picture only; name, hotkey and price or charges show in the hover tooltip (full details in the info panel)
-  return `<button class="${cls}" data-ptool="${t}" data-tip="${esc(name)}" data-tipkey="${hk ?? ""}" data-tipsub="${esc(sm)}"><img src="${img}" alt="${esc(name)}" draggable="false">${hk ? `<span class="hk">${hk}</span>` : ""}</button>`;
+  return `<button class="${cls}" data-ptool="${t}" data-tip="${esc(name)}" data-tipkey="${hk ? (mk ? `${mk} then ${hk}` : hk) : ""}" data-tipsub="${esc(sm)}"><img src="${img}" alt="${esc(name)}" draggable="false">${hk ? `<span class="hk">${hk}</span>` : ""}</button>`;
 }
 /** 0.51: the build panel: category tabs over the open category's tiles (always shown; replaces the pop-up picker). */
 function renderBuild() {
   const bt = buildTabs(catTools, buildCat); buildCat = bt.open;
-  const tabs = bt.cats.map(c => `<button data-cat="${c}"${c === buildCat ? ' class="on"' : ""}>${c}</button>`).join("");
+  const armedCat = armedMenu ? MENU_NAME[armedMenu] : null;
+  const tabs = bt.cats.map(c => { const m = (Object.keys(MENU_NAME) as MenuId[]).find(x => MENU_NAME[x] === c), mk = m ? keyLabel(keyFor(`menu.${m}`)) : "";
+    return `<button data-cat="${c}" class="${[c === buildCat ? "on" : "", c === armedCat ? "armed" : ""].join(" ").trim()}"${mk ? ` title="${mk}"` : ""}>${c}${mk ? ` <span class="tk">${mk}</span>` : ""}</button>`; }).join("");
   const grid = catTools[buildCat].map(buildTile).join("");
   if ($("btabs").innerHTML !== tabs) $("btabs").innerHTML = tabs;
   if ($("bgrid").innerHTML !== grid) $("bgrid").innerHTML = grid;
   if (tipEl) updateTip();
 }
-/** 0.51: the B key: no safe zone yet, pick up the Safe Zone tool; otherwise step through the build tabs. */
-function buildKey() {
-  if (!sim.zones.length && sim.phase === "plan") { setTool("zone"); say("Safe Zone: click the corners, Enter or click the first corner to close it.", 2500); return; }
-  const cats = Object.keys(catTools), i = buildCat ? cats.indexOf(buildCat) : -1;
-  setBuildTab(cats[(i + 1) % cats.length]);
-}
+/** 0.55: the build menu waiting for its letter (null: none). Its tab lights up and its letters turn gold. */
+var armedMenu: MenuId | null = null; // var: newSim/pause can run before this line
+function setMenu(m: MenuId | null) { armedMenu = m; if (m) setBuildTab(MENU_NAME[m]); else renderBuild(); }
 function setBuildTab(cat: string) { if (catTools[cat]) { buildCat = cat; tip("build"); renderBuild(); } }
 /** setTool() calls this: open the tab of the tool picked (a key or a tile) so its tile shows as on. */
 function openCatFor(t: string) { const c = catOf(t); if (c && c !== buildCat) buildCat = c; renderBuild(); }
@@ -3008,20 +2956,107 @@ $("btabs").addEventListener("click", e => { const b = (e.target as HTMLElement).
   });
 }
 
+// 0.54.1: the panels redraw their buttons as the battle changes (squad states, health, prices). A redraw between the
+// press and the release swallowed the click (Chrome sends none once the pressed button is gone). On the release, hand
+// it to the button that now sits under the pointer.
+{
+  const PANEL_BTN = "#hud button, #grouptabs button";
+  let downBtn: HTMLElement | null = null;
+  addEventListener("pointerdown", e => { downBtn = e.button === 0 ? (e.target as HTMLElement).closest?.<HTMLElement>(PANEL_BTN) ?? null : null; }, true);
+  addEventListener("pointerup", e => {
+    const was = downBtn; downBtn = null;
+    if (!was || was.isConnected || e.button !== 0) return; // still there: the browser sends the click itself
+    const b = (document.elementFromPoint(e.clientX, e.clientY) as HTMLElement | null)?.closest<HTMLElement>(PANEL_BTN);
+    if (!b || (b as HTMLButtonElement).disabled) return;
+    b.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, clientX: e.clientX, clientY: e.clientY, shiftKey: e.shiftKey, ctrlKey: e.ctrlKey, altKey: e.altKey }));
+  }, true);
+}
 let dragEndT = 0;
 function dragJustEnded() { return performance.now() - dragEndT < 50; }
 
 // ---- Quick bar (0.19; back in 0.54: 5 slots under the build grid, keys 6-0 by default, every key rebindable). Saved in the profile. ----
 var quick: Slots = cleanQuickbar(save.settings.quickbar, t => buildToolSet().has(t)); // var: refreshUi() can run before this line
-var quickKeys: (string | null)[] = cleanQuickKeys(save.settings.quickKeys);
 var rebindSlot: number | null = null; // a slot waiting for its new key (right-click it, press a key)
 var quickReady = true;
 function buildToolSet() { return new Set(Object.values(catTools).flat()); }
-function storeQuickbar() { save.settings.quickbar = quick; save.settings.quickKeys = quickKeys; Save.store(save); }
+/** 0.55: use these bindings everywhere and save them (only what differs from the defaults). */
+function applyBinds(b: Binds) {
+  setBinds(b);
+  const ov = overrides(b);
+  if (Object.keys(ov).length) save.settings.keys = ov; else delete save.settings.keys;
+  delete save.settings.quickKeys; // folded into settings.keys
+  Save.store(save);
+  labelToolCards(); labelSpeedKeys(); renderHelpKeys(); renderQuickbar(); refreshUi(); codex?.refresh(); // review #4: every key label follows
+}
+/** The context the keyboard is in right now (which actions a key can mean). */
+/** 0.55 review #4: the speed and pause buttons, the Save game button and the slots line show the live keys. */
+function labelSpeedKeys() {
+  const ids: Record<string, string> = { "0.5": "speed.half", "1": "speed.normal", "2": "speed.fast", "0": "pause" };
+  document.querySelectorAll<HTMLElement>("#topctl [data-speed]").forEach(b => { const k = b.querySelector(".k"), lbl = keyLabel(keyFor(ids[b.dataset.speed!] ?? "")); if (k) k.textContent = lbl; b.dataset.key = lbl; });
+  const qs = keyLabel(keyFor("quicksave")), ps = document.getElementById("p-save"), sub = document.getElementById("slots-sub");
+  if (ps) ps.textContent = qs ? `Save game (${qs})` : "Save game";
+  if (sub) sub.textContent = `Each slot is its own player: rank, medals, unlocks and plans, plus one saved battle (${qs ? qs + " or " : ""}Save game in the Esc menu).`;
+}
+function ctxNow(): Ctx { return sel.length ? "selected" : "idle"; }
+function renderHelpKeys() { // the help line under the panel (function scope: applyBinds can run before module consts)
+  const el = document.getElementById("helpkeys"); if (el) el.textContent = withKeys("{key:tool.zone} zone · {key:tool.remove} sell · {key:tool.order} order · {key:tool.pan} move/aim · {key:menu.units} {key:menu.actions} {key:menu.support} build menus · {key:group.1}-{key:group.5} groups · quick bar {key:quick.1}-{key:quick.5} · {key:view.heights} heights · {key:view.ranges} ranges · {key:view.heatmap} heatmap · {key:camera.up}{key:camera.left}{key:camera.down}{key:camera.right} move");
+}
+// ---- 0.55: Settings > Controls: every key settable (rules in keymap.ts bindProblem) ----
+var promptAct: string | null = null; // the action waiting for its new key
+const FIXED_ROWS: [string, string][] = [["Menu / cancel", "Esc"], ["Move the map", "Arrow keys"], ["Close the safe zone", "Enter"], ["Remove the selection", "Delete, Backspace"], ["Select, place, aim", "Left mouse"], ["Move, put a tool down", "Right mouse"]];
+function renderControls() {
+  const list = $("controls-list");
+  let html = "";
+  for (const g of controlsRows(binds())) {
+    html += `<section><h3>${g.group}<button class="greset" data-greset="${esc(g.group)}">Reset</button></h3>`;
+    let sub = "";
+    for (const r of g.rows) {
+      if (r.sub && r.sub !== sub) { sub = r.sub; html += `<h4>${esc(sub)} menu</h4>`; }
+      const wait = promptAct === r.id;
+      html += `<div class="crow"><span>${esc(r.label)}</span><button class="keybox${wait ? " wait" : ""}${!r.key && !wait ? " none" : ""}" data-act="${r.id}">${wait ? "Press a key" : r.key ? esc(r.key) : "none"}</button></div>`;
+    }
+    html += `</section>`;
+  }
+  html += `<section class="fixed"><h3>Fixed keys</h3>${FIXED_ROWS.map(([l, k]) => `<div class="crow"><span>${l}</span><span>${k}</span></div>`).join("")}</section>`;
+  list.innerHTML = html;
+}
+function setControlsMsg(text: string, swapWith?: { id: string; other: string; key: string }) {
+  const m = $("controls-msg"); m.textContent = text;
+  if (swapWith) {
+    const b = document.createElement("button"); b.textContent = "Swap";
+    b.addEventListener("click", () => { // the action takes the key; the other gets the old key if it fits there, else none
+      const b0 = binds(), { id, other, key } = swapWith, nb: Binds = { ...b0, [id]: key, [other]: null }, old = b0[id];
+      if (old && !bindProblem(other, old, nb)) nb[other] = old;
+      applyBinds(nb); promptAct = null; renderControls(); setControlsMsg(nb[other] ? "Swapped." : "Done. The other action has no key now (the old one doesn't fit there).");
+    });
+    m.appendChild(b);
+  }
+}
+$("controls-list").addEventListener("click", e => {
+  const t = e.target as HTMLElement, box = t.closest<HTMLElement>("[data-act]"), gr = t.closest<HTMLElement>("[data-greset]");
+  if (box) { promptAct = promptAct === box.dataset.act ? null : box.dataset.act!; setControlsMsg(promptAct ? "Press the new key (Esc keeps the old one, Backspace clears it)." : ""); renderControls(); }
+  else if (gr) { applyBinds(resetGroup(gr.dataset.greset as Group, binds())); promptAct = null; renderControls(); setControlsMsg(`${gr.dataset.greset}: back to the default keys.`); }
+});
+$("controls-reset").addEventListener("click", () => { applyBinds(defaultBinds()); promptAct = null; renderControls(); setControlsMsg("Every key is back to its default."); });
+// the next key press goes to the action being rebound (captured before everything else, including Esc = Back)
+addEventListener("keydown", e => {
+  if (promptAct === null || $("s-controls").hidden) return;
+  const k = keyOf(e);
+  if (["shift", "control", "alt", "meta"].includes(k)) return; // a modifier on its own: keep waiting
+  e.preventDefault(); e.stopImmediatePropagation();
+  const id = promptAct;
+  if (k === "escape") { promptAct = null; renderControls(); setControlsMsg(""); return; }
+  if (k === "backspace" || k === "delete") { promptAct = null; applyBinds({ ...binds(), [id]: null }); renderControls(); setControlsMsg("Cleared: that action has no key now."); return; }
+  const p = bindProblem(id, k, binds());
+  if (p && !p.other) { setControlsMsg(p.why); return; }
+  if (p && p.other) { setControlsMsg(p.why, p.others?.length === 1 ? { id, other: p.other, key: k } : undefined); return; } // review #1: Swap trades with one action only
+  promptAct = null; applyBinds({ ...binds(), [id]: k }); renderControls(); setControlsMsg(`Set to ${keyLabel(k)}.`);
+}, { capture: true });
+function storeQuickbar() { save.settings.quickbar = quick; Save.store(save); }
 function renderQuickbar() {
   if (!quickReady || typeof quick === "undefined") return;
   document.querySelectorAll<HTMLButtonElement>("#quickbar .qslot").forEach(b => {
-    const i = Number(b.dataset.slot), t = quick[i], c = t ? toolCard(t) : null, key = keyLabel(quickKeys[i]);
+    const i = Number(b.dataset.slot), t = quick[i], c = t ? toolCard(t) : null, key = keyLabel(keyFor(`quick.${i + 1}`));
     b.classList.toggle("full", !!c);
     b.classList.toggle("locked", !!c && (c.classList.contains("locked") || c.disabled));
     b.classList.toggle("on", !!t && tool === t);
@@ -3050,12 +3085,13 @@ document.querySelectorAll<HTMLButtonElement>("#quickbar .qslot").forEach(b => {
 addEventListener("keydown", e => {
   if (rebindSlot === null) return;
   e.preventDefault(); e.stopImmediatePropagation();
-  const i = rebindSlot, k = e.key.toLowerCase();
+  const i = rebindSlot, k = keyOf(e), id = `quick.${i + 1}`;
   if (k === "escape") { rebindSlot = null; renderQuickbar(); return; }
-  if (k === "backspace" || k === "delete") { quickKeys[i] = null; rebindSlot = null; storeQuickbar(); renderQuickbar(); return; }
-  const why = bindProblem(k, i, quickKeys);
-  if (why) { say(why, 2200); return; }
-  quickKeys[i] = k; rebindSlot = null; storeQuickbar(); renderQuickbar(); say(`Slot ${i + 1}: ${keyLabel(k)}.`, 1500);
+  if (k === "backspace" || k === "delete") { rebindSlot = null; applyBinds({ ...binds(), [id]: null }); return; }
+  if (["shift", "control", "alt", "meta"].includes(k)) return; // a modifier on its own: keep waiting
+  const why = bindProblem(id, k, binds()); // 0.55: the same rules as Settings > Controls
+  if (why) { say(why.why, 2200); return; }
+  rebindSlot = null; applyBinds({ ...binds(), [id]: k }); say(`Slot ${i + 1}: ${keyLabel(k)}.`, 1500);
 }, { capture: true });
 // Drag: from a build tile (put it in a slot) or from a slot (swap, or drop off the bar to clear). Pointer events, so
 // the browser and the Windows app behave the same. A drag never counts as a click.
@@ -3140,7 +3176,7 @@ $("startbtn").addEventListener("click", () => {
   if (sim.phase === "plan") startBattle(); else newSim(true);
 });
 $("heatmapbtn").addEventListener("click", () => { showHeatmap = !showHeatmap; refreshUi(); });
-$("end-heatmap").addEventListener("click", () => { showHeatmap = true; $("end").hidden = true; refreshUi(); say("Showing kill heatmap. Press H or Menu when done.", 5000); });
+$("end-heatmap").addEventListener("click", () => { showHeatmap = true; $("end").hidden = true; refreshUi(); say(withKeys("Showing kill heatmap. Press {key:view.heatmap} or Menu when done."), 5000); });
 $("closegates").addEventListener("click", () => { const n = sim.closeAllGates(); buildZone(); log("info", "close-all-gates", { closed: n, t: +sim.time.toFixed(1), phase: sim.phase }); say(n ? (sim.phase === "battle" ? `Closing ${n} gate cells (${C.GATE_CLOSE_S}s).` : "All gates closed.") : "No open gates left."); });
 $("grouptabs").addEventListener("click", e => { // 0.50: click a slot = its key; twice quickly jumps there
   const b = (e.target as HTMLElement).closest<HTMLButtonElement>(".gslot"); if (!b) return;
@@ -3409,7 +3445,6 @@ async function saveGame() {
 }
 /** Bring a battle back from the active slot. It loads paused. */
 async function loadBattle(n: number) {
-  tut = null; showTut(); // 0.35: a loaded battle has no tutorial
   const gz = await Save.readBattle(n);
   if (!gz) { say("No battle saved in this slot.", 3000); return; }
   const meta = await Snap.peek(gz);
@@ -3452,7 +3487,7 @@ async function loadBattle(n: number) {
 /** The slot's profile is now the game's: settings, quick bar and speed follow it. */
 function applyProfile() {
   if (save.xp == null) { save.xp = P.grandfatherXp(save.best); Save.store(save); }
-  quick = cleanQuickbar(save.settings.quickbar, t => buildToolSet().has(t)); quickKeys = cleanQuickKeys(save.settings.quickKeys); renderQuickbar(); // 0.54
+  quick = cleanQuickbar(save.settings.quickbar, t => buildToolSet().has(t)); applyBinds(cleanKeys(save.settings.keys, save.settings.quickKeys)); // 0.54 (0.55: all keys)
   pausedSpeed = save.settings.speed ?? 1;
   showRanges = save.settings.showRanges;
   applyVolumes(); applyFullscreen(); updateDailyButton(); syncDifficultyButtons(); syncDev();
@@ -3531,9 +3566,6 @@ setTool("zone");
 startAttract();
 if (!Save.activeSlot()) go("slots"); // 0.33: first time: pick a slot (an old save is already in Slot 1)
 initUpdater({ save: () => save, go, say, log: (ev, d) => log("info", ev, d), inGame: () => mode === "game" }); // 0.26: Windows app only
-$("p-tutorial").addEventListener("click", () => { resume(); startTut(true); });
-$("tut-next").addEventListener("click", () => { if (tut) { tut.i = Math.min(tut.steps.length - 1, tut.i + 1); tut.t0 = performance.now(); tut.ts0 = sim.time; showTut(); } });
-$("tut-skip").addEventListener("click", () => { if (tut) { tut.on = false; log("info", "tutorial-skip", { step: tut.steps[tut.i].id }); showTut(); } });
 requestAnimationFrame(frame);
 
 // Exposed for automated checks.
@@ -3595,7 +3627,7 @@ if (SHOTS) {
       if (!c) throw new Error(`unknown city ${cityId}`);
       save.plans = {}; save.battle = undefined; // every recipe starts clean: no plan saved by an earlier recipe in this profile
       seedRandom(seedN); playCityNow(c, seedN);
-      tut = null; showTut(); $("timepick").hidden = true; clearTicker();
+      $("timepick").hidden = true; clearTicker();
       startMin = min; sim.setStartTime(min); buildZone(); setTool("pan"); refreshUi();
     },
     run(ops: string[]) { runOps({ apply, step }, ops); },
@@ -3603,4 +3635,4 @@ if (SHOTS) {
     ready: () => mode === "game",
   };
 }
-(window as any).horde = { openCodex, get codex() { return codex; }, get sim() { return sim; }, get mode() { return mode; }, get save() { return save; }, get tut() { return tut; }, cities: C.CITIES, recentLog, click, closeDraft, startBattle, setTool, setSpeed, cam, playCity, startAttract, pause, resume, saveGame, loadBattle, get startMin() { return startMin; }, get selPerson() { return selPerson; }, get following() { return following; } };
+(window as any).horde = { openCodex, get codex() { return codex; }, get sim() { return sim; }, get mode() { return mode; }, get save() { return save; }, cities: C.CITIES, recentLog, click, closeDraft, startBattle, setTool, setSpeed, cam, playCity, startAttract, pause, resume, saveGame, loadBattle, get startMin() { return startMin; }, get selPerson() { return selPerson; }, get following() { return following; } };

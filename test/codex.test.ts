@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { withKeys } from "../src/keymap";
 import { SECTIONS, ENTRIES, allEntries, renderBody, verCmp } from "../src/codex";
 
 // 0.47: How to Play became the Codex. These tests pin its content rules.
@@ -19,7 +20,7 @@ test("renderBody escapes HTML and supports bold, keys, paragraphs", () => {
 test("no em dash, summaries <= 120 chars, versions are semver", () => {
   for (const e of allEntries()) {
     for (const s of [e.title, e.summary, e.body, e.media?.alt ?? ""]) expect(s).not.toContain("—");
-    expect(e.summary.length).toBeLessThanOrEqual(120);
+    expect(withKeys(e.summary).length).toBeLessThanOrEqual(120); // 0.55: as shown (tokens render to keys)
     expect(e.summary.length).toBeGreaterThan(0);
     expect(e.since).toMatch(SEMVER);
     expect(e.updated).toMatch(SEMVER);
@@ -116,9 +117,10 @@ import { padCost } from "../src/scoring";
 const balanced = (s: string) => s.startsWith("<svg") && s.trim().endsWith("</svg>") && (s.match(/<svg/g) ?? []).length === 1;
 
 test("every diagram an entry uses exists, and each is one well-formed svg", () => {
-  for (const e of allEntries()) if (e.media?.kind === "diagram") expect(DIAGRAMS[e.media.id as keyof typeof DIAGRAMS]).toBeDefined();
+  const ds = allEntries().flatMap(e => [...(e.media ? [e.media] : []), ...(e.figs ?? [])]).filter(m => m.kind === "diagram"); // 0.56: figs too
+  for (const m of ds) expect(DIAGRAMS[m.id as keyof typeof DIAGRAMS]).toBeDefined();
   for (const [id, f] of Object.entries(DIAGRAMS)) { const s = f(); expect(balanced(s)).toBe(true); expect(s).not.toContain("—"); expect(id.length).toBeGreaterThan(0); }
-  expect(allEntries().filter(e => e.media?.kind === "diagram").length).toBeGreaterThanOrEqual(5);
+  expect(new Set(ds.map(m => m.id)).size).toBeGreaterThanOrEqual(5);
 });
 
 test("diagrams are drawn from config, not hard-coded", () => {
@@ -292,4 +294,62 @@ test("0.49: squad pages say how many soldiers and the one-per-building rule", ()
 
 test("0.50: no Codex text shows a raw ${...} placeholder", () => {
   for (const e of allEntries()) { expect(e.body).not.toContain("${"); expect(e.summary).not.toContain("${"); }
+});
+
+// ---------- 0.56: figures inside the text, the How to Play section ----------
+test("0.56: figs render in place inside the body", () => {
+  const e = { id: "t", section: "howto", title: "T", summary: "s", body: "a\n\n[[fig:f1]]\n\nb", since: "0.56.0", updated: "0.56.0",
+    figs: [{ kind: "shot", id: "f1", alt: "A zone being drawn" }] } as unknown as CodexEntry;
+  const h = renderEntry(e, opts({ f1: "data:x" }) as any, true);
+  const ia = h.indexOf("<p>a</p>"), fi = h.indexOf('data-media="f1"'), ib = h.indexOf("<p>b</p>");
+  expect(ia).toBeGreaterThan(0); expect(fi).toBeGreaterThan(ia); expect(ib).toBeGreaterThan(fi);
+  expect(h).not.toContain("[[fig:");
+});
+
+test("0.56: every fig token names a fig of its entry and every fig is used once", () => {
+  for (const e of allEntries()) {
+    const used = [...e.body.matchAll(/^\[\[fig:([a-z0-9-]+)\]\]$/gm)].map(m => m[1]);
+    const ids = (e.figs ?? []).map(f => f.id);
+    expect([e.id, used.sort()]).toEqual([e.id, [...ids].sort()]);
+    expect(new Set(used).size).toBe(used.length);
+    for (const f of e.figs ?? []) expect(f.alt.trim().length).toBeGreaterThan(5);
+  }
+});
+
+test("0.56: staleReport checks figs like lead pictures", () => {
+  const e = { id: "t", section: "howto", title: "T", summary: "s", body: "[[fig:nope-fig]]", since: "0.56.0", updated: "0.56.0",
+    figs: [{ kind: "shot", id: "nope-fig", alt: "Nothing here" }] } as unknown as CodexEntry;
+  expect(staleReport([], {}, [e], () => false)).toEqual([{ id: "nope-fig", why: "no-recipe" }]);
+});
+
+test("0.56: How to Play is the first section and opens by default", async () => {
+  const { SECTIONS } = await import("../src/codex");
+  expect(SECTIONS[0]).toEqual({ id: "howto", title: "How to Play" });
+});
+
+test("0.56: search finds a fig caption", () => {
+  const e = { id: "t", section: "howto", title: "T", summary: "s", body: "[[fig:f9]]", since: "0.56.0", updated: "0.56.0",
+    figs: [{ kind: "shot", id: "f9", alt: "Zebracrossing picture" }] } as unknown as CodexEntry;
+  expect(filterEntries("zebracrossing", [e]).length).toBe(1);
+});
+
+test("0.56 review #1: no raw [[fig: token survives rendering in any entry", () => {
+  const media = Object.fromEntries(allEntries().flatMap(e => [...(e.media ? [e.media] : []), ...(e.figs ?? [])]).map(m => [m.id, "data:x"]));
+  for (const e of allEntries()) expect([e.id, renderEntry(e, opts(media) as any, true).includes("[[fig:")]).toEqual([e.id, false]);
+});
+
+test("0.56 review #2: lead pictures render keys live too", () => {
+  const K = require("../src/keymap");
+  K.setBinds({ ...K.defaultBinds(), "order.target": "o" });
+  try {
+    const e = allEntries().find(x => x.id === "target-delete")!;
+    const h = renderEntry(e, opts({ [e.media!.id]: "data:x" }) as any, true);
+    expect(h).not.toContain("{key:"); expect(h).toContain("Target (O)");
+  } finally { K.setBinds(K.defaultBinds()); }
+});
+
+test("0.56 review #3: How to Play is added to the open sections once, not on every render", () => {
+  const src = require("fs").readFileSync(import.meta.dir + "/../src/codexui.ts", "utf8") as string;
+  const render = src.slice(src.indexOf("const render = () => {"), src.indexOf("const render = () => {") + 600);
+  expect(render).not.toContain('openSet.add("howto")');
 });

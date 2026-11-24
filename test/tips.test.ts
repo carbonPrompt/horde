@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { withKeys } from "../src/keymap";
 import { TIPS, TIP_IDS, shouldTip } from "../src/tips";
 import { clean } from "../src/save";
 
@@ -6,16 +7,15 @@ test("0.41: every tip has short plain text", () => {
   expect(TIP_IDS.length).toBeGreaterThanOrEqual(10);
   for (const id of TIP_IDS) {
     expect(TIPS[id].length).toBeGreaterThan(10);
-    expect(TIPS[id].length).toBeLessThanOrEqual(170); // fits the ticker
+    expect(withKeys(TIPS[id]).length).toBeLessThanOrEqual(170); // fits the ticker (0.55: as shown)
     expect(TIPS[id]).not.toMatch(/—/);
   }
 });
 
-test("0.41: a tip shows once per save, never under the tutorial, never with tips off", () => {
-  expect(shouldTip("horde", [], false, true)).toBe(true);
-  expect(shouldTip("horde", ["horde"], false, true)).toBe(false);
-  expect(shouldTip("horde", [], true, true)).toBe(false);
-  expect(shouldTip("horde", [], false, false)).toBe(false);
+test("0.41: a tip shows once per save, never with tips off (0.56: no tutorial to wait for)", () => {
+  expect(shouldTip("horde", [], true)).toBe(true);
+  expect(shouldTip("horde", ["horde"], true)).toBe(false);
+  expect(shouldTip("horde", [], false)).toBe(false);
 });
 
 test("0.41: save keeps the tips switch and the seen list, drops junk", () => {

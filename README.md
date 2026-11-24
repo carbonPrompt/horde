@@ -27,19 +27,23 @@ every release, and Settings can install updates automatically. Your save is back
   colored ring that fires on its own. Right-click a roof and Troops climb up and dig in behind a sandbag fort, out of
   reach of the infected; right-click a street and they come down and fight as a fire team. Lost soldiers can be
   replaced mid-battle.
-- **Command.** A classic RTS bottom panel: minimap, info card, selection, build tabs and the selected units' orders,
-  every button a picture with its hotkey (hover for name, key and price). WASD always moves the camera; orders sit
-  around it (Q attack-move, R patrol, E escort, F stop, G stand by, C fortify), map tools on Z X C V. Battle groups:
-  Ctrl+1 to Ctrl+5 saves a group (or a safe zone), the number selects it and twice jumps there, shown as tabs with
-  unit pictures. Keys 6 to 0 are a quick bar you fill by dragging build tiles, and any slot can be rebound. Select
-  units with a click or a dragged box: right-click to move (they shoot what's in range on the way and never get
-  dragged off chasing), Shift to queue. The cursor label tells you what's under it and what things cost. The AC-130
-  flies in from the map edge, picks its 25 mm, 40 mm or 105 mm gun by target, and can be sent to a new spot or home.
+- **Command.** A classic RTS bottom panel: minimap, info card, selection, three build menus (Units, Actions,
+  Support) and the selected units' orders, every button a picture with its key (hover for name, key and price). Buy
+  without the mouse: B, M or Y opens a menu, then the item's letter (B then K is a tank). WASD always moves the
+  camera; orders sit around it (Q attack-move, R patrol, E escort, F stop, G stand by, C fortify), map tools on Z X C V.
+  Every key can be changed on the Controls page in Settings. Battle groups: Ctrl+1 to Ctrl+5 saves a group (or a safe
+  zone), the number selects it and twice jumps there, shown as tabs with unit pictures. Keys 6 to 0 are a quick bar you
+  fill by dragging build tiles. Select units with a click or a dragged box: right-click to move (they shoot what's in
+  range on the way and never get dragged off chasing), Shift to queue. The cursor label tells you what's under it and
+  what things cost. The AC-130 flies in from the map edge, picks its 25 mm, 40 mm or 105 mm gun by target, and can be
+  sent to a new spot or home.
 - **People.** Every dot is a person with a family and a story: some go home first to gather their kids, some carry
   guns, a few refuse to leave until a unit talks them out.
 - **Round end.** The round ends when everyone left alive is out. You get a score out of 100 (people saved, speed,
   city intact, zombies killed) and a medal. Then keep fighting endless, harder hordes for a Mayhem score, or end there.
-- **Codex.** How to Play is a searchable codex: every rule, key and unit with pictures, short clips and diagrams.
+- **Codex.** The game's manual. It opens on How to Play: one full round in twelve illustrated chapters, from
+  placing your first zone to the medal. Then a searchable reference for every rule, key and unit with pictures, short
+  clips and diagrams, and every key shown is the one you set. There is no tutorial; read as much as you like.
   Unit, strike and building pages come straight from the game's stats, so they stay current (mods included).
 
 Units take up real space: tanks and turrets block streets, infected claw at them like walls, and tanks and APCs

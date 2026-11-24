@@ -17,7 +17,7 @@ export type Water =
  *  `avenue` wide. */
 export interface Grid { block: [number, number]; street: number; avenueEvery: number; avenue: number }
 
-/** A candidate safe-zone centre and radius, in cells. Never shown to the player (except the tutorial's). */
+/** A candidate safe-zone centre and radius, in cells. Never shown to the player. */
 export interface Stand { name: string; x: number; y: number; r: number }
 
 export interface CityRecipe {

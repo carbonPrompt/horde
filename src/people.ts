@@ -40,8 +40,8 @@ export const START_CHOICES: { id: StartId; label: string; min: number }[] = [
   { id: "evening", label: "Evening", min: 1050 },
   { id: "night", label: "Night", min: 1380 },
 ];
-/** The time picker comes up after choosing a city, except in the tutorial and the title screen's attract mode. */
-export function needsTimePick(tutorialActive: boolean, attract: boolean): boolean { return !tutorialActive && !attract; }
+/** The time picker comes up after choosing a city, except in the title screen's attract mode. */
+export function needsTimePick(attract: boolean): boolean { return !attract; }
 /** A random start time (whole minute), the same for the same seed. */
 export function randomStart(seed: number): number { return hash32(seed, 0x5157, 7) % 1440; }
 

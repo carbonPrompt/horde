@@ -446,7 +446,7 @@ test("0.41: a class waits a moment for the teachers, then leaves together", () =
 }, 120000);
 
 // ---------- 0.41 review fixes ----------
-test("0.41 review: open gates for the tutorial count only intact gates that aren't already swinging shut", () => {
+test("0.41 review: open gates count only intact gates that aren't already swinging shut", () => {
   const s = pike(600, 3000); s.startBattle();
   expect(s.openGateCells()).toBeGreaterThan(0);
   let g = -1; for (let i = 0; i < s.inZone.length && g < 0; i++) if (s.inZone[i] === 3) g = i;

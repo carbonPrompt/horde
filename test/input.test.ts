@@ -42,18 +42,27 @@ test("0.54: groupIntent: groups are 1-5 (Ctrl assigns, Shift+Ctrl adds, plain se
   expect(groupIntent("a", m())).toBeNull();
 });
 
-test("0.54: the key map: quick bar keys 6-0 by default, rebinding refuses taken keys, tools and orders all keyed", () => {
+test("0.54/0.55: the key map: quick bar 6-0, orders and tools keyed, none on WASD", () => {
   const K = require("../src/keymap");
-  expect(K.QUICK_DEFAULT_KEYS).toEqual(["6", "7", "8", "9", "0"]);
-  expect(K.cleanQuickKeys(undefined)).toEqual(["6", "7", "8", "9", "0"]);
-  expect(K.cleanQuickKeys(["i", "o", "i", "w", null, "y"])).toEqual(["i", "o", null, null, null]); // dupes and WASD dropped, 5 slots
-  expect(K.bindProblem("w", 0, [null])).toMatch(/already used/);
-  expect(K.bindProblem("6", 1, ["6", null])).toMatch(/slot 1/);
-  expect(K.bindProblem("i", 0, [null])).toBeNull();
-  expect(K.bindProblem("f7", 0, [null])).toBeNull();
-  expect(K.bindProblem("f1", 0, [null])).not.toBeNull();
-  expect(K.keyLabel("f7")).toBe("F7"); expect(K.keyLabel(",")).toBe(",");
-  for (const k of [...Object.values(K.ORDER_KEYS), ...Object.values(K.TOOL_KEYS)]) expect(["w", "a", "s", "d"]).not.toContain(k);
-  const main = require("fs").readFileSync(import.meta.dir + "/../src/main.ts", "utf8") as string;
-  expect(main).toContain("else if (kl === TOOL_KEYS.build) buildKey();");
+  const d = K.defaultBinds();
+  expect([1, 2, 3, 4, 5].map(n => d[`quick.${n}`])).toEqual(["6", "7", "8", "9", "0"]);
+  expect(K.keyLabel("f7")).toBe("F7"); expect(K.keyLabel(",")).toBe(","); expect(K.keyLabel(" ")).toBe("Space");
+  for (const a of K.ACTIONS) if (a.id.startsWith("order.") || a.id.startsWith("tool.")) { expect(a.key).toBeTruthy(); expect(["w", "a", "s", "d"]).not.toContain(a.key); }
+});
+
+test("0.55: keys follow the bindings (orders, camera, groups)", () => {
+  const K = require("../src/keymap");
+  const none = { shift: false, ctrl: false, alt: false };
+  K.setBinds({ ...K.defaultBinds(), "order.amove": "i", "camera.up": "o", "group.1": "z" });
+  try {
+    expect(keyIntent("i", none, true)).toEqual({ k: "arm", cmd: "amove" });
+    expect(keyIntent("q", none, true)).toBeNull();
+    expect(cameraKeysActive("o", false)).toBe(true);
+    expect(cameraKeysActive("w", false)).toBe(false);
+    expect(cameraKeysActive("arrowup", false)).toBe(true);
+    expect(groupIntent("z", none)).toEqual({ k: "select", n: 0 });
+    expect(groupIntent("z", { ...none, ctrl: true })).toEqual({ k: "assign", n: 0 });
+    expect(groupIntent("1", none)).toBeNull();
+    expect(groupIntent("2", none)).toEqual({ k: "select", n: 1 });
+  } finally { K.setBinds(K.defaultBinds()); }
 });

@@ -14,7 +14,6 @@ export const RECIPES: Recipe[] = [
   // ---------- stills ----------
   { ...FH, id: "battle-overview", kind: "shot", camera: { x: 191, y: 118, scale: 2.4 }, crop: MAP, setup: BATTLE(60) },
   { ...FH, id: "start-cursor-label", kind: "shot", camera: { x: 186, y: 92, scale: 6 }, crop: MAP, setup: [ZONE, "tool sniper", "hover 186,78"] },
-  { ...FH, id: "start-heights", kind: "shot", camera: { x: 191, y: 100, scale: 4.5 }, crop: MAP, setup: [...BASE, "key j"] },
   { ...FH, id: "units-ranges", kind: "shot", camera: { x: 182, y: 84, scale: 6 }, crop: MAP, setup: [...BASE, "key r"] },
   { ...FH, id: "battle-horde-arrow", kind: "shot", camera: { x: 200, y: 150, scale: 1.55 }, crop: MAP, setup: BATTLE(50) },
   { ...FH, id: "battle-money-bar", kind: "shot", camera: { x: 191, y: 106, scale: 4 }, crop: [0, 0, 700, 76], setup: BATTLE(30) },
@@ -52,4 +51,25 @@ export const RECIPES: Recipe[] = [
   { ...FH, id: "clip-c4-bridge", kind: "clip", camera: { x: 200, y: 176, scale: 5 }, crop: MAP, seconds: 5,
     setup: [...BASE, "place c4 200,178", "battle", "advance 20"],
     action: ["tool c4", "click 200,178", "advance 4.5"] },
+  // ---------- 0.56: How to Play, chapters 1-6 (planning), one Fairhaven round ----------
+  { ...FH, id: "howto-1-plan", kind: "shot", camera: { x: 191, y: 106, scale: 3.2 }, setup: [...BASE, "place apc 200,118", "cursor off"] },
+  { ...FH, id: "howto-1-battle", kind: "shot", camera: { x: 191, y: 112, scale: 2.2 }, crop: MAP, setup: [...BASE, "battle", "advance 75", "cursor off"] },
+  { ...FH, id: "howto-2-night", kind: "shot", startMin: 1380, camera: { x: 200, y: 130, scale: 2.4 }, crop: MAP, setup: ["cursor off"] },
+  { ...FH, id: "howto-2-day", kind: "shot", startMin: 600, camera: { x: 200, y: 130, scale: 2.4 }, crop: MAP, setup: ["cursor off"] },
+  { ...FH, id: "howto-3-map", kind: "shot", camera: { x: 200, y: 130, scale: 2.4 }, crop: MAP, setup: ["cursor off"] },
+  { ...FH, id: "howto-3-heights", kind: "shot", camera: { x: 191, y: 106, scale: 3.2 }, crop: MAP, setup: ["key j", "cursor off"] },
+  { ...FH, id: "howto-4-good", kind: "shot", camera: { x: 191, y: 106, scale: 3.6 }, crop: MAP, setup: [ZONE, "tool zone", "hover 191,106"] },
+  { ...FH, id: "howto-4-big", kind: "shot", camera: { x: 191, y: 112, scale: 2.2 }, crop: [0, 0, 960, 352], setup: ["zone 120,60 270,60 270,165 120,165", "cursor off"] },
+  { ...FH, id: "howto-5-gates", kind: "shot", camera: { x: 212, y: 104, scale: 8 }, crop: MAP, setup: [ZONE, "gate 217,98", "cursor off"] },
+  { ...FH, id: "howto-6-ranges", kind: "shot", camera: { x: 186, y: 100, scale: 3.4 }, crop: MAP, setup: [...BASE, "key n", "cursor off"] },
+  { ...FH, id: "howto-6-sniper", kind: "shot", camera: { x: 186, y: 88, scale: 6 }, crop: MAP, setup: [ZONE, "tool sniper", "hover 186,78"] },
+  // ---------- 0.56: How to Play, chapters 7-12 (the battle) ----------
+  { ...FH, id: "howto-7-streets", kind: "shot", camera: { x: 214, y: 100, scale: 5 }, crop: MAP, setup: [ZONE, "place turret 223,98", "place tank 223,112", "place apc 200,118", "cursor off"] },
+  { ...FH, id: "howto-8-padcost", kind: "shot", camera: { x: 191, y: 108, scale: 4.5 }, crop: MAP, setup: [ZONE, "place evac 191,106", "place evac 205,120", "tool evac", "hover 178,120"] },
+  { ...FH, id: "howto-9-alert", kind: "clip", camera: { x: 191, y: 110, scale: 2.6 }, crop: MAP, seconds: 6, setup: [...BASE, "battle", "advance 4"], action: ["advance 6"] },
+  { ...FH, id: "howto-10-late", kind: "shot", camera: { x: 191, y: 110, scale: 2.6 }, crop: MAP, setup: [...BASE, "battle", "advance 100", "cursor off"] },
+  { ...FH, id: "howto-10-locked", kind: "shot", camera: { x: 191, y: 110, scale: 2.6 }, crop: MAP, setup: [...BASE, "battle", "advance 45", "key l", "advance 55", "cursor off"] },
+  { ...FH, id: "howto-11-menu", kind: "shot", camera: { x: 191, y: 106, scale: 4 }, crop: [480, 350, 480, 168], setup: [...BASE, "battle", "advance 5", "key b", "cursor off"] },
+  { ...FH, id: "howto-11-nofire", kind: "shot", camera: { x: 191, y: 112, scale: 4 }, crop: MAP, setup: [...BASE, "ability airstrike", "battle", "advance 20", "tool airstrike", "hover 191,124"] },
+  { ...FH, id: "howto-12-pause", kind: "shot", camera: { x: 191, y: 106, scale: 3 }, setup: [...BASE, "battle", "advance 10", "key Escape", "cursor off"] },
 ];
