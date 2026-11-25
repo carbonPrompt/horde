@@ -4,6 +4,7 @@ const path = require("path");
 
 if (!app.requestSingleInstanceLock()) app.quit();
 let win = null;
+let closingOk = false; // 0.57: the page has had its chance to save before the window goes
 
 // ---------- Log file: %APPDATA%\Horde\logs\horde-YYYY-MM-DD.log, newest 14 kept ----------
 const fs = require("fs");
@@ -41,6 +42,13 @@ function create() {
   wc.on("render-process-gone", (_e, d) => { mlog("ERROR", "renderer-gone", d); if (d.reason !== "clean-exit") setTimeout(() => win && !win.isDestroyed() && win.reload(), 1000); });
   wc.on("did-fail-load", (_e, code, desc) => mlog("ERROR", "load-failed", { code, desc }));
   wc.on("preload-error", (_e, p, err) => mlog("ERROR", "preload-error", { stack: String(err && err.stack) }));
+  // 0.57 review: closing the window (X, Alt+F4) lets the page record a battle in progress first (it quits when done; 4 s at most)
+  win.on("close", e => {
+    if (closingOk) return;
+    e.preventDefault(); closingOk = true;
+    try { win.webContents.send("app-closing"); } catch { /* page gone */ }
+    setTimeout(() => { if (win && !win.isDestroyed()) win.destroy(); }, 4000);
+  });
   win.on("unresponsive", () => mlog("WARN", "window-unresponsive"));
   win.on("responsive", () => mlog("INFO", "window-responsive"));
 }
@@ -107,7 +115,7 @@ ipcMain.on("slot-delete", (e, n) => {
     const dir = path.join(savesDir(), "deleted"), stamp = new Date().toISOString().replace(/[-:]/g, "").replace("T", "-").slice(0, 15);
     try {
       fs.mkdirSync(dir, { recursive: true });
-      for (const ext of ["json", "battle"]) if (fs.existsSync(slotFile(n, ext))) fs.renameSync(slotFile(n, ext), path.join(dir, `slot${n}-${stamp}.${ext}`));
+      for (const ext of ["json", "battle", "history.json"]) if (fs.existsSync(slotFile(n, ext))) fs.renameSync(slotFile(n, ext), path.join(dir, `slot${n}-${stamp}.${ext}`));
       if (activeSlot === n) { activeSlot = null; writeAtomic(path.join(savesDir(), "slots.json"), JSON.stringify({ active: null })); }
       mlog("INFO", "slot-delete", { n });
     } catch (err) { mlog("ERROR", "slot-delete", { stack: String(err && err.stack) }); }
@@ -122,6 +130,31 @@ ipcMain.handle("battle-write", async (_e, n, bytes) => {
 ipcMain.handle("battle-read", async (_e, n) => {
   if (!okSlot(n)) return null;
   try { return new Uint8Array(await fs.promises.readFile(slotFile(n, "battle"))); } catch { return null; }
+});
+// 0.57: the slot's battle history (JSON text from the page, cleaned there on read). Writes for a slot run one after
+// another (tmp + rename), so two quick writes can't interleave.
+const historyQueue = {};
+ipcMain.handle("history-write", (_e, n, text) => {
+  if (!okSlot(n) || typeof text !== "string" || text.length > 64e6) return false;
+  const f = slotFile(n, "history.json");
+  const run = async () => { // tmp + fsync + rename: a power cut leaves the old file or the new one, never an empty one
+    try { const fh = await fs.promises.open(f + ".tmp", "w"); try { await fh.writeFile(text); await fh.sync(); } finally { await fh.close(); } await fs.promises.rename(f + ".tmp", f); return true; }
+    catch (err) { mlog("ERROR", "history-write", { stack: String(err && err.stack) }); return false; }
+  };
+  return (historyQueue[n] = (historyQueue[n] || Promise.resolve()).then(run, run));
+});
+// 0.57 review: "no file yet" and "could not read it" are different answers (a read error must never become an empty history)
+ipcMain.handle("history-read", async (_e, n) => {
+  if (!okSlot(n)) return { error: "bad slot" };
+  try { return { text: await fs.promises.readFile(slotFile(n, "history.json"), "utf8") }; }
+  catch (err) { return err && err.code === "ENOENT" ? { missing: true } : { error: String((err && err.code) || err) }; }
+});
+// a damaged history file (not JSON) is renamed aside, never deleted, so it can be repaired by hand
+ipcMain.handle("history-quarantine", async (_e, n) => {
+  if (!okSlot(n)) return false;
+  const stamp = new Date().toISOString().replace(/[-:]/g, "").replace("T", "-").slice(0, 15);
+  try { await fs.promises.rename(slotFile(n, "history.json"), slotFile(n, `history.damaged-${stamp}.json`)); mlog("WARN", "history-quarantined", { n, stamp }); return true; }
+  catch (err) { mlog("ERROR", "history-quarantine", { stack: String(err && err.stack) }); return false; }
 });
 ipcMain.on("battle-delete", (e, n) => { if (okSlot(n)) try { fs.rmSync(slotFile(n, "battle"), { force: true }); } catch { /* gone */ } e.returnValue = true; });
 ipcMain.on("open-saves", () => { fs.mkdirSync(savesDir(), { recursive: true }); shell.openPath(savesDir()); });
@@ -173,7 +206,7 @@ ipcMain.on("backup-restore", (e, name) => {
 ipcMain.on("app-version", e => { e.returnValue = app.getVersion(); });
 ipcMain.on("open-releases", () => shell.openExternal(`https://github.com/${updates.REPO}/releases`));
 ipcMain.on("fullscreen", (_e, on) => { if (win) win.setFullScreen(!!on); });
-ipcMain.on("quit", () => { mlog("INFO", "quit"); app.quit(); });
+ipcMain.on("quit", () => { mlog("INFO", "quit"); closingOk = true; app.quit(); });
 app.on("second-instance", () => { if (win) { if (win.isMinimized()) win.restore(); win.focus(); } });
 app.whenReady().then(async () => {
   pruneLogs();

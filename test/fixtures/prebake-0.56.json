@@ -1,0 +1,26 @@
+{
+ "castle-rock": {
+  "overview": "35c33923218fdd5b8bdf65f28766dae02103862bdda357d5dca92c58de6b3366",
+  "areas": {
+   "downtown-and-wilcox-street": "256aa2eb1ef7646d7b07a256f668d3ab3f4a984ffca98e38c64b69a11516c907",
+   "festival-park-and-plum-creek": "6ee4b6624de655b5ce2d1f8fadcf73d50e42cdc5f7c64afdd11fb607d2f93e53",
+   "rock-park": "c8357e604fcece754d06c2bfdedc31db2ec069492a5b4cdaa817235fb800d49b",
+   "founders-parkway": "41d84526cee25831bbea18bd43b54edf49a0d966b1146e67d57ead9ae8a10962",
+   "the-meadows": "071b383986b40bd16a536f29aa0b40f2638f5d53ba38ef459de1f2859cbe1042",
+   "metzler-ranch": "3ddf5116da175ef07e6f3487dfedcb869c959ad22dc2dbca879eeddbb67aaa89"
+  }
+ },
+ "manhattan": {
+  "overview": "b4d45575c634264a8639aff1c14fda9f373f933b30613134155ea1b4d7d04de1",
+  "areas": {
+   "lower-manhattan-and-brooklyn-bridge": "71d4233dd9d6aad3670f22a2accc23cb18a50d63291177071eff7136cfdd286c",
+   "midtown-and-times-square": "f47bab6d7e6bc5569c6511ff10ccd77fe696e2f633db11f74ead6af1eb0541ec",
+   "central-park-south": "eefa97dfcaabef882794d9770c1535ddd32b776a0f0799807f6a3d37a3337c7e",
+   "harlem-and-the-upper-park": "dd5c3374bdcd44bbbef73187a0dea56f70eb7abc9a7e06da14dd6a66b44b7594",
+   "downtown-brooklyn-and-dumbo": "abe792087b786215ac180da4c22f0d4ba3d1aca26ff2169c596bdacb1c1761dd",
+   "long-island-city": "3ff57e7359e9511f6e997357d5d05b5d8dbc70cbadfa4db421bbd737d2b03b8d",
+   "yankee-stadium": "2272ac3b3358066a68e63c9080efa987a56756674f393f2dfd43f77d16bb55f2",
+   "st-george-staten-island": "c138770006b6e1c2fd188f782d94b4831ce1bf93f3a2d947cbe0c45f46b07ab6"
+  }
+ }
+}

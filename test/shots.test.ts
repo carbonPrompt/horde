@@ -117,3 +117,9 @@ test("0.51 review I5/I6: map crops end above the bottom panel; the minimap-alert
   const codex = require("fs").readFileSync(import.meta.dir + "/../src/codex.ts", "utf8") as string;
   expect(codex).not.toMatch(/selection bar/i);
 });
+
+test("0.57: endround and report ops parse; a bad report tab is refused", () => {
+  expect(parseOp("endround")).toEqual({ op: "endround" });
+  expect(parseOp("report town")).toEqual({ op: "report", tab: "town" });
+  expect(() => parseOp("report nowhere")).toThrow(/bad shot op/);
+});

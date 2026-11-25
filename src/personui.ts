@@ -2,7 +2,8 @@
 import * as C from "./config";
 import { Sim, CIV, INF, SAFE_CIV } from "./sim";
 import { PARK, INFRA_STATION } from "./map";
-import { personOf, storyLine, clockMin, formatClock, EV_EVAC, PLACE_WORDS, PLAN_GATHER, PLAN_HOME_WAIT, PLAN_MEET, PLAN_FOLLOW, PLAN_CLASS, PLAN_REFUSE, PLAN_GO_BACK, FATE_EVAC, FATE_TURNED, FATE_CRUSHED, FATE_KILLED_BY_US, FATE_FRIENDLY_FIRE, type Person } from "./people";
+import type { Places } from "./places";
+import { personOf, storyLine, clockMin, formatClock, EV_EVAC, PLACE_WORDS, PL_HOME, PLAN_GATHER, PLAN_HOME_WAIT, PLAN_MEET, PLAN_FOLLOW, PLAN_CLASS, PLAN_REFUSE, PLAN_GO_BACK, FATE_EVAC, FATE_TURNED, FATE_CRUSHED, FATE_KILLED_BY_US, FATE_FRIENDLY_FIRE, type Person } from "./people";
 
 const esc = (t: string) => t.replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]!));
 
@@ -56,8 +57,11 @@ export function planWords(sim: Sim, k: number): string {
   return "";
 }
 
-function whereStarted(sim: Sim, k: number): string {
-  if (sim.dayLife) return PLACE_WORDS[sim.dayPlace[k]] ?? "out"; // 0.40
+function whereStarted(sim: Sim, k: number, places?: Places): string {
+  if (sim.dayLife) { // 0.40; 0.57: home names its street when the map has one
+    const w = PLACE_WORDS[sim.dayPlace[k]] ?? "out", st = sim.dayPlace[k] === PL_HOME ? places?.streetNear(sim.homeCell[k]) : null;
+    return st ? `${w} on ${st}` : w;
+  }
   const c = sim.startCell[k], hc = sim.homeCell[k];
   if (c < 0) return "out";
   // household members stand around the doorstep, so the cells next to home count as home
@@ -71,7 +75,7 @@ function whereStarted(sim: Sim, k: number): string {
 const ROLE: Record<Person["role"], string> = { head: "Head of household", partner: "Partner", child: "Child", elder: "Grandparent", single: "Lives alone" };
 
 /** The whole window for person k. Family names carry data-k (click to switch); Follow is data-act="follow". */
-export function personHtml(sim: Sim, k: number, following = false): string {
+export function personHtml(sim: Sim, k: number, following = false, places?: Places): string {
   const p = personAt(sim, k);
   if (!p) return `<div class="pw-head"><span class="pw-name">Nobody there</span><button data-act="close" title="Esc">Close</button></div>`;
   const st = personState(sim, k);
@@ -85,7 +89,7 @@ export function personHtml(sim: Sim, k: number, following = false): string {
   const wid = sim.civWep[k] as C.CivWeaponId;
   const wep = wid ? C.CIV_WEAPONS[wid] : null;
   const clock = (t: number) => formatClock(clockMin(sim.startMin, t));
-  const lines = [`<li><b>${clock(0)}</b> ${whereStarted(sim, k)} when the sirens went off</li>`];
+  const lines = [`<li><b>${clock(0)}</b> ${esc(whereStarted(sim, k, places))} when the sirens went off</li>`];
   const nameOf = (m: number) => personAt(sim, m)?.first ?? "family";
   for (const e of sim.storyOf(k)) lines.push(`<li><b>${clock(e.t)}</b> ${esc(storyLine(e.code, e.arg, nameOf))}</li>`);
   if (st.text === "Dead" && sim.fate[k] === 0) lines.push(`<li>died</li>`);

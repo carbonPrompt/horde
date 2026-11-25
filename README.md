@@ -41,6 +41,10 @@ every release, and Settings can install updates automatically. Your save is back
   guns, a few refuse to leave until a unit talks them out.
 - **Round end.** The round ends when everyone left alive is out. You get a score out of 100 (people saved, speed,
   city intact, zombies killed) and a medal. Then keep fighting endless, harder hordes for a Mayhem score, or end there.
+- **After-action report.** The end screen charts the battle minute by minute, lists every unit and strike with its
+  kills, and tells the town's story: which families got out together, who was lost, the people who refused to leave,
+  and a dozen short stories taken from what really happened to them. Every battle is kept in your save slot's history,
+  with career totals.
 - **Codex.** The game's manual. It opens on How to Play: one full round in twelve illustrated chapters, from
   placing your first zone to the medal. Then a searchable reference for every rule, key and unit with pictures, short
   clips and diagrams, and every key shown is the one you set. There is no tutorial; read as much as you like.

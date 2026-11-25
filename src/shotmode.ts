@@ -18,7 +18,9 @@ export type ShotOp =
   | { op: "hover"; x: number; y: number } // where the cursor (and its label) sits
   | { op: "person"; x: number; y: number } // selects the person nearest (x, y), opening their window
   | { op: "cursor"; on: false } // hides the pointer (and the hover panel) for a clean still
-  | { op: "camera"; x: number; y: number; scale: number }; // centers on (x, y) at a zoom
+  | { op: "camera"; x: number; y: number; scale: number } // centers on (x, y) at a zoom
+  | { op: "endround" } // 0.57: End round now (the after-action report opens)
+  | { op: "report"; tab: string }; // 0.57: picks a tab of the after-action report
 
 export interface ShotApi { apply(op: ShotOp): void; step(seconds: number): void }
 
@@ -48,6 +50,8 @@ export function parseOp(line: string): ShotOp {
     case "tool": return a.length === 1 ? { op, tool: a[0] } : bad(line);
     case "cursor": return a.length === 1 && a[0] === "off" ? { op, on: false } : bad(line);
     case "camera": { if (a.length !== 2) bad(line); const [x, y] = pt(a[0], line); return { op, x, y, scale: num(a[1], line) }; }
+    case "endround": return a.length === 0 ? { op } : bad(line);
+    case "report": return a.length === 1 && ["overview", "timeline", "units", "strikes", "town", "money", "heatmap"].includes(a[0]) ? { op, tab: a[0] } : bad(line);
     default: return bad(line);
   }
 }

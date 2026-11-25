@@ -10,6 +10,8 @@ import { EV_SAFE, EV_EVAC, EV_TURNED, EV_CRUSHED, EV_KILLED_BY_US, EV_FRIENDLY_F
   PLAN_GO_BACK, EV_SAW_TURN, EV_FROZE, EV_GO_BACK, EV_GRIEF_STAY } from "./people";
 import { padCost, roundParts, roundScore, medalFor, mayhem, savedPct, type RoundParts } from "./scoring";
 import { heat, rollGap, rollSize, routesFor } from "./storyteller";
+import * as St from "./stats";
+import type { OtherKill } from "./stats";
 import { BRIDGE, BUILDING, CityMap, ROAD, INFRA_HIGHWAY, INFRA_RAIL, INFRA_STATION, PARK, WATER, extractRailLines, generateCity, rng, walkable } from "./map";
 import { decodeCityMap } from "./osm";
 import { navOf } from "./nav";
@@ -67,6 +69,7 @@ export interface Unit {
   cooldown2?: number; // second gun (APC autocannon)
   kiting?: boolean; // backing away from infected while firing
   kills: number;
+  sid?: number; // 0.57: the recorder's index for this unit
   shotX: number; shotY: number; shotT: number; // last shot, for tracers
   mode?: C.TargetMode;
   paid?: number;
@@ -101,9 +104,9 @@ export type Phase = "plan" | "battle" | "over";
 export type Entity = { unit: Unit } | { support: Support } | { orbit: Orbit };
 
 /** Something scheduled to happen at battle time `at` (airstrike bombs, fire landing, a para drop). */
-interface Pending { kind: C.AbilityKind | "bomb" | "shell"; at: number; x: number; y: number; x2: number; y2: number; chuteSpawned?: boolean }
-export interface Fire { x: number; y: number; r: number; until: number }
-export interface Fallout { x: number; y: number; r: number; until: number }
+interface Pending { kind: C.AbilityKind | "bomb" | "shell"; at: number; x: number; y: number; x2: number; y2: number; chuteSpawned?: boolean; strike?: number } // 0.57 strike: recorder index
+export interface Fire { x: number; y: number; r: number; until: number; strike?: number }
+export interface Fallout { x: number; y: number; r: number; until: number; strike?: number }
 export interface Blast { x: number; y: number; r: number; t: number; color: string }
 /** 0.28: what a round looks like in flight: small arms, sniper, cannon, shell, rocket. */
 export const SHOT_SMALL = 0, SHOT_SNIPER = 1, SHOT_CANNON = 2, SHOT_SHELL = 3, SHOT_ROCKET = 4;
@@ -114,6 +117,7 @@ export interface Orbit {
   x: number; y: number; until: number; angle: number; away?: boolean; inbound?: boolean; leaving?: boolean;
   fx: number; fy: number; stationLeft: number; arrived?: boolean;
   g25: number; g40: number; g105: number; shots25: number; shots40: number; shots105: number;
+  strike?: number; // 0.57: recorder strike index
 }
 export interface Shot { x0: number; y0: number; x1: number; y1: number; t: number; land: number; cls: number; kind: C.UnitKind | "ac130" }
 /** 0.28: a shell or rocket on its way; it explodes (damage, craters, blast) when it lands. */
@@ -178,6 +182,7 @@ export interface SimOpts {
   recipe?: CityRecipe;
   mutators?: C.MutatorId[];
   difficulty?: C.Difficulty;
+  battleId?: string; // 0.57: the recorder's stable id for this battle (the page makes one per battle)
 }
 
 /** 0.45: cell offsets for spreading a group order, nearest first (ties in a fixed order: deterministic). */
@@ -469,6 +474,8 @@ export class Sim {
   trainsEvacuated = 0;
   evacuated = 0; // people flown or carried out of the city: the score
   liftsFlown = 0; liftsAborted = 0;
+  /** 0.57: the battle recorder (plain data, carried by snapshots); curStrike: the strike whose effect is resolving. */
+  stats!: St.Recorder; curStrike = -1;
   liftLog: { kind: "ok" | "abort"; n: number; x: number; y: number }[] = []; // for the UI
   /** 0.49: which building each roof cell belongs to (squads.labelBuildings), worked out once per map. A collapsed
    *  cell keeps its old id: nothing can be placed on it any more, so it never matters. */
@@ -504,6 +511,7 @@ export class Sim {
   gateMaxHp() { return this.mutators.has("fragile_walls") ? C.GATE_HP * 0.5 : C.GATE_HP; }
   constructor(seed: number, opts: SimOpts = {}) {
     this.seed = seed;
+    this.stats = St.newRecorder(opts.battleId ?? "b" + seed);
     if (opts.difficulty && C.DIFFICULTY[opts.difficulty]) this.difficulty = opts.difficulty;
     this.budget = C.startBudget(opts.budget || C.START_BUDGET, opts.civilians ?? C.CIVILIANS);
     if (opts.waveMul) this.waveMul = opts.waveMul;
@@ -807,6 +815,7 @@ export class Sim {
    *  event sets their fate. Past PEOPLE_EV_CAP events, recording stops (fates still update). */
   note(k: number, code: number, arg = 0) {
     if (k < 0 || k >= this.civN) return;
+    if (code === EV_KILLED_BY_US && this.curStrike >= 0 && this.stats.strikes[this.curStrike]) this.stats.strikes[this.curStrike].civ++; // 0.57
     if (isEnding(code) && this.fate[k] === 0) this.fate[k] = code;
     if (this.evN >= this.evT.length) {
       const cap = Math.min(C.PEOPLE_EV_CAP, this.evT.length * 2);
@@ -1283,6 +1292,7 @@ export class Sim {
     if (this.switching.some(sw => sw.cells.some(c => run.includes(c)))) return "That crossing is already moving.";
     const dur = to === 2 ? C.GATE_CLOSE_S : C.GATE_OPEN_S;
     this.switching.push({ cells: run, to, start: this.time, at: this.time + dur });
+    St.event(this.stats, to === 2 ? St.SE_GATE_TO_WALL : St.SE_WALL_TO_GATE, this.time, x, y); // 0.57
     return null;
   }
 
@@ -1303,7 +1313,7 @@ export class Sim {
       if (this.phase === "plan") { this.wallHp[i] = wMax; this.inZone[i] = 2; } else cells.push(i);
       n++;
     }
-    if (cells.length) this.switching.push({ cells, to: 2, start: this.time, at: this.time + C.GATE_CLOSE_S });
+    if (cells.length) { this.switching.push({ cells, to: 2, start: this.time, at: this.time + C.GATE_CLOSE_S }); St.event(this.stats, St.SE_GATES_LOCKED, this.time, 0, 0, n); }
     else if (n) this.fieldDirty = true;
     return n;
   }
@@ -1862,6 +1872,7 @@ export class Sim {
     const p = this.demoProblem(cells);
     if (p) return p;
     this.demoBlown.add(c);
+    St.event(this.stats, St.SE_DEMOLISH, this.time, x, y); // 0.57
     const w = this.w, h = this.h, foot = new Set(cells);
     let sx = 0, sy = 0;
     for (const i of cells) {
@@ -1885,7 +1896,7 @@ export class Sim {
     for (let k = 0; k < this.n; k++) {
       const st = this.state[k];
       if (st === DEAD || !foot.has(this.idx(this.ax[k] | 0, this.ay[k] | 0))) continue;
-      if (st === INF) { this.state[k] = DEAD; this.recordKill(k); }
+      if (st === INF) { this.state[k] = DEAD; this.recordKill(k, undefined, "demolition"); }
     }
     const cx = sx / cells.length, cy = sy / cells.length, rad = Math.max(3, Math.sqrt(cells.length) * 0.7);
     this.blasts.push({ x: cx, y: cy, r: rad, t: this.time, color: "#bcaaa4" });
@@ -1951,7 +1962,7 @@ export class Sim {
       const r = rng((this.tick * 2246822519 + p.i * 3266489917) >>> 0);
       if (r() < C.GUARD_ACC) {
         this.hp[t] -= C.GUARD_DAMAGE;
-        if (this.hp[t] <= 0) { this.state[t] = DEAD; this.recordKill(t); this.guardKills++; }
+        if (this.hp[t] <= 0) { this.state[t] = DEAD; this.recordKill(t, undefined, "guard"); this.guardKills++; }
       }
     }
   }
@@ -1965,6 +1976,7 @@ export class Sim {
     if (b < 0 || !this.c4.has(b)) return "No charge on that bridge. Plant charges while planning.";
     if (this.blown.has(b)) return "Already blown.";
     this.blown.add(b);
+    St.event(this.stats, St.SE_BRIDGE, this.time, x, y); // 0.57
     if (!this.memDir) { if (this.fieldDirty) this.buildFields(); this.memDir = this.infDir.slice(); } // 0.33: what the infected still believe
     const cells = new Set(this.bridges[b]);
     for (const i of cells) { this.map.tile[i] = WATER; this.inZone[i] = 0; if (this.walkMask) this.walkMask[i] = 0; }
@@ -1972,7 +1984,7 @@ export class Sim {
     for (let k = 0; k < this.n; k++) {
       const s = this.state[k];
       if (s === DEAD || !cells.has(this.idx(this.ax[k] | 0, this.ay[k] | 0))) continue;
-      if (s === INF) this.recordKill(k); else { this.civKilledByUs++; this.note(k, EV_KILLED_BY_US); }
+      if (s === INF) this.recordKill(k, undefined, "bridge"); else { this.civKilledByUs++; this.note(k, EV_KILLED_BY_US); }
       this.state[k] = DEAD;
     }
     let sx = 0, sy = 0;
@@ -2009,7 +2021,8 @@ export class Sim {
     if (nf) return nf;
     this.charges[k]--; this.abilitiesUsed++;
     const delay = C.ABILITIES[k].delay;
-    if (k !== "gunship") this.pending.push({ kind: k, at: this.time + delay, x, y, x2, y2 });
+    const si = St.strike(this.stats, k, this.time, x, y); // 0.57
+    if (k !== "gunship") this.pending.push({ kind: k, at: this.time + delay, x, y, x2, y2, strike: si });
     if (k === "airstrike") {
       const ang = Math.atan2(y2 - y, x2 - x);
       this.spawnFlyover("jet_strike", (x + x2) / 2, (y + y2) / 2, delay * 1.35, "#ff5252", ang, "F-15E Airstrike");
@@ -2030,7 +2043,7 @@ export class Sim {
       // at the point facing that edge.
       const [fx, fy] = this.edgeEntry(x, y);
       this.orbits.push({ x, y, until: 0, angle: Math.atan2(fy - y, fx - x), inbound: true, fx, fy, stationLeft: C.GUNSHIP_S,
-        g25: 0, g40: 0, g105: 1, shots25: 0, shots40: 0, shots105: 0 });
+        g25: 0, g40: 0, g105: 1, shots25: 0, shots40: 0, shots105: 0, strike: si });
     } else if (k === "moab") {
       this.spawnFlyover("c130_supply", x, y, delay * 1.2, "#ffcc80", undefined, "MC-130J: GBU-43 MOAB", "mc130");
     } else if (k === "nuke") {
@@ -2039,8 +2052,14 @@ export class Sim {
     return null;
   }
 
-  private recordKill(k: number, u?: Unit) {
+  private recordKill(k: number, u?: Unit, other?: OtherKill) {
     this.kills++;
+    if (u) {
+      St.killBy(this.stats, this.time, { unit: St.unitIndex(this.stats, u, this.time) });
+      if (u.kind === "sniper") { const d = hyp(this.ax[k] - u.x, this.ay[k] - u.y) * C.CELL_M; if (d > this.stats.c.longShot) this.stats.c.longShot = d; }
+    } else if (other) St.killBy(this.stats, this.time, { other });
+    else if (this.curStrike >= 0) St.killBy(this.stats, this.time, { strike: this.curStrike });
+    else St.killBy(this.stats, this.time, { other: "env" });
     if (this.mutant[k]) this.swimmersKilled++;
     if (u) u.kills++;
     const cx = Math.max(0, Math.min(this.w - 1, this.ax[k] | 0));
@@ -2097,11 +2116,12 @@ export class Sim {
       const due = this.pending.filter(p => p.at <= this.time);
       this.pending = this.pending.filter(p => p.at > this.time);
       for (const p of due) {
+        this.curStrike = p.strike ?? -1; // 0.57: kills and civilian losses below go to this strike
         if (p.kind === "airstrike") { // a stick of bombs walking along the run
           const l = hyp(p.x2 - p.x, p.y2 - p.y), n = Math.max(2, Math.round(l / 5));
           for (let i = 0; i <= n; i++) {
             const f = i / n;
-            this.pending.push({ kind: "bomb", at: this.time + i * 0.08, x: p.x + (p.x2 - p.x) * f, y: p.y + (p.y2 - p.y) * f, x2: 0, y2: 0 });
+            this.pending.push({ kind: "bomb", at: this.time + i * 0.08, x: p.x + (p.x2 - p.x) * f, y: p.y + (p.y2 - p.y) * f, x2: 0, y2: 0, strike: p.strike });
           }
         } else if (p.kind === "bomb") {
           this.areaDamage(p.x, p.y, C.AIRSTRIKE_RADIUS, 5000, true);
@@ -2110,7 +2130,7 @@ export class Sim {
         } else if (p.kind === "firebomb") {
           const park = this.tileAt(p.x | 0, p.y | 0) === PARK;
           const r = park ? C.FIRE_RADIUS_PARK : C.FIRE_RADIUS;
-          this.fires.push({ x: p.x, y: p.y, r, until: this.time + C.FIRE_S });
+          this.fires.push({ x: p.x, y: p.y, r, until: this.time + C.FIRE_S, strike: p.strike });
           this.damageTerrain(p.x, p.y, r * 0.85, C.STRUCT_DMG_FIREBOMB);
           this.blasts.push({ x: p.x, y: p.y, r: 4, t: this.time, color: "#ff9100" });
         } else if (p.kind === "para") {
@@ -2145,7 +2165,7 @@ export class Sim {
           const rr = rng((this.tick * 2246822519 + (p.x * 131 | 0)) >>> 0);
           for (let i = 0; i < C.BARRAGE_SHELLS; i++) {
             const a = rr() * 6.2832, d = Math.sqrt(rr()) * C.BARRAGE_RADIUS;
-            this.pending.push({ kind: "shell", at: this.time + rr() * C.BARRAGE_S, x: p.x + Math.cos(a) * d, y: p.y + Math.sin(a) * d, x2: 0, y2: 0 });
+            this.pending.push({ kind: "shell", at: this.time + rr() * C.BARRAGE_S, x: p.x + Math.cos(a) * d, y: p.y + Math.sin(a) * d, x2: 0, y2: 0, strike: p.strike });
           }
         } else if (p.kind === "shell") {
           const sx = Math.max(0, Math.min(this.w - 1, p.x)), sy = Math.max(0, Math.min(this.h - 1, p.y));
@@ -2164,21 +2184,22 @@ export class Sim {
           this.hurtWalls(p.x, p.y, C.NUKE_RADIUS, 1e9);
           for (let i = this.units.length - 1; i >= 0; i--) { const u = this.units[i]; if (hyp(u.x - p.x, u.y - p.y) <= C.NUKE_RADIUS && u.hp !== -1) u.hp = 0; }
           for (let i = this.supports.length - 1; i >= 0; i--) { const b = this.supports[i]; if (hyp(b.x - p.x, b.y - p.y) <= C.NUKE_RADIUS) { this.lostLog.push(b.kind); this.supports.splice(i, 1); } }
-          this.fallout.push({ x: p.x, y: p.y, r: C.FALLOUT_RADIUS, until: this.time + C.FALLOUT_S });
+          this.fallout.push({ x: p.x, y: p.y, r: C.FALLOUT_RADIUS, until: this.time + C.FALLOUT_S, strike: p.strike });
           this.blasts.push({ x: p.x, y: p.y, r: C.NUKE_RADIUS, t: this.time, color: "#f4ff81" });
           this.refreshAuras(); this.fieldDirty = true;
         }
       }
+      this.curStrike = -1;
     }
     if (this.fires.length) {
       this.fires = this.fires.filter(f => f.until > this.time);
       // Fire hurts every 4th tick, in a bigger bite.
-      if (this.tick % 4 === 0) for (const f of this.fires) this.areaDamage(f.x, f.y, f.r, C.FIRE_DPS * dt * 4, true);
+      if (this.tick % 4 === 0) { for (const f of this.fires) { this.curStrike = f.strike ?? -1; this.areaDamage(f.x, f.y, f.r, C.FIRE_DPS * dt * 4, true); } this.curStrike = -1; }
     }
-    if (this.orbits.length) this.stepOrbits(dt);
+    if (this.orbits.length) { this.stepOrbits(dt); this.curStrike = -1; }
     if (this.fallout.length) {
       this.fallout = this.fallout.filter(f => f.until > this.time);
-      if (this.tick % 4 === 0) for (const f of this.fallout) this.irradiate(f, dt * 4);
+      if (this.tick % 4 === 0) { for (const f of this.fallout) { this.curStrike = f.strike ?? -1; this.irradiate(f, dt * 4); } this.curStrike = -1; }
     }
     if (this.blasts.length) this.blasts = this.blasts.filter(b => this.time - b.t < 1);
     this.stepTransports(dt);
@@ -2253,6 +2274,7 @@ export class Sim {
   private stepOrbits(dt: number) {
     let gone: Orbit[] | null = null;
     for (const o of this.orbits) {
+      this.curStrike = o.strike ?? -1; // 0.57
       if (o.inbound || o.leaving) { // 0.46: flying in, to a new spot, or home
         const [tx, ty] = o.inbound ? this.orbitEntry(o) : this.edgeEntry(o.fx, o.fy);
         const d = hyp(tx - o.fx, ty - o.fy), step = C.GUNSHIP_SPEED * dt;
@@ -2330,7 +2352,7 @@ export class Sim {
       this.wallHp[i] = Math.max(0, this.wallHp[i] - dmg);
       if (this.wallHp[i] <= 0) { if (!broke) this.ping("breach", cx, cy); broke = true; }
     }
-    if (broke) { this.breaches++; this.fieldDirty = true; }
+    if (broke) { this.breaches++; this.fieldDirty = true; St.event(this.stats, St.SE_BREACH, this.time, x, y); }
   }
 
   /** Fallout: infected inside burn down; people inside sicken and die. */
@@ -2424,7 +2446,7 @@ export class Sim {
       if (!base) return "No way up there.";
       if (this.phase === "plan") { // planning: no walking or climbing, it just goes up there
         if (u.fort === "up" || u.fort === "climb" || u.fort === "descend") u.fort = undefined;
-        u.fort = "climb"; u.fortT = 0; u.fortAt = [rx, ry]; this.stepFort(u, 0); return null;
+        u.fort = "climb"; u.fortT = 0; u.fortAt = [rx, ry]; this.stepFort(u, 0); this.stats.c.fortifies++; return null;
       }
       q = { k: "fortify", x: base[0], y: base[1], px: rx, py: ry };
       if (u.fort === "up") { const e = this.dismount(u, base[0], base[1]); if (e) return e; } // already on another roof: come down first
@@ -2661,7 +2683,7 @@ export class Sim {
             const dx = this.ax[k] - tr.x, dy = this.ay[k] - tr.y;
             if (dx * dx + dy * dy <= cr2) {
               this.hp[k] -= C.TRAIN_CRUSH_DMG;
-              if (this.hp[k] <= 0) { this.state[k] = DEAD; this.recordKill(k); }
+              if (this.hp[k] <= 0) { this.state[k] = DEAD; this.recordKill(k, undefined, "train"); }
             }
           }
         }
@@ -2787,6 +2809,8 @@ export class Sim {
     this.lockedSpend = this.spent();
     this.origFloors = Uint8Array.from(this.map.height);
     this.phase = "battle";
+    St.event(this.stats, St.SE_SIRENS, this.time, 0, 0); // 0.57
+    for (const u of this.units) St.unitIndex(this.stats, u, this.time);
     this.fieldDirty = true;
     this.rebuildBuckets();
     if (this.dayLife) { this.walkMask = Uint8Array.from(this.map.tile, t => walkable(t) ? 1 : 0); this.navVersion++; this.assignPlans(); }
@@ -3131,6 +3155,7 @@ export class Sim {
     if (nSwim) { const e = rivers[Math.floor(r() * rivers.length)]; this.marching.push({ e, left: nSwim, per: nSwim / steps, hp: baseHp * C.SWIMMER_HP_MUL, swim: 1 }); }
     const first = this.entries[ents[0]];
     this.wave++; this.waveEdge = first ? first.edge : 0; this.waveT = this.time; this.lastWaveCount = count; this.lastWaveBig = big;
+    St.event(this.stats, St.SE_HORDE, this.time, first ? first.x : 0, first ? first.y : 0, count, big ? 1 : 0); // 0.57
     this.waveEntries = ents.slice();
     this.planWave(r, h);
   }
@@ -3299,6 +3324,7 @@ export class Sim {
     if (this.fieldDirty) this.buildFields();
     this.rebuildBuckets();
     this.time += dt; this.tick++;
+    if (this.time >= this.stats.nextT) this.sampleStats(); // 0.57
     if (this.tick % 10 === 0) this.pruneGroupsNow(); // 0.50 (a closure here slowed the whole tick by ~15%: kept out of this function)
     const tOut = Math.max(0, this.time - C.WARNING_S); // the hordes toughen from the outbreak on
     const infHpScale = 1 + C.INF_HP_GROWTH * this.diff.toughMul * tOut;
@@ -3511,6 +3537,7 @@ export class Sim {
       if (u.hp === undefined || u.hp > 0) return true;
       if (u.parentUnit) return false;
       this.unitsLost++;
+      if (u.hp !== -1) { const si = St.unitIndex(this.stats, u, this.time); this.stats.units[si].lostT = this.time; St.event(this.stats, St.SE_UNIT_LOST, this.time, u.x, u.y, si); } // 0.57
       if (u.hp !== -1) this.lostLog.push(u.kind); // -1 = left on purpose (sold or evacuated)
       return false;
     });
@@ -3899,7 +3926,7 @@ export class Sim {
           if (r() < hitP) {
             if (this.shots.length < 4000) this.shots.push({ x0: x, y0: y, x1: tx, y1: ty, t: this.time, land: this.time + Math.max(0.04, dist * C.CELL_M / 900), cls: SHOT_SMALL, kind: "militia" });
             this.hp[t] -= wep.damage;
-            if (this.hp[t] <= 0) { this.state[t] = DEAD; this.civKills++; this.recordKill(t); }
+            if (this.hp[t] <= 0) { this.state[t] = DEAD; this.civKills++; this.recordKill(t, undefined, "civilian"); }
           } else {
             const baseAng = Math.atan2(ty - y, tx - x), errAng = (r() < 0.5 ? -1 : 1) * (0.12 + 0.28 * f);
             const mDist = dist * (0.85 + r() * 0.35), mx = x + Math.cos(baseAng + errAng) * mDist, my = y + Math.sin(baseAng + errAng) * mDist;
@@ -4082,7 +4109,7 @@ export class Sim {
         if (this.gnawCnt[n] >= C.WALL_MAX_ATTACKERS) continue; // crowded: try another side
         this.gnawCnt[n]++;
         if (this.dev.wallDamage) { this.wallHp[n] -= C.WALL_DPS * dt; this.ping("wall", nx, ny); } // 0.48
-        if (this.wallHp[n] <= 0) { this.wallHp[n] = -1; this.breaches++; this.fieldDirty = true; this.ping("breach", nx, ny); }
+        if (this.wallHp[n] <= 0) { this.wallHp[n] = -1; this.breaches++; this.fieldDirty = true; this.ping("breach", nx, ny); St.event(this.stats, St.SE_BREACH, this.time, nx, ny); }
         return;
       }
     }
@@ -4191,7 +4218,7 @@ export class Sim {
         // 0.49: with nobody waiting at the pad the lift just stands down: no wave-off counted, no alert (a fallen
         // zone used to rack up a wave-off every 6 s per pad for the rest of the battle)
         if (!this.anySafeNear(x, y, C.SUPPORTS.evac.radius)) { b.liftT = C.EVAC_EVERY_S * 0.5; return; }
-        this.liftsAborted++; this.liftLog.push({ kind: "abort", n: 0, x: b.x, y: b.y }); this.ping("abort", b.x, b.y); // 0.48
+        this.liftsAborted++; this.liftLog.push({ kind: "abort", n: 0, x: b.x, y: b.y }); St.event(this.stats, St.SE_LIFT_ABORT, this.time, b.x, b.y); this.ping("abort", b.x, b.y); // 0.48
         b.liftT = C.EVAC_EVERY_S * 0.5; return;
       }
       // load the people nearest the pad, inside the zone
@@ -4209,6 +4236,7 @@ export class Sim {
           }
       }
       this.evacuated += n; this.liftsFlown++;
+      St.event(this.stats, St.SE_LIFT, this.time, b.x, b.y, n); // 0.57
       if (this.dev.income) this.evacPay += n * C.EVAC_PAY * this.incomeMul / this.popMul;
       this.liftLog.push({ kind: "ok", n, x: b.x, y: b.y });
       b.liftT = C.EVAC_EVERY_S;
@@ -4597,7 +4625,7 @@ export class Sim {
       dead.x = slot[0] + 0.5; dead.y = slot[1] + 0.5;
     } else [dead.x, dead.y] = this.squadCenter(u);
     Object.assign(dead, { alive: true, hp: st.hp, ammo: st.ammo, cooldown: 0.5, lag: 0 });
-    u.squadPaid = base; u.paid = (u.paid ?? base) + cost; this.pay(cost);
+    u.squadPaid = base; u.paid = (u.paid ?? base) + cost; this.pay(cost); this.stats.c.topUps++;
     const spec = C.UNITS[u.kind];
     if (spec.mobile) u.hp = spec.mobile.hp * u.soldiers.filter(so => so.alive).length / u.soldiers.length;
     return null;
@@ -5182,6 +5210,19 @@ export class Sim {
       refused: cnt.refusing, refusedLost: cnt.refusedLost, talkedOut: this.talkedOut, broke: this.broke, civKilledByUs: this.civKilledByUs, civFriendlyFire: this.civFriendlyFire };
   }
   /** The round is over (city empty or stalled): score it, freeze it, keep the battle running for Keep fighting. */
+  /** 0.57: the page says the player chose Keep fighting. */
+  markKeepFighting() { St.event(this.stats, St.SE_KEEP_FIGHTING, this.time, 0, 0); }
+  /** 0.57: one recorder sample (every SAMPLE_S of battle time); also registers units placed since the last one. */
+  private sampleStats() {
+    const r = this.stats, c = this.counts();
+    for (const u of this.units) if (u.sid === undefined) St.unitIndex(r, u, this.time);
+    let strikeKills = 0; for (const x of r.strikes) strikeKills += x.kills;
+    const dmg = this.cityDamage();
+    r.c.swimmers = this.swimmersKilled; r.c.guardKills = this.guardKills; r.c.talkedOut = this.talkedOut;
+    St.sample(r, { t: this.time, saved: this.evacuated, byTrain: this.trainsEvacuated, inZone: c.safe, outside: c.civ, infected: c.inf, kills: this.kills,
+      killsStrikes: strikeKills, civKilledByUs: this.civKilledByUs, money: this.remaining(), spent: this.spent(), damage: dmg.bill, intact: dmg.intact,
+      hordes: this.wave, breaches: this.breaches, unitsAlive: this.units.length, lifts: this.liftsFlown, liftsAborted: this.liftsAborted });
+  }
   /** 0.30.1: the player ends the round (only stragglers left): people inside the zone count as saved, the zone
    *  holds them until the lifts take them; everyone still outside is left behind. */
   endRoundNow(): string | null {
@@ -5193,6 +5234,7 @@ export class Sim {
   }
   private endRound(reason: string, emptied: boolean, zoneCredit = 0) {
     this.roundDone = true; this.roundAt = this.time; this.roundEmptied = emptied;
+    St.event(this.stats, St.SE_ROUND, this.time, 0, 0); // 0.57
     this.killsAtRound = this.kills; this.damageAtRound = this.cityDamage().bill;
     this.roundResult = this.scoreNow(reason, zoneCredit);
   }

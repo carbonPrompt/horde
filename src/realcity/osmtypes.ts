@@ -6,7 +6,7 @@ export interface OsmWay { id: number; tags: Record<string, string>; geom: LatLon
 export interface OsmNode { id: number; tags: Record<string, string>; at: LatLon }
 export interface OsmData { ways: OsmWay[]; nodes: OsmNode[]; coast: LatLon[][] }
 /** What the bake writes per city (src/realcity/data/<id>.ts). Maps are v2 strings (osm.ts encodeCityMapV2). */
-export interface CityData { overview: string; areas: Record<string, { map: string; angle: number; stands: Stand[] }> }
+export interface CityData { overview: string; areas: Record<string, { map: string; angle: number; stands: Stand[]; streets?: [string, number[]][] }> } // 0.57 streets: OSM street names, cells as [start, len, ...] runs (tools/capture/streets.ts)
 
 /** Overpass JSON (`out body geom`) to OsmData. Coastline ways go to `coast` only; relations' outer ways become ways
  *  carrying the relation's tags (multipolygon water and parks). */

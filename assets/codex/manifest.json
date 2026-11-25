@@ -119,6 +119,22 @@
   "w": 960,
   "h": 168
  },
+ "end-report-overview": {
+  "version": "0.57.0",
+  "rev": 1,
+  "recipeHash": "10ef0fdf0bdf",
+  "bytes": 61692,
+  "w": 1520,
+  "h": 800
+ },
+ "end-report-town": {
+  "version": "0.57.0",
+  "rev": 1,
+  "recipeHash": "eb493156db60",
+  "bytes": 102990,
+  "w": 1520,
+  "h": 800
+ },
  "howto-1-battle": {
   "version": "0.56.0",
   "rev": 1,
@@ -168,10 +184,10 @@
   "h": 276
  },
  "howto-12-pause": {
-  "version": "0.56.0",
+  "version": "0.57.0",
   "rev": 1,
   "recipeHash": "836bece728ec",
-  "bytes": 114136,
+  "bytes": 114155,
   "w": 960,
   "h": 540
  },

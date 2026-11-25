@@ -581,3 +581,15 @@ test("0.56: the tutorial is gone", () => {
   const { shouldTip } = require("../src/tips");
   expect(shouldTip("horde", [], true)).toBe(true); expect(shouldTip("horde", ["horde"], true)).toBe(false); expect(shouldTip("horde", [], false)).toBe(false);
 });
+
+// ---------- 0.57: career in the save ----------
+import { emptyCareer } from "../src/battlerecord";
+const base057 = { settings: { fullscreen: true, edgeScroll: false, showRanges: false }, best: {}, plans: {} };
+test("0.57: clean accepts a save without career", () => {
+  expect(clean({ ...base057 } as any).career).toBeUndefined();
+});
+test("0.57: clean keeps a valid career and drops a junk one", () => {
+  const c = { ...emptyCareer(), saved: 12, killsByKind: { tank: 4 } };
+  expect(clean({ ...base057, career: c } as any).career).toEqual(c);
+  expect(clean({ ...base057, career: "x" } as any).career).toBeUndefined();
+});

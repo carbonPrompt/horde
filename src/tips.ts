@@ -17,6 +17,7 @@ export const TIPS = {
   groups: "Battle groups: select units, press Ctrl+{key:group.1} to Ctrl+{key:group.5}. Then the key alone selects them, twice jumps there. {key:squad.next} jumps to your next squad. {key:quick.1}-{key:quick.5} are the quick bar.",
   gunship: "AC-130 on station. Click the plane with Move/Aim: right-click sends it to a new spot, Delete sends it home (before it arrives: charge back).",
   refuse: "This person refuses to leave. Park a unit next to them for a while to talk them out.",
+  report: "After the round, the report's Town tab tells what happened to the families. Every battle is kept in your save slot's history.", // 0.57
 } as const;
 export type TipId = keyof typeof TIPS;
 export const TIP_IDS = Object.keys(TIPS) as TipId[];

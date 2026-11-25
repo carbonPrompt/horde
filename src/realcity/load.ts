@@ -7,6 +7,8 @@ import { REAL_DATA } from "./data";
 const cache = new Map<string, CityMap>();
 
 export function realAreaMap(key: string): CityMap | undefined { return cache.get(key); }
+/** 0.57: an area's OSM street names (only where the bake added them). */
+export function realAreaStreets(key: string): [string, number[]][] | undefined { const [city, area] = key.split("/"); return REAL_DATA[city]?.areas[area]?.streets; }
 
 const pending = new Map<string, Promise<CityMap>>();
 /** Decode an area once; concurrent callers share the same promise. */

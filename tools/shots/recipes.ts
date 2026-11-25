@@ -71,5 +71,8 @@ export const RECIPES: Recipe[] = [
   { ...FH, id: "howto-10-locked", kind: "shot", camera: { x: 191, y: 110, scale: 2.6 }, crop: MAP, setup: [...BASE, "battle", "advance 45", "key l", "advance 55", "cursor off"] },
   { ...FH, id: "howto-11-menu", kind: "shot", camera: { x: 191, y: 106, scale: 4 }, crop: [480, 350, 480, 168], setup: [...BASE, "battle", "advance 5", "key b", "cursor off"] },
   { ...FH, id: "howto-11-nofire", kind: "shot", camera: { x: 191, y: 112, scale: 4 }, crop: MAP, setup: [...BASE, "ability airstrike", "battle", "advance 20", "tool airstrike", "hover 191,124"] },
+  // 0.57: the after-action report (a bigger window: the report is a full-screen page)
+  { ...FH, id: "end-report-overview", kind: "shot", size: [1600, 900], crop: [40, 20, 1520, 800], camera: { x: 191, y: 106, scale: 3 }, setup: [...BASE, "battle", "advance 240", "endround", "report overview", "cursor off"] },
+  { ...FH, id: "end-report-town", kind: "shot", size: [1600, 900], crop: [40, 20, 1520, 800], camera: { x: 191, y: 106, scale: 3 }, setup: [...BASE, "battle", "advance 240", "endround", "report town", "cursor off"] },
   { ...FH, id: "howto-12-pause", kind: "shot", camera: { x: 191, y: 106, scale: 3 }, setup: [...BASE, "battle", "advance 10", "key Escape", "cursor off"] },
 ];

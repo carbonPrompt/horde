@@ -23,5 +23,10 @@ contextBridge.exposeInMainWorld("hordeDesktop", {
   battleWrite: (n, bytes) => ipcRenderer.invoke("battle-write", Number(n), bytes),
   battleRead: n => ipcRenderer.invoke("battle-read", Number(n)),
   battleDelete: n => ipcRenderer.sendSync("battle-delete", Number(n)),
+  // 0.57 battle history
+  historyRead: n => ipcRenderer.invoke("history-read", Number(n)),
+  historyWrite: (n, text) => ipcRenderer.invoke("history-write", Number(n), String(text)),
+  historyQuarantine: n => ipcRenderer.invoke("history-quarantine", Number(n)),
+  onClosing: cb => { ipcRenderer.removeAllListeners("app-closing"); ipcRenderer.on("app-closing", () => cb()); },
   openSaves: () => ipcRenderer.send("open-saves"),
 });

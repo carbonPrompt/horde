@@ -30,13 +30,19 @@ import { Sound } from "./audio";
 import { initSprites, SPRITE_CANVAS, SPRITE_URL, SpriteKey, supportSpriteKey } from "./sprites";
 import { AlertQueue } from "./ticker";
 import { partPoints, mergeBest, mergeEfficiency, bestKey, anyMedal, difficultyFor, bestOfAreas } from "./scoring";
-import { loadRealArea, realAreaMap } from "./realcity/load";
+import { loadRealArea, realAreaMap, realAreaStreets } from "./realcity/load";
+import { buildPlaces, type Places } from "./places";
+import { SE_KEEP_FIGHTING, type Col } from "./stats";
+import { headerHtml, tabHtml, tabsHtml, sampleAt, DEFAULT_COLS, COL_NAMES, type Tab } from "./endreport";
+import { storyLine, clockMin } from "./people";
+import { buildTownReport, townInputFromSim } from "./townreport";
+import { makeRecord, persistRecord, outcomeFor, emptyCareer, type BattleRecord, type BattleKind } from "./battlerecord";
 import { areaCardInfo, bindCityMap, cityMapModel, drawCityMap, fitView, type CityMapUi } from "./citymapui";
 import { soundDue, zoomGain } from "./audiotiming";
 import { airHalfPx, drawAirframe, smoothHeading } from "./aircraft";
 import { drawDepot, drawModel, drawSquad, drawSupport, drawWrecks, hasModel, hasSquad, MODEL_ZOOM, noteUnits, SQUAD_ZOOM } from "./models";
 import { clockSpan, START_CHOICES, randomStart, needsTimePick, formatClock } from "./people";
-import { personHtml, followable, followEndLine, endStatsLines } from "./personui";
+import { personHtml, personAt, followable, followEndLine, endStatsLines } from "./personui";
 import { TIPS, shouldTip, type TipId } from "./tips";
 import { mountCodex, stripCodexLinks } from "./codexui";
 import { seenFor, slotPrevVersion } from "./codex";
@@ -88,12 +94,14 @@ const isOpen = (t: string) => P.unlocked(t, save.xp ?? 0, city?.trial, !!save.se
 const toolName = (t: string) => (C.UNITS as Record<string, { name: string }>)[t]?.name ?? (C.SUPPORTS as Record<string, { name: string }>)[t]?.name ?? (C.ABILITIES as Record<string, { name: string }>)[t]?.name ?? t;
 let mode: "attract" | "game" = "attract"; // attract = the title screen with a city falling in the background
 let city: C.CityDef | null = null; // null = quick battle on a random city
-let customMap: { name: string; map: CityMap } | null = null;
+let customMap: { name: string; map: CityMap; streets?: [string, number[]][] } | null = null; // 0.57 streets: live OSM names
 let dailyDate: string | null = null;
 const activeMutators = new Set<C.MutatorId>();
 let seed = Math.floor(Math.random() * 1e9);
 let startMin = 600; // 0.39: the clock's start (minutes since midnight), picked after the city; Retry keeps it
+const newBattleId = () => { try { return crypto.randomUUID(); } catch { return Date.now().toString(36) + Math.floor(Math.random() * 1e9).toString(36); } };
 const simOpts = () => ({
+  battleId: newBattleId(), // 0.57: one record per battle
   civilians: save.settings.crowd ?? C.CIVILIANS,
   realCityId: city?.real && !city.realArea && !city.areas?.length ? city.id : undefined, // pre-0.36 single map
   realArea: customMap ? undefined : city?.realArea, // 0.36: a baked battle area
@@ -285,6 +293,7 @@ function importPlanInner(p: Plan) {
   if (doubled) say(`${doubled === 1 ? "A Troops squad or Sniper team shared a building" : `${doubled} Troops squads or Sniper teams shared buildings`} in this plan; one per building now, the extra ${doubled === 1 ? "one was" : "ones were"} left out.`, 6000);
 }
 function newSim(keepPlan: boolean, newSeed = false) {
+  closeOutBattle(); // 0.57: a battle left before it ended is recorded as abandoned
   armedMenu = null; // 0.55
   clearTicker(); closePerson();
   const plan = keepPlan ? exportPlan() : null;
@@ -295,6 +304,7 @@ function newSim(keepPlan: boolean, newSeed = false) {
   if (plan) importPlan(plan);
   log("info", "restart", { ...cityTag(), keptPlan: keepPlan });
   draft = []; pings = []; speed = 1; tipGates = false; lastWave = 0; warnedWave = -1; warnShown = false; outbreakShown = false; xpGiven = 0; roundShown = false;
+  recordDone = false; lastRecord = null; lastBroken = []; placesCache = null; endDismissed = false;
   syncDev();
   buildBase(); buildZone(); fitCamera();
   $("end").hidden = true;
@@ -489,6 +499,7 @@ $("person").addEventListener("click", ev => {
 });
 
 function startAttract() {
+  closeOutBattle(); // 0.57
   loadSeq++; // a pending area load must not pull the player back into a battle
   $("timepick").hidden = true; closePerson(); // 0.39
   clearTicker();
@@ -523,6 +534,7 @@ function playCity(c: C.CityDef | null, seedOverride?: number) {
   playCityNow(c, seedOverride);
 }
 function playCityNow(c: C.CityDef | null, seedOverride?: number) {
+  closeOutBattle(); recordDone = false; lastRecord = null; lastBroken = []; placesCache = null; endDismissed = false; // 0.57
   clearTicker(); $("timepick").hidden = true; closePerson();
   mode = "game"; city = c; showHeatmap = false;
   document.body.classList.remove("attract");
@@ -623,6 +635,7 @@ function playDaily() {
 function pause() {
   if (armedMenu) setMenu(null); // 0.55
   if (mode !== "game") return;
+  if (endDismissed) { endDismissed = false; showHeatmap = false; refreshUi(); return; } // 0.57: Menu brings the finished battle's report back
   codexBack = null;
   log("info", "pause", { phase: sim.phase, t: +sim.time.toFixed(1) });
   if (!speedLocked()) speed = 0; // 0.48: on Hard/Insane the menu opens but the battle carries on
@@ -678,6 +691,98 @@ function recordResult(r: Score) {
   save.best[key] = mergeEfficiency(save.best[key], r.perM, r.underBudget); // 0.48
   Save.store(save);
 }
+
+// ---------- 0.57: battle records ----------
+let endDismissed = false; // 0.57 review: the player closed the finished battle's report to look at the map (H or Menu brings it back)
+let recordDone = false; // the final record of this battle is written (leaving after it writes nothing more)
+let lastRecord: BattleRecord | null = null, lastBroken: { key: string; was: number | null; now: number }[] = [];
+let placesCache: { sim: Sim; places: Places } | null = null;
+let recQueue: Promise<unknown> = Promise.resolve(); // history writes, one after another
+function placesFor(s: Sim): Places {
+  if (placesCache?.sim === s) return placesCache.places;
+  const streets = customMap?.streets ?? (city?.realArea && !customMap ? realAreaStreets(city.realArea) : undefined);
+  const real = !!customMap || !!city?.real; // a real map without baked names gets none (a made-up name would be wrong)
+  const places = buildPlaces(s.map, s.seed, { streets, generate: !real, area: city?.realArea ? city.name : null, schools: s.schools.length });
+  placesCache = { sim: s, places };
+  return places;
+}
+function battleKind(): BattleKind { return dailyDate ? "daily" : customMap ? "osm" : city?.recipe ? "campaign" : city?.real ? "real" : city ? "campaign" : "quick"; }
+function battleName(): string { return dailyDate ? `Daily ${dailyDate}${city ? ": " + city.name : ""}` : customMap ? customMap.name : city ? city.name : "Quick battle"; }
+/** Build this battle's record now (synchronously, from the live sim) and queue the history write. */
+function writeRecord(kind: "round" | "final" | "abandoned", r: Score, done?: () => void): BattleRecord {
+  const s = sim, t0 = performance.now();
+  let town; try { town = buildTownReport(townInputFromSim(s, placesFor(s), battleName()), Number.parseInt(s.stats.battleId.replace(/[^0-9a-f]/gi, "").slice(0, 7) || "0", 16)); }
+  catch (err) { log("error", "town-report", { error: String((err as Error)?.stack ?? err) }); }
+  const pp = partPoints(r.parts);
+  const rec = makeRecord(
+    { id: s.stats.battleId, date: new Date().toLocaleDateString("en-CA"), version: C.VERSION, cityId: dailyDate ? `daily:${dailyDate}` : customMap ? "osm" : city?.id ?? "quick",
+      cityName: battleName(), kind: battleKind(), difficulty: s.difficulty, sirenMin: s.startMin, flags: { dev: !!s.stats.flags?.dev || !!save.settings.devMode, modded: !!s.stats.flags?.modded } },
+    { medal: r.medal ?? null, score: r.score, parts: { saved: pp.saved, speed: pp.speed, city: pp.city, kills: pp.kills }, roundComplete: s.roundDone, abandoned: kind === "abandoned",
+      keepFighting: r.mayhem !== undefined || s.stats.ev.k.includes(SE_KEEP_FIGHTING), ...(r.mayhem !== undefined ? { mayhem: r.mayhem } : {}) },
+    r, s.stats, { roundAt: s.roundAt, nukes: s.nukesUsed, bridges: s.blown.size, crushed: s.crushed, budget: s.budget, held: Math.max(0, (kind === "round" && s.roundAt !== null ? s.roundAt : s.time) - C.WARNING_S), people: s.civN, town });
+  if (kind !== "round") recordDone = true;
+  lastRecord = rec; lastBroken = [];
+  log("info", "battle-record", { kind, id: rec.meta.id, ms: Math.round(performance.now() - t0), stories: town?.stories.length ?? 0, flags: rec.meta.flags });
+  const slot = Save.activeSlot();
+  if (!slot) { done?.(); return rec; } // no slot picked: shown, not kept
+  recQueue = recQueue.then(async () => {
+    if (Save.activeSlot() !== slot) { log("warn", "battle-record-skipped", { id: rec.meta.id, why: "slot changed" }); return; } // the player switched slots meanwhile: leave that slot alone
+    const res = await persistRecord(() => Save.readHistory(slot), h => Save.writeHistory(slot, h), save.career ?? emptyCareer(), rec);
+    if (!res.career) { log("error", "battle-record-not-kept", { id: rec.meta.id, why: res.why }); return; } // 0.57 review: the career only counts what the history kept
+    save.career = res.career; Save.store(save);
+    if (lastRecord === rec) lastBroken = res.broken;
+    done?.();
+  }).catch(err => log("error", "battle-record-failed", { error: String((err as Error)?.stack ?? err) }));
+  return rec;
+}
+/** The player is leaving this battle (restart, new city, menu, load, quit): record it if it isn't already. */
+function closeOutBattle() {
+  if (mode !== "game" || recordDone) return;
+  const o = outcomeFor({ phase: sim.phase, roundDone: sim.roundDone, endNow: false, leaving: true, keepFighting: false });
+  if (o === "none") return;
+  if (o === "final" && sim.phase === "battle") sim.callIt(); // leaving during Keep fighting: score it as pulled out
+  const r = o === "abandoned" ? sim.scoreNow("You left the battle before the round was over.") : sim.result ?? sim.roundResult;
+  if (r) writeRecord(o === "abandoned" ? "abandoned" : "final", r);
+}
+
+// 0.57: the after-action report on the end card
+let erTab: Tab = "overview", erCols: Col[] = [...DEFAULT_COLS];
+function renderReport() {
+  const r = lastRecord; if (!r) return;
+  $("er-head").innerHTML = headerHtml(r, { xpLine: "", news: lastNews });
+  $("er-tabs").innerHTML = tabsHtml(erTab, true);
+  $("er-body").innerHTML = tabHtml(erTab, r, { broken: lastBroken, live: true, timelineCols: erCols });
+}
+$("end").addEventListener("click", ev => {
+  const el = ev.target as HTMLElement;
+  const tab = el.closest<HTMLElement>("[data-tab]"); if (tab) { erTab = tab.dataset.tab as Tab; renderReport(); return; }
+  if (el.closest("[data-act=heatmap]")) { $("end-heatmap").click(); return; }
+  const st = el.closest<HTMLElement>(".er-story[data-k]");
+  if (st && !st.querySelector(".er-log")) { // a story's people: each one's full log, in place
+    const k = Number(st.dataset.k), lead = sim.famLead[k], a = lead >= 0 ? lead : k, b = lead >= 0 ? Math.min(sim.civN, lead + sim.famSize[lead]) : k + 1;
+    const nameOf = (j: number) => personAt(sim, j)?.first ?? "family";
+    const html = Array.from({ length: Math.min(6, b - a) }, (_, i) => a + i).map(j => {
+      const p = personAt(sim, j); if (!p) return "";
+      return `<div class="er-log"><b>${esc(p.first)} ${esc(p.last)}, ${p.age}</b><ul>${sim.storyOf(j).map(e => `<li>${esc(clockSpanText(e.t))} ${esc(storyLine(e.code, e.arg, nameOf))}</li>`).join("")}</ul></div>`;
+    }).join("");
+    st.insertAdjacentHTML("beforeend", html);
+  }
+});
+$("end").addEventListener("change", ev => {
+  const el = ev.target as HTMLInputElement; if (!el.dataset.col) return;
+  erCols = Array.from($("end").querySelectorAll<HTMLInputElement>("[data-col]")).filter(x => x.checked).map(x => x.dataset.col as Col);
+  renderReport();
+});
+$("end").addEventListener("mousemove", ev => { // hover readout on a chart
+  const svg = (ev.target as Element).closest?.("svg.er-svg") as SVGSVGElement | null; if (!svg || !lastRecord) return;
+  const w = Number(svg.dataset.w), pl = Number(svg.dataset.pl), pr = Number(svg.dataset.pr), rc = svg.getBoundingClientRect();
+  const x = (ev.clientX - rc.left) / rc.width * w, sm = sampleAt(lastRecord, x - pl, w - pl - pr); if (!sm) return;
+  const ro = svg.nextElementSibling?.querySelector(".er-readout"); if (!ro) return;
+  const cols = erTab === "money" ? ["money", "spent"] as Col[] : erTab === "timeline" ? erCols : DEFAULT_COLS;
+  ro.textContent = `${fmtT(sm.t)}: ` + cols.map(c => `${COL_NAMES[c]} ${c === "money" || c === "spent" || c === "damage" ? C.money(sm[c]) : Math.round(sm[c]).toLocaleString("en-US")}`).join(" \u00b7 ");
+  const cur = svg.querySelector(".er-cursor"); if (cur) { cur.setAttribute("x1", String(x)); cur.setAttribute("x2", String(x)); cur.setAttribute("stroke-opacity", "0.4"); }
+});
+const clockSpanText = (t: number) => formatClock(clockMin(sim.startMin, t));
 
 // ---------- Input ----------
 // Alert ticker (0.19): hordes, breaches, losses and tips scroll along the top bar. say() is for replies to a click.
@@ -1069,7 +1174,7 @@ addEventListener("keydown", e => {
   if (act === "alert") { if (sim.phase === "battle") jumpToPing(); return; } // 0.48 (0.54: was F)
   if (act === "view.heights") showHeights = !showHeights;
   else if (act === "view.ranges") showRanges = !showRanges;
-  else if (act === "view.heatmap") { showHeatmap = !showHeatmap; refreshUi(); }
+  else if (act === "view.heatmap") { showHeatmap = !showHeatmap; if (endDismissed && !showHeatmap) endDismissed = false; refreshUi(); } // 0.57: heatmap off again brings the report back
   else if (k === "Enter" && tool === "zone" && draft.length) closeDraft();
   else if (act === "tool.zone") setTool("zone");
   else if (act === "tool.remove") setTool("remove");
@@ -1099,6 +1204,8 @@ function startBattle() {
   if (planKey) { save.plans[planKey] = exportPlan(); Save.store(save); }
   if (sim.units.filter(u => sim.canOrder(u)).length >= 2) tip("groups"); // 0.50
   sim.startBattle(); speed = battleSpeed(); setTool("pan"); refreshUi(); tip("views"); // 0.41
+  sim.stats.flags = { dev: !!save.settings.devMode, modded: modReports.some(m => m.changes > 0) }; // 0.57
+  if ((save.career?.battles ?? 0) >= 1) tip("report"); // 0.57: from the second battle on
   if (sim.classKids > 0) notify("Schools are walking their students to your safe zone. Parents: meet your kids there.", false, sim.time + 30); // 0.41 (Insane school day)
   snd.music("battle");
   log("info", "battle-start", { ...cityTag(), ...planSummary(), sites: sim.sites.map(([x, y]) => [Math.round(x), Math.round(y)]) });
@@ -1221,7 +1328,7 @@ function hud(now: number) {
   if (sim.breaches > lastBreaches && now - lastAlarm > 30000) { notify("Breach: the infected are through a wall.", true); lastAlarm = now; }
   if (sim.breaches !== lastBreaches) { log("warn", "breach", { total: sim.breaches, t: +sim.time.toFixed(1) }); lastBreaches = sim.breaches; }
   if (sim.roundResult && !roundShown && sim.phase === "battle") { roundShown = true; speed = 0; showEnd(sim.roundResult, true); }
-  if (sim.phase === "over" && sim.result && ($("end").hidden || !$("end-round-row").hidden)) showEnd(sim.result, false);
+  if (sim.phase === "over" && sim.result && !endDismissed && ($("end").hidden || !$("end-round-row").hidden)) showEnd(sim.result, false); // 0.57 review: not while the player looks at the map
 }
 
 let roundShown = false;
@@ -1248,10 +1355,12 @@ function showEnd(r: Score, round: boolean) {
   $("end-people").innerHTML = endStatsLines(r).map(esc).join("<br>"); // 0.42: refusers and accidental kills
   $("end-tiers").textContent = C.MEDALS.map(([n, p]) => `${n} ${p}`).join("  ·  ") + ` points (needs ${C.MEDAL_MIN_SAVED_PCT}% saved)`;
   recordResult(r);
+  if (mode === "game" && (round || !recordDone)) { erTab = "overview"; writeRecord(round ? "round" : "final", r, () => { if (!$("end").hidden) renderReport(); }); } // 0.57 (showEnd re-runs while the card is hidden: write once)
   const rk = P.rankFor(save.xp ?? 0);
   const effBest = city && !dailyDate ? save.best[bestKey(city.id, sim.difficulty)]?.perM : undefined; // recordResult ran: includes this run
   const eff = r.perM !== undefined ? ` · ${fmtPerM(r.perM)} saved per $1M${effBest !== undefined && effBest > r.perM + 1e-9 ? ` (best ${fmtPerM(effBest)})` : effBest !== undefined ? " (best)" : ""}${r.underBudget ? " · Under Budget" : ""}` : "";
   $("end-xp").textContent = `Damage bill ${C.money(r.damage)} · spent ${C.money(r.spent)}${eff} · city ${r.intact.toFixed(0)}% intact${r.bonus ? ` · ${r.bonus} bonus +${C.BONUS_XP} XP` : ""} · ${round ? "this round" : "this battle"} +${r.xp.toLocaleString()} XP · ${rk.name}, ${(save.xp ?? 0).toLocaleString()} XP${rk.next ? ` (${rk.next[0]} at ${rk.next[1].toLocaleString()})` : ""}${lastNews ? ` · ${lastNews}` : ""}`;
+  renderReport(); // 0.57
   snd.fanfare(!!r.medal);
   if (round) { $("end").hidden = false; log("info", "round-complete", { ...cityTag(), ...r, t: +sim.time.toFixed(1) }); refreshUi(); return; }
   log("info", "battle-end", { ...cityTag(), ...r, t: +sim.time.toFixed(1), evacuated: sim.evacuated, byTrain: sim.trainsEvacuated, lifts: sim.liftsFlown, liftsAborted: sim.liftsAborted, kills: sim.kills, swimmersKilled: sim.swimmersKilled, breaches: sim.breaches, waves: sim.wave, civKilledByUs: sim.civKilledByUs, abilitiesLeft: { ...sim.charges }, bridgesBlown: sim.blown.size, unitKills: [...by].map(([k, [n, kl]]) => `${k}x${n}:${kl}`) });
@@ -3176,7 +3285,7 @@ $("startbtn").addEventListener("click", () => {
   if (sim.phase === "plan") startBattle(); else newSim(true);
 });
 $("heatmapbtn").addEventListener("click", () => { showHeatmap = !showHeatmap; refreshUi(); });
-$("end-heatmap").addEventListener("click", () => { showHeatmap = true; $("end").hidden = true; refreshUi(); say(withKeys("Showing kill heatmap. Press {key:view.heatmap} or Menu when done."), 5000); });
+$("end-heatmap").addEventListener("click", () => { showHeatmap = true; $("end").hidden = true; endDismissed = sim.phase === "over"; refreshUi(); say(withKeys("Showing kill heatmap. Press {key:view.heatmap} or Menu when done."), 5000); });
 $("closegates").addEventListener("click", () => { const n = sim.closeAllGates(); buildZone(); log("info", "close-all-gates", { closed: n, t: +sim.time.toFixed(1), phase: sim.phase }); say(n ? (sim.phase === "battle" ? `Closing ${n} gate cells (${C.GATE_CLOSE_S}s).` : "All gates closed.") : "No open gates left."); });
 $("grouptabs").addEventListener("click", e => { // 0.50: click a slot = its key; twice quickly jumps there
   const b = (e.target as HTMLElement).closest<HTMLButtonElement>(".gslot"); if (!b) return;
@@ -3210,7 +3319,7 @@ $("cmdorders").addEventListener("click", e => { // 0.51: the orders page of the 
 });
 $("clear").addEventListener("click", () => { if (sim.phase === "plan") { sim.clearZone(); draft = []; buildZone(); refreshUi(); } });
 $("end-retry").addEventListener("click", () => newSim(true));
-$("end-continue").addEventListener("click", () => { $("end").hidden = true; speed = battleSpeed(); log("info", "round-continue", { t: +sim.time.toFixed(1) }); refreshUi(); });
+$("end-continue").addEventListener("click", () => { $("end").hidden = true; sim.markKeepFighting(); /* 0.57 */ speed = battleSpeed(); log("info", "round-continue", { t: +sim.time.toFixed(1) }); refreshUi(); });
 $("end-stop").addEventListener("click", () => { $("end").hidden = true; sim.callIt(); });
 $("end-new").addEventListener("click", () => newSim(false, true));
 $("end-next").addEventListener("click", () => { const i = city ? C.CITIES.indexOf(city) : -1; if (C.CITIES[i + 1]) { dailyDate = null; customMap = null; playCity(C.CITIES[i + 1]); } });
@@ -3269,7 +3378,14 @@ $("p-withdraw").addEventListener("click", () => {
   sim.withdraw(); resume();
 });
 $("p-title").addEventListener("click", () => { log("info", "quit-to-menu", { phase: sim.phase, t: +sim.time.toFixed(1) }); startAttract(); });
-const quitDesktop = () => { log("info", "quit-to-desktop", { mode, phase: sim.phase }); Save.desktop?.quit(); };
+const quitDesktop = async () => { // 0.57: record a battle in progress, give the history write a moment, then quit
+  log("info", "quit-to-desktop", { mode, phase: sim.phase });
+  closeOutBattle();
+  await Promise.race([recQueue, new Promise(r => setTimeout(r, 3000))]);
+  Save.desktop?.quit();
+};
+Save.desktop?.onClosing?.(() => { void quitDesktop(); }); // 0.57 review: the window's X / Alt+F4 records the battle first
+window.addEventListener("beforeunload", () => closeOutBattle()); // browser tab closed: the record is queued, but the tab may close before it is written
 $("p-quit").addEventListener("click", quitDesktop);
 $("p-quit").hidden = !Save.desktop;
 $("logs").addEventListener("click", () => {
@@ -3357,7 +3473,9 @@ $("opt-crowd").addEventListener("change", e => {
   log("info", "setting", { crowd: save.settings.crowd });
   if (mode === "game") say("The new crowd size applies from the next battle you start.", 4000);
 });
-$("opt-dev").addEventListener("change", e => { save.settings.devMode = (e.target as HTMLInputElement).checked; Save.store(save); log("info", "setting", { devMode: save.settings.devMode }); syncDev(); });
+$("opt-dev").addEventListener("change", e => { save.settings.devMode = (e.target as HTMLInputElement).checked; Save.store(save);
+  if (save.settings.devMode && mode === "game" && sim.phase !== "plan" && sim.stats.flags) sim.stats.flags.dev = true; // 0.57: sticks for this battle
+  log("info", "setting", { devMode: save.settings.devMode }); syncDev(); });
 $("devbtn").addEventListener("click", toggleDevPanel);
 document.querySelectorAll<HTMLButtonElement>("[data-dspeed]").forEach(b => b.addEventListener("click", () => { setSpeed(Number(b.dataset.dspeed), true); devLog("speed", { speed }); }));
 $("dev-money").addEventListener("click", () => { sim.budget += 100_000_000; devLog("money", { money: sim.remaining() }); refreshUi(); });
@@ -3419,7 +3537,7 @@ const fmtMB = (b: number) => b >= 1e6 ? `${(b / 1e6).toFixed(1)} MB` : `${Math.m
 function esc(t: string) { return t.replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]!)); } // hoisted: the command card uses it at startup
 /** Everything the page needs besides the Sim to carry on a saved battle (plain data). */
 function pageState(): Snap.PageState {
-  return { cityId: city?.id ?? null, dailyDate, customName: customMap?.name ?? null, mutators: [...activeMutators], seed, xpGiven, roundShown,
+  return { cityId: city?.id ?? null, dailyDate, customName: customMap?.name ?? null, customStreets: customMap?.streets ?? null, mutators: [...activeMutators], seed, xpGiven, roundShown,
     tipGates, lastWave, warnedWave, warnShown, outbreakShown, lastBreaches, lastEarned, cam: { x: cam.x, y: cam.y, scale: cam.scale } };
 }
 async function saveGame() {
@@ -3453,6 +3571,7 @@ async function loadBattle(n: number) {
   let snap: Snap.Snapshot;
   try { snap = await Snap.unpack(gz); } catch (err) { say("That battle file is damaged.", 4000); log("error", "battle-load-failed", { slot: n, error: String(err) }); return; }
   const p = snap.page as Record<string, any>;
+  closeOutBattle(); // 0.57: the battle being left is recorded, only once the saved one has unpacked (review I3)
   loadSeq++; // 0.36: drop any area load still pending
   const areaKey = typeof p.cityId === "string" && p.cityId.includes("/") ? p.cityId : null;
   if (areaKey) { try { await loadRealArea(areaKey); } catch { /* the snapshot carries its own map; Retry needs the area */ } } // review #2: Retry/Restart build a new Sim from it
@@ -3463,7 +3582,8 @@ async function loadBattle(n: number) {
   customMap = typeof p.customName === "string" ? { name: p.customName, map: snap.sim.map } : null;
   activeMutators.clear(); for (const m of Array.isArray(p.mutators) ? p.mutators : []) if (m in C.MUTATORS) activeMutators.add(m);
   seed = Number(p.seed) || 0;
-  sim = snap.sim;
+  if (customMap && Array.isArray(p.customStreets)) customMap.streets = p.customStreets; // 0.57
+  sim = snap.sim; recordDone = false; lastRecord = null; lastBroken = []; placesCache = null; endDismissed = false;
   closePerson(); $("timepick").hidden = true; startMin = sim.startMin; // 0.39: the loaded battle's clock; no window or follow carried over
   document.body.classList.remove("attract");
   stack.length = 0; show(null);
@@ -3616,6 +3736,8 @@ if (SHOTS) {
       case "cursor": cur.hidden = true; hover = null; mouse = null; break;
       case "person": { const k = sim.civAt(op.x, op.y, 14); if (k < 0) throw new Error(`no person near ${op.x},${op.y}`); setTool("pan"); selectPerson(k); pointAt(sim.ax[k] - 0.5, sim.ay[k] - 0.5); break; }
       case "camera": cam.scale = op.scale; centerOn(op.x, op.y); following = false; break;
+      case "endround": { const e = sim.endRoundNow(); if (e) throw new Error(`endround: ${e}`); if (sim.roundResult && !roundShown) { roundShown = true; speed = 0; showEnd(sim.roundResult, true); } break; } // 0.57: as hud() would
+      case "report": erTab = op.tab as Tab; renderReport(); break;
     }
   };
   const step = (s: number) => { const n = Math.round(s / C.DT); for (let i = 0; i < n && sim.phase === "battle"; i++) sim.step(C.DT); };
@@ -3635,4 +3757,4 @@ if (SHOTS) {
     ready: () => mode === "game",
   };
 }
-(window as any).horde = { openCodex, get codex() { return codex; }, get sim() { return sim; }, get mode() { return mode; }, get save() { return save; }, cities: C.CITIES, recentLog, click, closeDraft, startBattle, setTool, setSpeed, cam, playCity, startAttract, pause, resume, saveGame, loadBattle, get startMin() { return startMin; }, get selPerson() { return selPerson; }, get following() { return following; } };
+(window as any).horde = { get lastRecord() { return lastRecord; }, openCodex, get codex() { return codex; }, get sim() { return sim; }, get mode() { return mode; }, get save() { return save; }, cities: C.CITIES, recentLog, click, closeDraft, startBattle, setTool, setSpeed, cam, playCity, startAttract, pause, resume, saveGame, loadBattle, get startMin() { return startMin; }, get selPerson() { return selPerson; }, get following() { return following; } };

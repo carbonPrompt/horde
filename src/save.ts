@@ -4,6 +4,7 @@ import type * as C from "./config";
 import type { PlanGroup } from "./groups";
 import { cleanOrders, type Order } from "./orders";
 import { SECTIONS } from "./codex";
+import { cleanCareer, parseHistoryText, type Career, type History } from "./battlerecord";
 const CODEX_SECTIONS: string[] = SECTIONS.map(s => s.id);
 
 // 0.45: Plan.units entries: 5th = the unit's orders (present = commanded), 6th = stand by
@@ -13,12 +14,13 @@ export interface Settings { fullscreen: boolean; edgeScroll: boolean; showRanges
 export interface Best { pct: number; medal: string | null; mayhem?: number; perM?: number; underBudget?: boolean } // 0.48: best people saved per $1M, Under Budget badge // pct: round score 0..100 since 0.20 ("% evacuated" before)
 /** 0.33: the battle frozen in this slot (the file itself sits beside the profile). */
 export interface BattleInfo { version: string; savedAt: string; label: string; t: number; phase: string; bytes: number }
-export interface SaveData { battle?: BattleInfo; settings: Settings; best: Record<string, Best>; plans: Record<string, Plan>; daily?: Record<string, Best>; xp?: number | null; achievements?: Record<string, string>; gameVersion?: string } // gameVersion: the version that last wrote it (0.26+)
+export interface SaveData { battle?: BattleInfo; settings: Settings; best: Record<string, Best>; plans: Record<string, Plan>; daily?: Record<string, Best>; xp?: number | null; achievements?: Record<string, string>; gameVersion?: string; career?: Career } // 0.57 career: running totals over the battle history // gameVersion: the version that last wrote it (0.26+)
 
 const KEY = "horde.save.v1";
 export const desktop: { setFullscreen(on: boolean): void; quit(): void; readSave(): string | null; writeSave(text: string): void; log?(line: string): void; openLogs?(): void; readMods?(): { file: string; text: string }[]; openMods?(): void;
   updatesList?(): Promise<{ versions?: { version: string; notes: string; date: string; size: number }[]; error?: string }>; updatesInstall?(v: string): Promise<{ ok?: boolean; error?: string }>;
   onUpdateProgress?(cb: (pct: number) => void): void;
+  historyRead?(n: number): Promise<{ text?: string; missing?: boolean; error?: string } | null>; historyWrite?(n: number, text: string): Promise<boolean>; historyQuarantine?(n: number): Promise<boolean>; onClosing?(cb: () => void): void; // 0.57
   slotsList?(): { active: number | null; slots: { n: number; text: string | null; battle: number }[] }; slotSelect?(n: number): void; slotDelete?(n: number): void;
   battleWrite?(n: number, bytes: Uint8Array): Promise<boolean>; battleRead?(n: number): Promise<Uint8Array | null>; battleDelete?(n: number): void; openSaves?(): void; restoreOffer?(saveVersion: string | undefined): { name: string; version: string; stamp: string } | null; restoreBackup?(name: string): boolean; openReleases?(): void } | undefined =
   (globalThis as any).hordeDesktop;
@@ -79,14 +81,15 @@ export function clean(s: SaveData): SaveData {
     && Number.isFinite(b.t) && typeof b.phase === "string" && Number.isFinite(b.bytes)
     ? { battle: { version: b.version, savedAt: b.savedAt.slice(0, 40), label: b.label.slice(0, 120), t: b.t, phase: b.phase.slice(0, 12), bytes: b.bytes } } : {};
   const gv = typeof s.gameVersion === "string" && VER.test(s.gameVersion) ? { gameVersion: s.gameVersion } : {};
-  return { settings, best: best(s.best), daily: best(s.daily), plans, achievements: ach, xp: Number.isFinite(s.xp) ? Math.max(0, s.xp as number) : null, ...gv, ...battle };
+  const career = s.career && typeof s.career === "object" && !Array.isArray(s.career) ? { career: cleanCareer(s.career) } : {}; // 0.57
+  return { settings, best: best(s.best), daily: best(s.daily), plans, achievements: ach, xp: Number.isFinite(s.xp) ? Math.max(0, s.xp as number) : null, ...gv, ...battle, ...career };
 }
 
 function parse(raw: string | null): SaveData | null {
   if (!raw) return null;
   try {
     const d = defaults(), s = JSON.parse(raw);
-    return clean({ settings: { ...d.settings, ...s.settings }, best: s.best ?? {}, plans: s.plans ?? {}, daily: s.daily ?? {}, xp: s.xp ?? null, achievements: s.achievements ?? {}, gameVersion: s.gameVersion, battle: s.battle });
+    return clean({ settings: { ...d.settings, ...s.settings }, best: s.best ?? {}, plans: s.plans ?? {}, daily: s.daily ?? {}, xp: s.xp ?? null, achievements: s.achievements ?? {}, gameVersion: s.gameVersion, battle: s.battle, career: s.career });
   } catch { return null; }
 }
 
@@ -133,20 +136,24 @@ export function deleteSlot(n: number) {
   if (desktop?.slotDelete) { desktop.slotDelete(n); return; }
   try { localStorage.removeItem(SLOT_KEY(n)); } catch { /* blocked */ }
   void idb("readwrite", st => st.delete(n));
+  void idb("readwrite", st => st.delete(n), "history"); // 0.57
   if (browserActive === n) { browserActive = null; try { localStorage.setItem(META_KEY, JSON.stringify({ active: null })); } catch { /* blocked */ } }
 }
 export const canOpenFolder = () => !!desktop?.openSaves;
 export function openFolder() { desktop?.openSaves?.(); }
 
-function idb<T>(mode: IDBTransactionMode, fn: (st: IDBObjectStore) => IDBRequest<T>): Promise<T | null> {
+// 0.57: version 2 adds the "history" store next to "battles" (each created only if missing)
+function idb<T>(mode: IDBTransactionMode, fn: (st: IDBObjectStore) => IDBRequest<T>, store: "battles" | "history" = "battles"): Promise<T | null> {
   return new Promise(res => {
     try {
-      const rq = indexedDB.open("horde", 1);
-      rq.onupgradeneeded = () => rq.result.createObjectStore("battles");
+      const rq = indexedDB.open("horde", 2);
+      rq.onupgradeneeded = () => { for (const n of ["battles", "history"]) if (!rq.result.objectStoreNames.contains(n)) rq.result.createObjectStore(n); };
       rq.onerror = () => res(null);
+      rq.onblocked = () => res(null); // 0.57 review: an old tab holding version 1 must not hang every save
       rq.onsuccess = () => {
+        rq.result.onversionchange = () => rq.result.close();
         try {
-          const tx = rq.result.transaction("battles", mode), r = fn(tx.objectStore("battles"));
+          const tx = rq.result.transaction(store, mode), r = fn(tx.objectStore(store));
           r.onsuccess = () => res(r.result ?? null); r.onerror = () => res(null);
         } catch { res(null); }
       };
@@ -161,6 +168,47 @@ export async function readBattle(n: number): Promise<Uint8Array | null> {
   if (desktop?.battleRead) return desktop.battleRead(n);
   const r = await idb<Uint8Array>("readonly", st => st.get(n));
   return r instanceof Uint8Array ? r : null;
+}
+// ---------- 0.57: the slot's battle history (desktop: saves/slotN.history.json; browser: IndexedDB "history") ----------
+/** ok false: the history could not be read safely (a read error, or damaged text that could not be set aside):
+ *  the caller must not write over it. A damaged file is renamed aside (kept) and a fresh history starts. */
+export async function readHistory(n: number): Promise<{ ok: boolean; history: History }> {
+  const bad = { ok: false, history: { v: 1 as const, battles: [] } };
+  try {
+    if (desktop?.historyRead) {
+      const r = await desktop.historyRead(n);
+      if (!r || r.error) return bad;
+      if (r.missing) return parseHistoryText(null);
+      const p = parseHistoryText(r.text ?? "");
+      if (!p.ok && desktop.historyQuarantine && await desktop.historyQuarantine(n)) return parseHistoryText(null);
+      return p;
+    }
+    const r = await idbGet(n, "history");
+    if (!r.ok) return bad;
+    return parseHistoryText(typeof r.value === "string" ? r.value : null);
+  } catch { return bad; }
+}
+/** An IndexedDB read that tells "not there" (ok, undefined) apart from "could not read" (not ok). */
+function idbGet(key: number, store: "battles" | "history"): Promise<{ ok: boolean; value?: unknown }> {
+  return new Promise(res => {
+    try {
+      const rq = indexedDB.open("horde", 2);
+      rq.onupgradeneeded = () => { for (const nm of ["battles", "history"]) if (!rq.result.objectStoreNames.contains(nm)) rq.result.createObjectStore(nm); };
+      rq.onerror = () => res({ ok: false }); rq.onblocked = () => res({ ok: false });
+      rq.onsuccess = () => {
+        const db = rq.result; db.onversionchange = () => db.close();
+        try { const g = db.transaction(store, "readonly").objectStore(store).get(key); g.onsuccess = () => { res({ ok: true, value: g.result }); db.close(); }; g.onerror = () => { res({ ok: false }); db.close(); }; }
+        catch { res({ ok: false }); db.close(); }
+      };
+    } catch { res({ ok: false }); }
+  });
+}
+export async function writeHistory(n: number, h: History): Promise<boolean> {
+  try {
+    const t = JSON.stringify(h);
+    if (desktop?.historyWrite) return await desktop.historyWrite(n, t);
+    return (await idb("readwrite", st => st.put(t, n), "history")) !== null;
+  } catch { return false; }
 }
 export function deleteBattle(n: number) {
   if (desktop?.battleDelete) desktop.battleDelete(n); else void idb("readwrite", st => st.delete(n));

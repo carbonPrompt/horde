@@ -169,6 +169,58 @@
     border: 1px solid var(--line-bright); border-radius: 14px; padding: 26px 32px;
     text-align: center; min-width: 390px; max-width: 580px; box-shadow: 0 18px 48px rgba(0,0,0,0.7);
   }
+  /* 0.57: after-action report */
+  #end:has(.card.er) { position: fixed; z-index: 30; } /* 0.57: the report covers the top bar and the bottom panel */
+  #end .card.er { text-align: left; width: min(1520px, calc(100vw - 32px)); max-width: none; height: min(860px, calc(100vh - 32px)); padding: 0; display: flex; flex-direction: column; overflow: hidden; }
+  .er-top { display: flex; align-items: center; gap: 18px; padding: 14px 22px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+  .er-head { display: flex; align-items: center; gap: 22px; flex: 1; min-width: 0; flex-wrap: wrap; }
+  .er-btns .row { margin-top: 0 !important; justify-content: flex-end !important; }
+  .er-kicker { font-size: 11.5px; color: var(--dim); letter-spacing: 1.6px; text-transform: uppercase; font-weight: 700; }
+  .er-city { font-size: 19px; font-weight: 800; }
+  .er-flag { font-size: 12px; color: #facc15; margin-top: 2px; }
+  .er-medal { text-align: center; } .er-medal div { font-size: 32px; font-weight: 900; letter-spacing: 1px; line-height: 1; } .er-medal small { color: var(--dim); font-size: 12px; }
+  .er-score { flex: 1; min-width: 260px; max-width: 520px; }
+  .er-sub, .er-dim { color: var(--dim); font-size: 12px; }
+  .er-scorebar { position: relative; height: 18px; background: #0f141c; border-radius: 4px; display: flex; margin-top: 4px; }
+  .er-scorebar i { display: block; height: 100%; }
+  .er-line { position: absolute; top: -3px; height: 24px; border-left: 2px dashed; }
+  .er-ticks { position: relative; height: 15px; font-size: 11px; margin-top: 2px; } .er-ticks span { position: absolute; transform: translateX(-50%); white-space: nowrap; }
+  .er-xpline { flex-basis: 100%; font-size: 12px; color: var(--dim); } .er-news { color: var(--accent); }
+  .er-reason { padding: 6px 22px 0; color: var(--dim); font-size: 12.5px; }
+  .er-tabs { display: flex; gap: 2px; padding: 0 22px; border-bottom: 1px solid var(--line); background: #121722; overflow-x: auto; flex: none; }
+  #end .er-tab { background: none; border: 0; border-bottom: 2px solid transparent; border-radius: 0; color: var(--dim); padding: 10px 14px; font-weight: 600; white-space: nowrap; }
+  #end .er-tab.on { color: var(--text); border-bottom-color: var(--accent); }
+  .er-body { flex: 1; min-height: 0; overflow: auto; padding: 14px 22px; display: flex; flex-direction: column; gap: 12px; }
+  .er-foot { padding: 8px 22px 12px; font-size: 12px; color: var(--dim); border-top: 1px solid var(--line); }
+  .er-kpis { display: grid; grid-template-columns: repeat(6, 1fr); gap: 10px; }
+  .er-kpi { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 9px 12px; }
+  .er-k { font-size: 10.5px; letter-spacing: 1.3px; text-transform: uppercase; color: var(--dim); font-weight: 700; }
+  .er-v { font-size: 23px; font-weight: 900; font-variant-numeric: tabular-nums; } .er-d { font-size: 11.5px; color: var(--dim); } .er-up { color: var(--accent); }
+  .er-grid2 { display: grid; grid-template-columns: 1.55fr 1fr; gap: 12px; min-height: 0; }
+  .er-grid3 { display: grid; grid-template-columns: 1fr 1.5fr 1fr; gap: 12px; min-height: 0; }
+  .er-panel { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; min-width: 0; }
+  .er-panel h3 { margin: 0 0 8px; font-size: 11px; letter-spacing: 1.5px; text-transform: uppercase; color: var(--dim); font-weight: 700; display: flex; justify-content: space-between; gap: 8px; }
+  .er-panel h3 span { letter-spacing: 0; text-transform: none; font-weight: 500; }
+  .er-scroll { max-height: 600px; overflow: auto; }
+  .er-mt { margin-top: 14px !important; }
+  .er-svg { width: 100%; height: auto; display: block; }
+  .er-row { display: grid; grid-template-columns: 150px 1fr 70px; gap: 10px; align-items: center; margin: 5px 0; font-size: 12.5px; } .er-row b { text-align: right; font-variant-numeric: tabular-nums; }
+  .er-bar { height: 14px; background: #0f141c; border-radius: 4px; overflow: hidden; } .er-bar i { display: block; height: 100%; border-radius: 4px; }
+  .er-stack { display: flex; height: 20px; background: #0f141c; border-radius: 4px; overflow: hidden; } .er-stack i { display: block; height: 100%; }
+  .er-legend { display: flex; gap: 12px; flex-wrap: wrap; font-size: 12px; color: var(--dim); margin: 6px 0; }
+  .er-readout { color: var(--text); margin-left: auto; }
+  .er-records { font-size: 12.5px; line-height: 1.7; }
+  .er-para { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 12px 16px; font-size: 14px; line-height: 1.55; }
+  .er-kv { display: flex; justify-content: space-between; padding: 4px 0; border-bottom: 1px solid #1f2735; font-size: 12.5px; gap: 10px; } .er-kv b { font-variant-numeric: tabular-nums; }
+  .er-story { border-bottom: 1px solid #1f2735; padding: 8px 0; } .er-story[data-k] { cursor: pointer; } .er-story:last-child { border: 0; }
+  .er-sh { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; } .er-story p { margin: 3px 0 0; color: #cbd3df; font-size: 12.5px; line-height: 1.45; }
+  .er-tag { font-size: 10.5px; font-weight: 700; padding: 1px 7px; border-radius: 99px; border: 1px solid; white-space: nowrap; }
+  .er-picks { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 12px; color: var(--dim); margin-bottom: 8px; }
+  .er-empty { color: var(--dim); }
+  .er-log { margin: 6px 0 0 10px; font-size: 12px; } .er-log ul { margin: 2px 0 4px; padding-left: 16px; color: #cbd3df; }
+  #end table { width: 100%; border-collapse: collapse; font-size: 12px; } #end td, #end th { padding: 4px 6px; border-bottom: 1px solid #1f2735; text-align: left; } #end th { color: var(--dim); font-weight: 600; font-size: 11px; } #end td.n, #end th.n { text-align: right; font-variant-numeric: tabular-nums; }
+  @media (max-width: 1100px) { .er-kpis { grid-template-columns: repeat(3, 1fr); } .er-grid2, .er-grid3 { grid-template-columns: 1fr; } }
+  @media (max-width: 900px) { #end .card.er { width: calc(100vw - 16px); height: calc(100vh - 16px); } .er-kpis { grid-template-columns: repeat(2, 1fr); } .er-row { grid-template-columns: 110px 1fr 56px; } }
   #end-medal { font-size: 36px; font-weight: 900; margin: 4px 0 8px; letter-spacing: 1px; }
   #end-pct { font-size: 13.5px; font-weight: 500; color: #cbd5e1; margin: 6px 0; } /* 0.20: kills are the headline now */
   #end-kills, #end-tiers, #end-reason { color: var(--dim); margin: 6px 0; line-height: 1.45; }
@@ -590,18 +642,17 @@
       <div id="dev-info"></div>
     </div>
     <div id="msg"></div>
-    <div id="end" hidden><div class="card">
-      <div id="end-reason"></div>
-      <div id="end-headline"></div>
-      <div id="end-medal"></div>
-      <div id="end-score"></div>
-      <div id="end-pct"></div>
-      <div id="end-kills"></div>
-      <div id="end-people"></div>
-      <div id="end-tiers"></div>
-      <div class="row" id="end-round-row" hidden><button id="end-continue">Keep fighting</button><button id="end-stop">End here</button></div>
-      <div id="end-xp"></div>
-      <div class="row" id="end-final-row"><button id="end-retry">Try again</button><button id="end-next">Next city</button><button id="end-new">New city</button><button id="end-heatmap">Kill heatmap (H)</button><button id="end-cities">Cities</button><button id="end-title">Menu</button></div><!-- end-final-row -->
+    <div id="end" hidden><div class="card er">
+      <div class="er-top"><div id="er-head" class="er-head"></div>
+        <div class="er-btns">
+          <div class="row" id="end-round-row" hidden><button id="end-continue">Keep fighting</button><button id="end-stop">End here</button></div>
+          <div class="row" id="end-final-row"><button id="end-retry">Try again</button><button id="end-next">Next city</button><button id="end-new">New city</button><button id="end-heatmap">Kill heatmap (H)</button><button id="end-cities">Cities</button><button id="end-title">Menu</button></div><!-- end-final-row -->
+        </div></div>
+      <div id="end-reason" class="er-reason"></div>
+      <div id="er-tabs" class="er-tabs"></div>
+      <div id="er-body" class="er-body"></div>
+      <div id="end-xp" class="er-foot"></div>
+      <div hidden><div id="end-headline"></div><div id="end-medal"></div><div id="end-score"></div><div id="end-pct"></div><div id="end-kills"></div><div id="end-people"></div><div id="end-tiers"></div></div><!-- 0.57: the old card's lines, kept for the log -->
     </div></div>
   <div id="grouptabs" hidden><button class="gslot" data-key="1" data-n="0"></button><button class="gslot" data-key="2" data-n="1"></button><button class="gslot" data-key="3" data-n="2"></button><button class="gslot" data-key="4" data-n="3"></button><button class="gslot" data-key="5" data-n="4"></button></div>
   </main>

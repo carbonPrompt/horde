@@ -3,6 +3,7 @@ import { REAL_MAP_H, REAL_MAP_W } from "./config";
 import { parseOverpass } from "./realcity/osmtypes";
 import { dominantAngle, toCell, type Frame } from "./realcity/geo";
 import { rasterizeArea } from "./realcity/raster";
+import { streetLines } from "./realcity/streets";
 
 export interface OsmBbox { s: number; w: number; n: number; e: number }
 
@@ -65,7 +66,7 @@ export async function decodeCityMapV2(s: string, seed: number): Promise<CityMap>
  *  scale, turned to its street grid (0.36: the same rasterizer as the baked cities; open sea shows only where OSM
  *  has water polygons, since a live capture has no sea points). */
 export const LIVE_MAX_BYTES = 60 * 1024 * 1024; // untrusted reply: refuse anything bigger
-export async function fetchLiveOsmCity(query: string, seed = 777, f: typeof fetch = fetch): Promise<{ name: string; map: CityMap }> {
+export async function fetchLiveOsmCity(query: string, seed = 777, f: typeof fetch = fetch): Promise<{ name: string; map: CityMap; streets: [string, number[]][] }> {
   const geoUrl = `https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${encodeURIComponent(query)}`;
   const gRes = await f(geoUrl, { headers: { Accept: "application/json" } });
   if (!gRes.ok) throw new Error("Could not look up that place on OpenStreetMap.");
@@ -89,5 +90,6 @@ export async function fetchLiveOsmCity(query: string, seed = 777, f: typeof fetc
   const probe: Frame = { lat0: lat, lon0: lon, angle: 0, w: 650, h: 500 };
   const roads = d.ways.filter(w => w.tags.highway && w.geom.some(p => { const c = toCell(probe, p); return Math.hypot(c[0] - 325, c[1] - 250) < 350; })).map(w => w.geom);
   const frame = { ...probe, angle: dominantAngle(roads) };
-  return { name, map: rasterizeArea(d, { frame, seed, diagonals: [] }) };
+  const map = rasterizeArea(d, { frame, seed, diagonals: [] });
+  return { name, map, streets: streetLines(d, frame, map) }; // 0.57: real street names for the stories
 }
