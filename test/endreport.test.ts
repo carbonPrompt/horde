@@ -63,7 +63,7 @@ test("town tab shows stories, refusers and the paragraph", () => {
 });
 
 test("records broken show on the overview", () => {
-  const h = tabHtml("overview", rec({}), { broken: [{ key: "mostSaved", was: 900, now: 1234 }], live: false });
+  const h = tabHtml("overview", rec({}), { broken: [{ key: "mostSaved", was: 900, now: 1234 }], live: true });
   expect(h).toContain("1,234"); expect(h).toContain("900");
 });
 
@@ -79,4 +79,9 @@ test("units and strikes tables list each entry", () => {
 
 test("no em-dash in rendered output", () => {
   expect(all(rec({ keepFighting: true }), true)).not.toContain("—");
+});
+
+test("0.58: a past battle's report (not live) has no Records broken section", () => {
+  expect(tabHtml("overview", rec({}), { broken: [], live: false })).not.toContain("Records broken");
+  expect(tabHtml("overview", rec({}), { broken: [], live: true })).toContain("Records broken");
 });

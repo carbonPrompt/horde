@@ -1,5 +1,6 @@
 // 0.57: the after-action report. Pure render functions from a BattleRecord (HTML and SVG strings), so the same
 // report can open from the battle history later. Every string from a record is escaped; numbers are en-US.
+import { BY_ID } from "./achievements";
 import * as C from "./config";
 import { formatClock } from "./people";
 import { COLS, type Col, SE_SIRENS, SE_HORDE, SE_BREACH, SE_GATE_TO_WALL, SE_WALL_TO_GATE, SE_GATES_LOCKED, SE_BRIDGE, SE_STRIKE, SE_UNIT_PLACED,
@@ -66,7 +67,8 @@ export function headerHtml(r: BattleRecord, extra: { xpLine: string; news: strin
     `<div class="er-medal"><div style="color:${med ? med[2] : "#9aa3b2"}">${esc(o.medal ? o.medal.toUpperCase() : "NO MEDAL")}</div><small>${n0(o.score)} / 100 points</small></div>` +
     `<div class="er-score"><div class="er-sub">Round score: saved ${n0(p.saved)} · speed ${n0(p.speed)} · city intact ${n0(p.city)} · infected killed ${n0(p.kills)}${o.mayhem !== undefined ? ` · Mayhem ${n0(o.mayhem)}` : ""}</div>` +
     `<div class="er-scorebar">${seg(p.saved, "#4ade80")}${seg(p.speed, "#60a5fa")}${seg(p.city, "#facc15")}${seg(p.kills, "#f87171")}${lines}</div><div class="er-ticks">${labels}</div></div>` +
-    (extra.xpLine || extra.news ? `<div class="er-xpline">${esc(extra.xpLine)}${extra.news ? `<div class="er-news">${esc(extra.news)}</div>` : ""}</div>` : "");
+    (extra.xpLine || extra.news ? `<div class="er-xpline">${esc(extra.xpLine)}${extra.news ? `<div class="er-news">${esc(extra.news)}</div>` : ""}</div>` : "") +
+    (r.earned?.length ? `<div class="er-ach">Achievement${r.earned.length > 1 ? "s" : ""} earned: ${r.earned.map(id => BY_ID[id]).filter(Boolean).map(a => `<b class="t${a.tier}">${esc(a.name)}</b>`).join(" ")}</div>` : ""); // 0.59
 }
 
 export function timelineSvg(r: BattleRecord, cols: Col[], w: number, h: number): string {
@@ -115,7 +117,7 @@ function killRows(r: BattleRecord): [string, number, string][] {
 }
 const kpi = (label: string, value: string, color: string, sub: string, best: boolean) =>
   `<div class="er-kpi"><div class="er-k">${esc(label)}</div><div class="er-v" style="color:${color}">${value}</div><div class="er-d">${sub}${best ? ` · <span class="er-up">new record</span>` : ""}</div></div>`;
-const BROKEN_NAMES: Record<string, string> = { mostSaved: "Most people saved in one battle", mostKills: "Most infected killed in one battle", unitKills: "Most kills by one unit",
+export const BROKEN_NAMES: Record<string, string> = { mostSaved: "Most people saved in one battle", mostKills: "Most infected killed in one battle", unitKills: "Most kills by one unit",
   damage: "Biggest damage bill", held: "Longest hold", perM: "Most people saved per $1M", familiesWhole: "Most families out together", city: "Most saved on this city at this difficulty" };
 
 function overview(r: BattleRecord, ctx: TabCtx): string {
@@ -134,7 +136,7 @@ function overview(r: BattleRecord, ctx: TabCtx): string {
   const broken = ctx.broken.length ? ctx.broken.map(x => `<div>${esc(BROKEN_NAMES[x.key] ?? x.key)}: <b>${x.key === "held" ? mmss(x.now) : x.key === "damage" ? money(x.now) : n0(x.now)}</b>${x.was !== null ? ` <span class="er-dim">was ${x.key === "held" ? mmss(x.was) : x.key === "damage" ? money(x.was) : n0(x.was)}</span>` : ""}</div>`).join("") : `<div class="er-dim">None this time.</div>`;
   return `<div class="er-kpis">${kpis}</div><div class="er-grid2"><div class="er-panel"><h3>The battle, minute by minute <span>hover for exact numbers</span></h3>${timelineSvg(r, DEFAULT_COLS, 880, 360)}</div>` +
     `<div class="er-panel"><h3>Kills by unit <span>${n0(t.kills)} total</span></h3>${kills}${top && top.kills ? `<div class="er-dim er-mt">Top unit: ${esc(top.label)}, ${n0(top.kills)} kills${t.longShot ? ` · longest sniper shot ${n0(t.longShot)} m` : ""}</div>` : ""}` +
-    `<h3 class="er-mt">What happened to the ${n0(t.people)} people</h3>${people}<h3 class="er-mt">Records broken</h3><div class="er-records">${broken}</div></div></div>`;
+    `<h3 class="er-mt">What happened to the ${n0(t.people)} people</h3>${people}${ctx.live ? `<h3 class="er-mt">Records broken</h3><div class="er-records">${broken}</div>` : ""}</div></div>`; // 0.58: a past battle's report has no "broken" list
 }
 
 function timeline(r: BattleRecord, ctx: TabCtx): string {

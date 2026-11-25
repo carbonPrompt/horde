@@ -23,6 +23,7 @@ export interface TownSummary {
   refusedHouseholds: number; talkedOut: number; ran: number; lostAtHome: number; stillHome: number;
   byPlace: { place: string; households: number; allOut: number }[];
   fetched: number; classKids: number; teensAlone: number; teensMadeIt: number; wentBack: number; wentBackMadeIt: number; killedByUs: number;
+  schoolKids?: number; schoolKidsSafe?: number; // 0.59: children at school when the sirens went, and how many of them made it (Back to School)
 }
 export interface TownRefuser { name: string; size: number; what: string; good: boolean | null }
 export interface TownReport { paragraph: string; summary: TownSummary; stories: TownStory[]; refusers: TownRefuser[] }
@@ -73,7 +74,7 @@ export function buildTownReport(inp: TownInput, seed: number): TownReport {
   };
 
   const sum: TownSummary = { households: 0, allOut: 0, lostSome: 0, lostAll: 0, refusedHouseholds: 0, talkedOut: 0, ran: 0, lostAtHome: 0, stillHome: 0,
-    byPlace: [], fetched: 0, classKids: 0, teensAlone: 0, teensMadeIt: 0, wentBack: 0, wentBackMadeIt: 0, killedByUs: 0 };
+    byPlace: [], fetched: 0, classKids: 0, teensAlone: 0, teensMadeIt: 0, wentBack: 0, wentBackMadeIt: 0, killedByUs: 0, schoolKids: 0, schoolKidsSafe: 0 };
   const place = { together: [0, 0], split: [0, 0], away: [0, 0] };
   const cands: { score: number; jitter: number; kind: string; story: TownStory }[] = [];
   const refusers: TownRefuser[] = [];
@@ -94,7 +95,7 @@ export function buildTownReport(inp: TownInput, seed: number): TownReport {
       const p = inp.person(k), sp = inp.startPlace[k];
       if (sp === PL_HOME) home++;
       if (p.age >= 18 && p.age < 65) { adults++; if (sp === PL_WORK) atWork++; }
-      if (p.age >= 5 && p.age <= 17) { kids++; if (sp === PL_SCHOOL) atSchool++; }
+      if (p.age >= 5 && p.age <= 17) { kids++; if (sp === PL_SCHOOL) { atSchool++; sum.schoolKids!++; if (made(k)) sum.schoolKidsSafe!++; } }
       if (fate[k] === FATE_KILLED_BY_US) sum.killedByUs++;
     }
     const title = size > 1 ? `The ${last} family (${size})` : `${name(mem[0])} ${last}, ${inp.person(mem[0]).age}`;

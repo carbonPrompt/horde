@@ -70,6 +70,7 @@ export interface Unit {
   kiting?: boolean; // backing away from infected while firing
   kills: number;
   sid?: number; // 0.57: the recorder's index for this unit
+  drop?: number; // 0.59: the paratrooper drop (recorder strike index) this squad came from
   shotX: number; shotY: number; shotT: number; // last shot, for tracers
   mode?: C.TargetMode;
   paid?: number;
@@ -121,7 +122,7 @@ export interface Orbit {
 }
 export interface Shot { x0: number; y0: number; x1: number; y1: number; t: number; land: number; cls: number; kind: C.UnitKind | "ac130" }
 /** 0.28: a shell or rocket on its way; it explodes (damage, craters, blast) when it lands. */
-interface Impact { x: number; y: number; r: number; dmg: number; maxHits?: number; sDmg: number; u: Unit; t: number; color: string }
+interface Impact { x: number; y: number; r: number; dmg: number; maxHits?: number; sDmg: number; u: Unit; t: number; color: string; gren?: boolean } // 0.59 gren: a grenadier's M320 round (achievement counter)
 /** Muzzle velocity in meters per second, for flight time (gameplay-compressed for the slow ones). */
 const SHOT_MPS = [900, 950, 1500, 0, 0];
 export interface Crater { x: number; y: number; r: number; t: number; seq: number } // seq: 1, 2, 3... (the renderer paints each once)
@@ -405,7 +406,7 @@ export class Sim {
         if (x >= x0 - 1 && x < x1 + 2 && y >= y0 - 1 && y < y1 + 2 && ++civ >= 40) break;
       }
     }
-    if (crushed) u.crushT = C.CRUSH_SLOW_S;
+    if (crushed) { u.crushT = C.CRUSH_SLOW_S; this.stats.c.crushedByVehicles += crushed; } // 0.59
     // 0.33: the thicker the crowd around it, the slower it goes (people and tank edge around each other)
     u.yieldCiv = civ > 0;
     u.yieldMul = civ ? Math.max(C.CRUSH_YIELD_MUL, 1 / (1 + civ / C.CRUSH_CROWD_N)) : 1;
@@ -451,6 +452,7 @@ export class Sim {
   private carrierNext = 0;
   carriersTurned = 0;
   blown = new Set<number>();
+  repairLow = new Set<number>(); // 0.59: wall cells a Repair Yard is bringing back from under half (Patched Up)
   mapVersion = 0; // bumps when the map itself changes (a bridge falls or buildings/terrain take damage)
   pending: Pending[] = [];
   fires: Fire[] = [];
@@ -2056,6 +2058,7 @@ export class Sim {
     this.kills++;
     if (u) {
       St.killBy(this.stats, this.time, { unit: St.unitIndex(this.stats, u, this.time) });
+      if (u.drop !== undefined) St.dropKill(this.stats, u.drop); // 0.59
       if (u.kind === "sniper") { const d = hyp(this.ax[k] - u.x, this.ay[k] - u.y) * C.CELL_M; if (d > this.stats.c.longShot) this.stats.c.longShot = d; }
     } else if (other) St.killBy(this.stats, this.time, { other });
     else if (this.curStrike >= 0) St.killBy(this.stats, this.time, { strike: this.curStrike });
@@ -2136,7 +2139,7 @@ export class Sim {
         } else if (p.kind === "para") {
           const spec = C.UNITS.para;
           this.units.push({ kind: "para", x: p.x | 0, y: p.y | 0, range: spec.range, ammo: spec.ammo, cooldown: 0.5, kills: 0, shotX: 0, shotY: 0, shotT: -1,
-            post: [p.x | 0, p.y | 0], hp: spec.mobile!.hp, ai: "hunt", thinkT: 0, soldiers: this.squadFor("para", p.x | 0, p.y | 0) });
+            post: [p.x | 0, p.y | 0], hp: spec.mobile!.hp, ai: "hunt", thinkT: 0, soldiers: this.squadFor("para", p.x | 0, p.y | 0), ...(p.strike !== undefined ? { drop: p.strike } : {}) });
         } else if (p.kind === "supply_drop") {
           this.applySupplyDrop(p.x, p.y);
         } else if (p.kind === "a10") { // 30 mm along the line: deadly, narrow, light on buildings
@@ -4149,7 +4152,11 @@ export class Sim {
             const ci = y * this.w + x, z = this.inZone[ci];
             if ((z === 2 || z === 3) && this.wallHp[ci] > 0) {
               const maxHp = z === 3 ? this.gateMaxHp() : this.wallMaxHp();
-              if (this.wallHp[ci] < maxHp) this.wallHp[ci] = Math.min(maxHp, this.wallHp[ci] + C.REPAIR_WALL_HPS * dt4);
+              if (this.wallHp[ci] < maxHp) {
+                if (this.wallHp[ci] < maxHp / 2) this.repairLow.add(ci); // 0.59: a section counts as repaired when it goes from under half to full
+                this.wallHp[ci] = Math.min(maxHp, this.wallHp[ci] + C.REPAIR_WALL_HPS * dt4);
+                if (this.wallHp[ci] >= maxHp && this.repairLow.delete(ci)) this.stats.c.repairs++;
+              }
             }
           }
         }
@@ -4391,7 +4398,9 @@ export class Sim {
       if (due.length) {
         this.impacts = this.impacts.filter(m => m.t > this.time);
         for (const m of due) {
+          const k0 = this.kills;
           this.areaDamage(m.x, m.y, m.r, m.dmg, false, m.u, m.maxHits);
+          if (m.gren) this.stats.c.grenadierKills += this.kills - k0; // 0.59
           // 0.38: direct-fire shells (tank, APC, Apache, Reaper) still fire near the zone but don't crater or wreck
           // buildings inside the no-fire band; artillery never aims into it (farTarget)
           if (C.UNITS[m.u.kind].minRange || !this.inNoFire(m.x, m.y)) this.damageTerrain(m.x, m.y, m.r, m.sDmg);
@@ -4656,7 +4665,7 @@ export class Sim {
             so.grenades!--; so.gCool = C.GREN_EVERY_S;
             const fl = this.shoot(u, t[0], t[1], SHOT_SHELL, 75, 0, so.x, so.y);
             so.shotX = u.shotX = t[0]; so.shotY = u.shotY = t[1]; so.shotT = u.shotT = this.time;
-            this.impacts.push({ x: t[0], y: t[1], r: C.GREN_SPLASH, dmg: C.GREN_DMG, maxHits: C.GREN_MAX_HITS, sDmg: 0, u, t: this.time + fl, color: "#ffb74d" });
+            this.impacts.push({ x: t[0], y: t[1], r: C.GREN_SPLASH, dmg: C.GREN_DMG, maxHits: C.GREN_MAX_HITS, sDmg: 0, u, t: this.time + fl, color: "#ffb74d", gren: true });
             continue; // the launcher this beat, not the rifle
           }
         }
@@ -5212,13 +5221,15 @@ export class Sim {
   /** The round is over (city empty or stalled): score it, freeze it, keep the battle running for Keep fighting. */
   /** 0.57: the page says the player chose Keep fighting. */
   markKeepFighting() { St.event(this.stats, St.SE_KEEP_FIGHTING, this.time, 0, 0); }
+  /** 0.59: copy the sim's own running counts into the recorder (each sample, and before the record is built). */
+  syncCounters() { const c = this.stats.c; c.swimmers = this.swimmersKilled; c.guardKills = this.guardKills; c.talkedOut = this.talkedOut; }
   /** 0.57: one recorder sample (every SAMPLE_S of battle time); also registers units placed since the last one. */
   private sampleStats() {
     const r = this.stats, c = this.counts();
     for (const u of this.units) if (u.sid === undefined) St.unitIndex(r, u, this.time);
     let strikeKills = 0; for (const x of r.strikes) strikeKills += x.kills;
     const dmg = this.cityDamage();
-    r.c.swimmers = this.swimmersKilled; r.c.guardKills = this.guardKills; r.c.talkedOut = this.talkedOut;
+    this.syncCounters();
     St.sample(r, { t: this.time, saved: this.evacuated, byTrain: this.trainsEvacuated, inZone: c.safe, outside: c.civ, infected: c.inf, kills: this.kills,
       killsStrikes: strikeKills, civKilledByUs: this.civKilledByUs, money: this.remaining(), spent: this.spent(), damage: dmg.bill, intact: dmg.intact,
       hordes: this.wave, breaches: this.breaches, unitsAlive: this.units.length, lifts: this.liftsFlown, liftsAborted: this.liftsAborted });

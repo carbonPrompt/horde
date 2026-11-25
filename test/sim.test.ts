@@ -803,12 +803,6 @@ test("progression: unlock thresholds, city trials, ranks, grandfathered XP, achi
   expect(P.rankFor(1300).name).toBe("Sergeant");
   expect(P.newlyUnlocked(300, 1300)).toEqual(expect.arrayContaining(["howitzer", "command", "barrage"]));
   expect(P.grandfatherXp({ a: { pct: 68.9, medal: "Gold" }, b: { pct: 20, medal: null } })).toBe(689 + 200 + 200);
-  const r = { saved: 12000, pct: 80, medal: "Platinum", reason: "", intact: 95, bonus: "Light Touch", xp: 0, waves: 31, round: true };
-  const got = P.earned({ r, kills: 12000, held: 1300, lifts: 120, nukes: 0, unitsLost: 0, daily: false, usedAbilities: 0 }, {});
-  const ids = got.map((a: { id: string }) => a.id);
-  for (const id of ["first_out", "round_one", "gold", "platinum", "evac_10k", "lifts_100", "hold_20", "waves_30", "kills_10k", "light_touch", "no_losses", "ground_game"]) expect(ids).toContain(id);
-  expect(ids).not.toContain("nuclear");
-  expect(P.earned({ r, kills: 0, held: 0, lifts: 0, nukes: 0, unitsLost: 0, daily: false, usedAbilities: 0 }, { first_out: "x" }).map((a: { id: string }) => a.id)).not.toContain("first_out"); // only once
 });
 
 // ---------- 0.15 mods ----------

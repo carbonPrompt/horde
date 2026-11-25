@@ -29,8 +29,8 @@ export class CdpClient {
     });
   }
   /** Runtime.evaluate on our own headless page; expressions are built from our recipe files with JSON.stringify. */
-  async eval(expression: string): Promise<any> {
-    const r = await this.send("Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true });
+  async eval(expression: string, timeoutMs = 60000): Promise<any> {
+    const r = await this.send("Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true }, timeoutMs);
     if (r.exceptionDetails) throw new Error(r.exceptionDetails.exception?.description ?? r.exceptionDetails.text);
     return r.result?.value;
   }

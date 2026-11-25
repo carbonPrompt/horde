@@ -74,5 +74,10 @@ export const RECIPES: Recipe[] = [
   // 0.57: the after-action report (a bigger window: the report is a full-screen page)
   { ...FH, id: "end-report-overview", kind: "shot", size: [1600, 900], crop: [40, 20, 1520, 800], camera: { x: 191, y: 106, scale: 3 }, setup: [...BASE, "battle", "advance 240", "endround", "report overview", "cursor off"] },
   { ...FH, id: "end-report-town", kind: "shot", size: [1600, 900], crop: [40, 20, 1520, 800], camera: { x: 191, y: 106, scale: 3 }, setup: [...BASE, "battle", "advance 240", "endround", "report town", "cursor off"] },
+  // 0.58: Statistics after two Fairhaven battles (kept in memory in shot mode)
+  { ...FH, id: "stats-achievements", kind: "shot", size: [1600, 900], crop: [80, 16, 1440, 868], camera: { x: 191, y: 106, scale: 3 },
+    setup: [...BASE, "battle", "advance 240", "endround", "stats achievements", "cursor off"] },
+  { ...FH, id: "stats-career", kind: "shot", size: [1600, 900], crop: [80, 16, 1440, 868], camera: { x: 191, y: 106, scale: 3 },
+    setup: [...BASE, "battle", "advance 240", "endround", "retry", ...BASE, "battle", "advance 240", "endround", "stats career", "cursor off"] },
   { ...FH, id: "howto-12-pause", kind: "shot", camera: { x: 191, y: 106, scale: 3 }, setup: [...BASE, "battle", "advance 10", "key Escape", "cursor off"] },
 ];

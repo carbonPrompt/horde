@@ -4,13 +4,14 @@
 // mode or with mods are kept in the history, marked, and stay out of the career and the records.
 import * as C from "./config";
 import type { Score } from "./sim";
-import { COLS, OTHER_KILLS, type Col, type OtherKill, type Recorder, type StrikeRec, type UnitRec } from "./stats";
+import { COLS, OTHER_KILLS, REC_COUNTER_KEYS, recCounters, type Col, type OtherKill, type RecCounters, type Recorder, type StrikeRec, type UnitRec } from "./stats";
 import type { TownReport, TownSummary, TownStory, TownRefuser, StoryTag } from "./townreport";
 
 export type BattleKind = "campaign" | "real" | "quick" | "daily" | "osm";
 const KINDS: BattleKind[] = ["campaign", "real", "quick", "daily", "osm"];
 export interface BattleMeta { id: string; date: string; version: string; cityId: string; cityName: string; kind: BattleKind; difficulty: string; sirenMin: number; flags: { dev: boolean; modded: boolean } }
-export interface BattleOutcome { medal: string | null; score: number; parts: { saved: number; speed: number; city: number; kills: number }; roundComplete: boolean; abandoned: boolean; keepFighting: boolean; mayhem?: number }
+export interface BattleOutcome { medal: string | null; score: number; parts: { saved: number; speed: number; city: number; kills: number }; roundComplete: boolean; abandoned: boolean; keepFighting: boolean; mayhem?: number;
+  underBudget?: boolean; bonus?: string | null; left?: number } // 0.59: for the achievements (left: people still outside the zone, not refusing)
 export interface BattleTotals {
   saved: number; byTrain: number; people: number; kills: number; killsAfter: number; damage: number; spent: number; budget: number; perM: number | null;
   held: number; hordes: number; breaches: number; lifts: number; liftsAborted: number; unitsPlaced: number; unitsLost: number; strikes: number; nukes: number; bridges: number;
@@ -19,6 +20,7 @@ export interface BattleTotals {
 export interface BattleRecord {
   meta: BattleMeta; outcome: BattleOutcome; totals: BattleTotals; units: UnitRec[]; strikes: StrikeRec[]; other: Record<OtherKill, number>;
   roundAt: number | null; samples?: Record<Col, number[]>; events?: Recorder["ev"]; town?: TownReport;
+  counters?: RecCounters; earned?: string[]; // 0.59: achievement inputs; ids earned in this battle
 }
 export interface RecRef { v: number; id: string; city: string; diff: string }
 export interface Records { mostSaved?: RecRef; mostKills?: RecRef; unitKills?: RecRef & { label: string }; damage?: RecRef; held?: RecRef; perM?: RecRef; familiesWhole?: RecRef; city: Record<string, { saved: RecRef }> }
@@ -32,7 +34,7 @@ export interface History { v: 1; battles: BattleRecord[] } // newest last
 export const TIMELINES_KEPT = 200;
 
 export function makeRecord(meta: BattleMeta, outcome: BattleOutcome, score: Score, rec: Recorder,
-  extras: { roundAt: number | null; nukes: number; bridges: number; crushed: number; budget: number; held?: number; people?: number; town?: TownReport }): BattleRecord {
+  extras: { roundAt: number | null; nukes: number; bridges: number; crushed: number; budget: number; held?: number; people?: number; town?: TownReport; earned?: string[] }): BattleRecord {
   const last = (c: Col) => { const a = rec.cols[c]; return a.length ? a[a.length - 1] : 0; };
   const totals: BattleTotals = {
     saved: score.saved, byTrain: last("byTrain"), people: extras.people ?? 0, kills: score.kills + (score.killsAfter ?? 0), killsAfter: score.killsAfter ?? 0,
@@ -44,7 +46,8 @@ export function makeRecord(meta: BattleMeta, outcome: BattleOutcome, score: Scor
   };
   const copy = <T>(v: T): T => JSON.parse(JSON.stringify(v));
   return { meta: copy(meta), outcome: copy(outcome), totals, units: copy(rec.units), strikes: copy(rec.strikes), other: copy(rec.other),
-    roundAt: extras.roundAt, samples: compactSamples(rec.cols), events: compactEvents(rec.ev), ...(extras.town ? { town: copy(extras.town) } : {}) };
+    roundAt: extras.roundAt, samples: compactSamples(rec.cols), events: compactEvents(rec.ev), ...(extras.town ? { town: copy(extras.town) } : {}),
+    counters: recCounters(rec, extras.roundAt), ...(extras.earned ? { earned: [...extras.earned] } : {}) };
 }
 
 // stored compactly (history files hold 200 timelines): times to 0.1 s, places to whole cells, counts and money whole
@@ -79,7 +82,7 @@ export function addToCareer(c: Career, r: BattleRecord, sign: 1 | -1): void {
   if (t) { c.householdsWhole += sign * t.allOut; c.householdsLost += sign * (t.lostSome + t.lostAll); c.talkedOut += sign * t.talkedOut; c.fetched += sign * t.fetched; c.wentBack += sign * t.wentBack; }
 }
 
-function recomputeRecords(h: History): Records {
+export function recomputeRecords(h: History): Records {
   const out: Records = { city: {} };
   const ref = (r: BattleRecord, v: number): RecRef => ({ v, id: r.meta.id, city: r.meta.cityName, diff: r.meta.difficulty });
   const better = (cur: RecRef | undefined, v: number) => v > 0 && (!cur || v > cur.v);
@@ -102,7 +105,7 @@ function recomputeRecords(h: History): Records {
 /** Put r into the history (replacing the same battle id), fix the career, recompute records, trim old timelines. */
 export function upsert(h: History, c: Career, r: BattleRecord): { history: History; career: Career; broken: { key: string; was: number | null; now: number }[] } {
   const history: History = { v: 1, battles: [...h.battles] }, career: Career = JSON.parse(JSON.stringify(c));
-  const before = career.records;
+  const before = recomputeRecords({ v: 1, battles: h.battles.filter(b => b.meta.id !== r.meta.id) }); // 0.58: records as they stood without this battle (its round record must not hide what the final one broke)
   const i = history.battles.findIndex(b => b.meta.id === r.meta.id);
   if (i >= 0) { const old = history.battles[i]; if (countsInCareer(old)) addToCareer(career, old, -1); history.battles[i] = r; }
   else history.battles.push(r);
@@ -112,9 +115,9 @@ export function upsert(h: History, c: Career, r: BattleRecord): { history: Histo
   if (countsInCareer(r)) {
     for (const k of ["mostSaved", "mostKills", "unitKills", "damage", "held", "perM", "familiesWhole"] as const) {
       const a = career.records[k], b = before[k];
-      if (a && a.id === r.meta.id && (!b || (b.id !== r.meta.id && a.v > b.v) || (b.id === r.meta.id && a.v > b.v))) broken.push({ key: k, was: b && b.id !== r.meta.id ? b.v : b ? b.v : null, now: a.v });
+      if (a && a.id === r.meta.id && (!b || a.v > b.v)) broken.push({ key: k, was: b ? b.v : null, now: a.v });
     }
-    const ck = `${r.meta.cityId}@${r.meta.difficulty}`, a = career.records.city[ck]?.saved, b = before.city?.[ck]?.saved;
+    const ck = `${r.meta.cityId}@${r.meta.difficulty}`, a = career.records.city[ck]?.saved, b = before.city[ck]?.saved;
     if (a && a.id === r.meta.id && (!b || a.v > b.v)) broken.push({ key: "city", was: b ? b.v : null, now: a.v });
   }
   trim(history);
@@ -152,7 +155,8 @@ function cleanTown(t: unknown): TownReport | undefined {
   const summary: TownSummary = { households: pos(s.households), allOut: pos(s.allOut), lostSome: pos(s.lostSome), lostAll: pos(s.lostAll), refusedHouseholds: pos(s.refusedHouseholds),
     talkedOut: pos(s.talkedOut), ran: pos(s.ran), lostAtHome: pos(s.lostAtHome), stillHome: pos(s.stillHome),
     byPlace: (Array.isArray(s.byPlace) ? s.byPlace : []).slice(0, 8).filter(isObj).map((p: any) => ({ place: str(p.place, 40), households: pos(p.households), allOut: pos(p.allOut) })),
-    fetched: pos(s.fetched), classKids: pos(s.classKids), teensAlone: pos(s.teensAlone), teensMadeIt: pos(s.teensMadeIt), wentBack: pos(s.wentBack), wentBackMadeIt: pos(s.wentBackMadeIt), killedByUs: pos(s.killedByUs) };
+    fetched: pos(s.fetched), classKids: pos(s.classKids), teensAlone: pos(s.teensAlone), teensMadeIt: pos(s.teensMadeIt), wentBack: pos(s.wentBack), wentBackMadeIt: pos(s.wentBackMadeIt), killedByUs: pos(s.killedByUs),
+    ...(Number.isFinite(s.schoolKids) ? { schoolKids: pos(s.schoolKids), schoolKidsSafe: pos(s.schoolKidsSafe) } : {}) };
   const stories: TownStory[] = (Array.isArray(t.stories) ? t.stories : []).slice(0, 12).filter(isObj).filter((x: any) => TAGS.includes(x.tag))
     .map((x: any) => ({ title: str(x.title, 120), tag: x.tag, text: str(x.text, 800), members: nums(x.members, 16).map(m => Math.max(0, Math.floor(m))) }));
   const refusers: TownRefuser[] = (Array.isArray(t.refusers) ? t.refusers : []).slice(0, 2000).filter(isObj)
@@ -169,7 +173,9 @@ function cleanRecord(b: unknown): BattleRecord | null {
   const parts = isObj(o.parts) ? o.parts : {};
   const outcome: BattleOutcome = { medal: C.MEDALS.some(x => x[0] === o.medal) ? o.medal : null, score: pos(o.score, 100),
     parts: { saved: pos(parts.saved, 100), speed: pos(parts.speed, 100), city: pos(parts.city, 100), kills: pos(parts.kills, 100) },
-    roundComplete: o.roundComplete === true, abandoned: o.abandoned === true, keepFighting: o.keepFighting === true, ...(Number.isFinite(o.mayhem) ? { mayhem: pos(o.mayhem) } : {}) };
+    roundComplete: o.roundComplete === true, abandoned: o.abandoned === true, keepFighting: o.keepFighting === true, ...(Number.isFinite(o.mayhem) ? { mayhem: pos(o.mayhem) } : {}),
+    ...(typeof o.underBudget === "boolean" ? { underBudget: o.underBudget } : {}), ...(o.bonus === "Light Touch" || o.bonus === "Scorched Earth" || o.bonus === null ? { bonus: o.bonus } : {}),
+    ...(Number.isFinite(o.left) ? { left: pos(o.left) } : {}) };
   const totals = {} as BattleTotals;
   for (const k of ["saved", "byTrain", "people", "kills", "killsAfter", "damage", "spent", "budget", "held", "hordes", "breaches", "lifts", "liftsAborted", "unitsPlaced", "unitsLost",
     "strikes", "nukes", "bridges", "civKilledByUs", "crushed", "refused", "talkedOut", "intact", "maxZone", "best60", "longShot", "xp"] as const) totals[k] = pos(t[k]);
@@ -177,12 +183,14 @@ function cleanRecord(b: unknown): BattleRecord | null {
   const units: UnitRec[] = (Array.isArray(b.units) ? b.units : []).slice(0, 400).filter(isObj)
     .map((u: any) => ({ kind: str(u.kind, 24), label: str(u.label, 60), placedT: pos(u.placedT), kills: pos(u.kills), lostT: typeof u.lostT === "number" && u.lostT >= 0 ? u.lostT : -1 }));
   const strikes: StrikeRec[] = (Array.isArray(b.strikes) ? b.strikes : []).slice(0, 400).filter(isObj)
-    .map((s: any) => ({ kind: str(s.kind, 24), t: pos(s.t), x: num(s.x, 1e5), y: num(s.y, 1e5), kills: pos(s.kills), civ: pos(s.civ) }));
+    .map((s: any) => ({ kind: str(s.kind, 24), t: pos(s.t), x: num(s.x, 1e5), y: num(s.y, 1e5), kills: pos(s.kills), civ: pos(s.civ), ...(Number.isFinite(s.dropKills) ? { dropKills: pos(s.dropKills) } : {}) }));
   const other = Object.fromEntries(OTHER_KILLS.map(k => [k, pos(isObj(b.other) ? b.other[k] : 0)])) as Record<OtherKill, number>;
   const out: BattleRecord = { meta, outcome, totals, units, strikes, other, roundAt: typeof b.roundAt === "number" && Number.isFinite(b.roundAt) ? b.roundAt : null };
   if (isObj(b.samples)) out.samples = Object.fromEntries(COLS.map(c => [c, nums(b.samples[c], 2000)])) as Record<Col, number[]>;
   if (isObj(b.events)) out.events = { t: nums(b.events.t, 20000), k: nums(b.events.k, 20000), x: nums(b.events.x, 20000), y: nums(b.events.y, 20000), a: nums(b.events.a, 20000), b: nums(b.events.b, 20000) };
   const town = cleanTown(b.town); if (town) out.town = town;
+  if (isObj(b.counters)) out.counters = Object.fromEntries(REC_COUNTER_KEYS.map(k => [k, pos(b.counters[k])])) as unknown as RecCounters;
+  if (Array.isArray(b.earned)) out.earned = b.earned.filter((x: unknown): x is string => typeof x === "string" && /^[a-z0-9_]{1,40}$/.test(x)).slice(0, 200);
   return out;
 }
 
@@ -214,10 +222,10 @@ export function parseHistoryText(text: string | null): { ok: boolean; history: H
 }
 /** Read, upsert, write. The career comes back only when the write succeeded (otherwise null: keep the old one). */
 export async function persistRecord(read: () => Promise<{ ok: boolean; history: History }>, write: (h: History) => Promise<boolean>, career: Career, r: BattleRecord):
-  Promise<{ career: Career | null; broken: { key: string; was: number | null; now: number }[]; why?: string }> {
+  Promise<{ career: Career | null; broken: { key: string; was: number | null; now: number }[]; why?: string; history?: History }> {
   const got = await read();
   if (!got.ok) return { career: null, broken: [], why: "history unreadable" };
   const res = upsert(got.history, career, r);
   if (!(await write(res.history))) return { career: null, broken: [], why: "history write failed" };
-  return { career: res.career, broken: res.broken };
+  return { career: res.career, broken: res.broken, history: res.history };
 }

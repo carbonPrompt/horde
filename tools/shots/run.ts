@@ -13,7 +13,7 @@ import { VERSION } from "../../src/config";
 import { allEntries } from "../../src/codex";
 import { recipeHash, staleReport, mediaFile, type Recipe, type ManifestRow } from "./stale";
 
-export interface Cdp { send(method: string, params?: object): Promise<any>; eval(expression: string): Promise<any> }
+export interface Cdp { send(method: string, params?: object): Promise<any>; eval(expression: string, timeoutMs?: number): Promise<any> }
 
 const FPS = 15;
 const ROOT = resolve(import.meta.dir, "../..");
@@ -45,7 +45,7 @@ export async function runRecipe(cdp: Cdp, r: Recipe, outDir: string, pageUrl = "
       for (let i = 0; i < 100 && !(await cdp.eval("!!(window.hordeShot && document.readyState === 'complete')")); i++) await Bun.sleep(100);
     }
     const J = JSON.stringify;
-    await cdp.eval(`hordeShot.load(${J(r.city)}, ${r.seed}, ${r.startMin}); hordeShot.run([${J(`camera ${r.camera.x},${r.camera.y} ${r.camera.scale}`)}]); hordeShot.run(${J(r.setup)}); ${frames2}`);
+    await cdp.eval(`hordeShot.load(${J(r.city)}, ${r.seed}, ${r.startMin}); hordeShot.run([${J(`camera ${r.camera.x},${r.camera.y} ${r.camera.scale}`)}]); hordeShot.run(${J(r.setup)}); ${frames2}`, 300000); // 0.58: a setup can play two battles
     const out = join(outDir, mediaFile(r).replace(/^assets\/codex\//, ""));
     if (r.kind === "shot") {
       const raw = join(tmp, "raw.png"), small = join(tmp, "small.png");

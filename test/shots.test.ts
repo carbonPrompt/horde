@@ -123,3 +123,9 @@ test("0.57: endround and report ops parse; a bad report tab is refused", () => {
   expect(parseOp("report town")).toEqual({ op: "report", tab: "town" });
   expect(() => parseOp("report nowhere")).toThrow(/bad shot op/);
 });
+
+test("0.58: stats and retry ops parse; a bad stats tab is refused", () => {
+  expect(parseOp("stats records")).toEqual({ op: "stats", tab: "records" });
+  expect(parseOp("retry")).toEqual({ op: "retry" });
+  expect(() => parseOp("stats nowhere")).toThrow(/bad shot op/);
+});

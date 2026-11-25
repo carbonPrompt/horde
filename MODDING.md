@@ -58,19 +58,26 @@ Notes:
 
 ## The save file
 
-Progress is one readable JSON file. Edit it with the game closed.
+Progress is readable JSON, one file per save slot. Edit it with the game closed.
 
-- **Windows app:** `%APPDATA%\Horde\save.json`
-- **Browser:** Settings > **Export save file** / **Import save file**
+- **Windows app:** `%APPDATA%\Horde\saves\slot1.json` (and `slot2`, `slot3`). Each slot's battle history sits beside
+  it as `slotN.history.json`; a frozen battle (Save battle) as its own file.
+- **Browser:** Settings > **Export save file** / **Import save file** (the battle history is kept in the browser's
+  IndexedDB).
 
 | Field | Meaning |
 |---|---|
 | `xp` | Total XP (drives ranks and unlocks) |
-| `best` | Best result per city: `pct` evacuated, `medal` |
+| `best` | Best result per city and difficulty: round score `pct`, `medal`, Mayhem, people saved per $1M |
 | `daily` | Best result per Daily Challenge date |
-| `achievements` | Achievement id and the date it was earned |
+| `achievements` | Achievement id and the date it was earned (117 achievements, see the Codex) |
+| `career` | Running totals over the battle history (kills, saved, medals, kills by unit, records) |
+| `legacyMedals` | Medals from before achievements existed, kept once so they count toward the city achievements |
 | `plans` | Your saved defense layout per city (zone corners, walls, units, supports, bought strikes) |
-| `settings` | Fullscreen, edge scrolling, volumes, crowd size, developer mode |
+| `settings` | Fullscreen, edge scrolling, volumes, crowd size, keys, developer mode |
+
+A battle played with any mod loaded, or with Developer mode on, is kept in the battle history marked "Modded" or
+"Dev". It earns no achievements and does not count toward career totals or records.
 
 Developer mode (Settings) also unlocks everything and adds a panel (F10) with unlimited money, no ordnance limits and
 XP buttons.

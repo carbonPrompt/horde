@@ -8,6 +8,7 @@ import { CdpClient } from "./shots/cdp";
 
 const ROOT = new URL("..", import.meta.url).pathname;
 const shotsDir = process.argv[2] === "--shots" ? process.argv[3] : null;
+const statsDir = process.argv[2] === "--stats" ? process.argv[3] : null; // 0.58: a second battle, then every Statistics tab and the report viewer
 const port = 9800 + Math.floor(Math.random() * 100), prof = mkdtempSync(join(tmpdir(), "reccheck-"));
 const chrome = Bun.spawn(["google-chrome", "--headless=new", `--remote-debugging-port=${port}`, `--user-data-dir=${prof}`, "--no-first-run", "--mute-audio",
   "--window-size=1600,900", "about:blank"], { stdout: "ignore", stderr: "ignore" });
@@ -38,6 +39,9 @@ try {
   const hist = await cdp.eval(`new Promise(res => { const q = indexedDB.open("horde", 2); q.onsuccess = () => { const g = q.result.transaction("history").objectStore("history").get(1); g.onsuccess = () => res(g.result ? JSON.parse(g.result).battles.length : 0); g.onerror = () => res(-1); }; q.onerror = () => res(-2); })`);
   const career = await cdp.eval(`JSON.stringify(horde.save.career ? { battles: horde.save.career.battles, saved: horde.save.career.saved, kills: horde.save.career.kills } : null)`);
   console.log("history battles in slot 1:", hist, " career:", career);
+  // 0.59: achievements earned live (during the battle) and on the record
+  console.log("achievements:", await cdp.eval(`JSON.stringify({ save: Object.keys(horde.save.achievements ?? {}), record: horde.lastRecord?.earned ?? [], live: horde.sim.stats.earned ?? [], ticker: [...document.querySelectorAll("#ticker span")].map(s => s.textContent).filter(t => t.startsWith("Achievement")) })`));
+  if (!r.earned?.includes("first_out")) { console.log("FAIL: First Lift not on the record"); process.exitCode = 1; }
   if (shotsDir) {
     const tabs = await cdp.eval(`JSON.stringify([...document.querySelectorAll("#end [data-tab]")].map(b => b.dataset.tab))`);
     for (const t of JSON.parse(tabs ?? "[]") as string[]) {
@@ -55,5 +59,33 @@ try {
   const recs = await cdp.eval(`new Promise(res => { const q = indexedDB.open("horde", 2); q.onsuccess = () => { const g = q.result.transaction("history").objectStore("history").get(1); g.onsuccess = () => res(g.result ? JSON.parse(g.result).battles.length : 0); }; })`);
   console.log(`heatmap keeps the report closed: ${hidden} · Menu brings it back: ${back} · history battles after End here: ${recs}`);
   if (!hidden || !back) process.exitCode = 1;
+  if (statsDir) {
+    await cdp.eval(`hordeShot.run(["retry"]); hordeShot.run(${JSON.stringify(ops)}); true`);
+    for (let i = 0; i < 24; i++) await cdp.eval(`hordeShot.step(10); true`);
+    await cdp.eval(`horde.sim.endRoundNow(); hordeShot.step(0.5); true`); await Bun.sleep(1500);
+    await cdp.eval(`document.getElementById("end-stop").click(); true`); await Bun.sleep(1500);
+    await cdp.eval(`hordeShot.run(["stats career"]); true`); await Bun.sleep(1500);
+    console.log("stats screen:", await cdp.eval(`JSON.stringify({ screen: !document.getElementById("s-record").hidden, screens: !document.getElementById("screens").hidden, tabs: document.querySelectorAll("#s-record [data-stab]").length, phase: horde.sim.phase, mode: horde.mode })`));
+    for (const t of ["career", "units", "strikes", "cities", "records", "history", "achievements"]) {
+      await cdp.eval(`document.querySelector('#s-record [data-stab="${t}"]').click(); true`); await Bun.sleep(500);
+      writeFileSync(join(statsDir, `stats-${t}.png`), Buffer.from((await cdp.send("Page.captureScreenshot", { format: "png" })).data, "base64"));
+    }
+    await cdp.eval(`document.querySelector('#s-record [data-stab="history"]').click(); true`); await Bun.sleep(500);
+    const rows = await cdp.eval(`document.querySelectorAll('#s-record tr[data-open]').length`);
+    await cdp.eval(`document.querySelector('#s-record tr[data-open]').click(); true`); await Bun.sleep(600);
+    const open = await cdp.eval(`!document.getElementById("rv").hidden`);
+    writeFileSync(join(statsDir, `stats-viewer.png`), Buffer.from((await cdp.send("Page.captureScreenshot", { format: "png" })).data, "base64"));
+    // review I1: the viewer's Timeline checkboxes change the chart
+    await cdp.eval(`document.querySelector('#rv [data-tab="timeline"]').click(); true`); await Bun.sleep(300);
+    const paths0 = await cdp.eval(`document.querySelectorAll('#rv svg.er-svg path').length`);
+    await cdp.eval(`(() => { const c = document.querySelector('#rv [data-col="kills"]'); c.checked = true; c.dispatchEvent(new Event("change", { bubbles: true })); return true; })()`); await Bun.sleep(300);
+    const paths1 = await cdp.eval(`document.querySelectorAll('#rv svg.er-svg path').length`);
+    console.log(`viewer timeline: ${paths0} lines, after ticking a box ${paths1}`);
+    if (paths1 !== paths0 + 1) process.exitCode = 1;
+    await cdp.eval(`document.getElementById("rv-close").click(); true`); await Bun.sleep(300);
+    const closed = await cdp.eval(`document.getElementById("rv").hidden && !document.getElementById("s-record").hidden`);
+    console.log(`stats: history rows ${rows} · viewer opened ${open} · closed back to Statistics ${closed}`);
+    if (rows !== 2 || !open || !closed) process.exitCode = 1;
+  }
   cdp.close();
 } finally { chrome.kill(); rmSync(prof, { recursive: true, force: true }); }

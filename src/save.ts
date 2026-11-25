@@ -14,7 +14,8 @@ export interface Settings { fullscreen: boolean; edgeScroll: boolean; showRanges
 export interface Best { pct: number; medal: string | null; mayhem?: number; perM?: number; underBudget?: boolean } // 0.48: best people saved per $1M, Under Budget badge // pct: round score 0..100 since 0.20 ("% evacuated" before)
 /** 0.33: the battle frozen in this slot (the file itself sits beside the profile). */
 export interface BattleInfo { version: string; savedAt: string; label: string; t: number; phase: string; bytes: number }
-export interface SaveData { battle?: BattleInfo; settings: Settings; best: Record<string, Best>; plans: Record<string, Plan>; daily?: Record<string, Best>; xp?: number | null; achievements?: Record<string, string>; gameVersion?: string; career?: Career } // 0.57 career: running totals over the battle history // gameVersion: the version that last wrote it (0.26+)
+export interface SaveData { battle?: BattleInfo; settings: Settings; best: Record<string, Best>; plans: Record<string, Plan>; daily?: Record<string, Best>; xp?: number | null; achievements?: Record<string, string>; gameVersion?: string; career?: Career;
+  legacyMedals?: Record<string, string> } // 0.59: medals from before achievements (best keys and "daily:<date>"; value a medal or "none"), seeded once, count toward city achievements // 0.57 career: running totals over the battle history // gameVersion: the version that last wrote it (0.26+)
 
 const KEY = "horde.save.v1";
 export const desktop: { setFullscreen(on: boolean): void; quit(): void; readSave(): string | null; writeSave(text: string): void; log?(line: string): void; openLogs?(): void; readMods?(): { file: string; text: string }[]; openMods?(): void;
@@ -82,14 +83,20 @@ export function clean(s: SaveData): SaveData {
     ? { battle: { version: b.version, savedAt: b.savedAt.slice(0, 40), label: b.label.slice(0, 120), t: b.t, phase: b.phase.slice(0, 12), bytes: b.bytes } } : {};
   const gv = typeof s.gameVersion === "string" && VER.test(s.gameVersion) ? { gameVersion: s.gameVersion } : {};
   const career = s.career && typeof s.career === "object" && !Array.isArray(s.career) ? { career: cleanCareer(s.career) } : {}; // 0.57
-  return { settings, best: best(s.best), daily: best(s.daily), plans, achievements: ach, xp: Number.isFinite(s.xp) ? Math.max(0, s.xp as number) : null, ...gv, ...battle, ...career };
+  let legacy = {};
+  if (s.legacyMedals && typeof s.legacyMedals === "object" && !Array.isArray(s.legacyMedals)) { // 0.59
+    const lm: Record<string, string> = {};
+    for (const [k, v] of Object.entries(s.legacyMedals).slice(0, 5000)) if ((BEST_KEY.test(k) || /^daily:\d{4}-\d{2}-\d{2}$/.test(k)) && (MEDAL_NAMES.includes(v as string) || v === "none")) lm[k] = v as string;
+    legacy = { legacyMedals: lm };
+  }
+  return { settings, best: best(s.best), daily: best(s.daily), plans, achievements: ach, xp: Number.isFinite(s.xp) ? Math.max(0, s.xp as number) : null, ...gv, ...battle, ...career, ...legacy };
 }
 
 function parse(raw: string | null): SaveData | null {
   if (!raw) return null;
   try {
     const d = defaults(), s = JSON.parse(raw);
-    return clean({ settings: { ...d.settings, ...s.settings }, best: s.best ?? {}, plans: s.plans ?? {}, daily: s.daily ?? {}, xp: s.xp ?? null, achievements: s.achievements ?? {}, gameVersion: s.gameVersion, battle: s.battle, career: s.career });
+    return clean({ settings: { ...d.settings, ...s.settings }, best: s.best ?? {}, plans: s.plans ?? {}, daily: s.daily ?? {}, xp: s.xp ?? null, achievements: s.achievements ?? {}, gameVersion: s.gameVersion, battle: s.battle, career: s.career, legacyMedals: s.legacyMedals });
   } catch { return null; }
 }
 

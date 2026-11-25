@@ -16,6 +16,7 @@ import type { Ping } from "./sim";
 import * as Save from "./save";
 import * as Snap from "./snapshot";
 import * as P from "./progress";
+import * as A from "./achievements";
 import * as Mods from "./mods";
 // Mods first: they change numbers that everything below reads. Desktop: <userData>\mods\*.json; browser: stored copies.
 const BROWSER_MODS = "horde.mods";
@@ -34,9 +35,11 @@ import { loadRealArea, realAreaMap, realAreaStreets } from "./realcity/load";
 import { buildPlaces, type Places } from "./places";
 import { SE_KEEP_FIGHTING, type Col } from "./stats";
 import { headerHtml, tabHtml, tabsHtml, sampleAt, DEFAULT_COLS, COL_NAMES, type Tab } from "./endreport";
+import { aggregate, filterBattles, cityOptions, statsTabHtml, statsTabsHtml, type StatsTab, type StatsFilter, type HistorySort, type AchGroupSel, type AchView } from "./statspage";
+import type { History } from "./battlerecord";
 import { storyLine, clockMin } from "./people";
 import { buildTownReport, townInputFromSim } from "./townreport";
-import { makeRecord, persistRecord, outcomeFor, emptyCareer, type BattleRecord, type BattleKind } from "./battlerecord";
+import { makeRecord, persistRecord, outcomeFor, emptyCareer, countsInCareer, type BattleRecord, type BattleKind } from "./battlerecord";
 import { areaCardInfo, bindCityMap, cityMapModel, drawCityMap, fitView, type CityMapUi } from "./citymapui";
 import { soundDue, zoomGain } from "./audiotiming";
 import { airHalfPx, drawAirframe, smoothHeading } from "./aircraft";
@@ -318,7 +321,7 @@ function show(id: string | null) {
   $("screens").hidden = !id;
   if (id === "cities") renderCities();
   if (id === "settings") { syncSettings(); renderMods(); const vb = document.getElementById("versions-btn") as HTMLButtonElement | null; if (vb) { vb.disabled = mode === "game"; $("ver-ingame").hidden = mode !== "game"; } }
-  if (id === "record") renderRecord();
+  if (id === "record") void renderStats(); // 0.58
   if (id === "controls") { promptAct = null; renderControls(); setControlsMsg(""); } // 0.55
   if (id === "slots") renderSlots();
   if (id === "howto") codexShown();
@@ -356,13 +359,56 @@ document.addEventListener("click", e => {
   const a = (e.target as HTMLElement).closest?.(".cx-link") as HTMLElement | null;
   if (a?.dataset.cx) { e.preventDefault(); e.stopPropagation(); openCodex(a.dataset.cx); }
 }, true);
-function renderRecord() {
-  const xp = save.xp ?? 0, rk = P.rankFor(xp), have = save.achievements ?? {};
-  $("rec-rank").textContent = `${rk.name} · ${xp.toLocaleString()} XP${rk.next ? ` · ${rk.next[0]} at ${rk.next[1].toLocaleString()} XP` : " · top rank"}`;
-  $("rec-unlocks").innerHTML = Object.entries(P.UNLOCK_XP).sort((a, b) => a[1] - b[1])
-    .map(([k, x]) => `<div class="${xp >= x ? "got" : ""}"><b>${toolName(k)}</b><span>${xp >= x ? "Unlocked" : `${x.toLocaleString()} XP`}</span></div>`).join("");
-  $("rec-ach").innerHTML = P.ACHIEVEMENTS.map(a => `<div class="${have[a.id] ? "got" : ""}"><b>${a.name}</b><span>${a.desc}${have[a.id] ? ` · ${have[a.id]}` : ""}</span></div>`).join("");
+// 0.58: the Statistics page (replaces the Service Record). Reads the slot's battle history; never writes it.
+let achGroup: AchGroupSel = "all", achView: AchView = "all"; // 0.59
+let stTab: StatsTab = "career", stSort: HistorySort = "date", stFilter: StatsFilter = { diff: "all", city: "all" }, statsHist: History = { v: 1, battles: [] };
+const shotHistory: History = { v: 1, battles: [] }; // shot mode (no slot): records kept in memory for the Codex pictures
+async function renderStats(reload = true) {
+  if (reload) {
+    await Promise.race([recQueue, new Promise(r => setTimeout(r, 3000))]); // review: a battle just finished is still being written
+    const slot = Save.activeSlot();
+    statsHist = slot ? (await Save.readHistory(slot)).history : SHOTS ? shotHistory : { v: 1, battles: [] };
+  }
+  const sel = $<HTMLSelectElement>("st-city"), opts = cityOptions(statsHist);
+  if (stFilter.city !== "all" && !opts.some(o => o.id === stFilter.city)) stFilter.city = "all";
+  sel.innerHTML = `<option value="all">All cities</option>` + opts.map(o => `<option value="${esc(o.id)}"${o.id === stFilter.city ? " selected" : ""}>${esc(o.name)}</option>`).join("");
+  $<HTMLSelectElement>("st-diff").value = stFilter.diff;
+  const xp = save.xp ?? 0, have = save.achievements ?? {}, agg = aggregate(statsHist, stFilter);
+  $("st-sub").textContent = `${P.rankFor(xp).name} \u00b7 ${xp.toLocaleString("en-US")} XP \u00b7 ${agg.battles.toLocaleString("en-US")} battles counted`;
+  $("st-tabs").innerHTML = statsTabsHtml(stTab, A.ACHIEVEMENTS.filter(a => have[a.id]).length);
+  const achProgress = stTab === "achievements" ? A.progressAll(statsHist, A.careerFacts(save.career ?? emptyCareer(), statsHist, save.legacyMedals, xp)) : undefined; // 0.59: the whole history, not the filters
+  $("st-body").innerHTML = statsTabHtml(stTab, agg, { history: filterBattles(statsHist, stFilter), sort: stSort, xp, achievements: have, toolName, filtered: stFilter.diff !== "all" || stFilter.city !== "all", achProgress, achGroup, achView });
 }
+$("s-record").addEventListener("click", ev => {
+  const el = ev.target as HTMLElement;
+  const t = el.closest<HTMLElement>("[data-stab]"); if (t) { stTab = t.dataset.stab as StatsTab; void renderStats(false); return; }
+  const so = el.closest<HTMLElement>("[data-sort]"); if (so) { stSort = so.dataset.sort as HistorySort; void renderStats(false); return; }
+  const ag = el.closest<HTMLElement>("[data-agroup]"); if (ag) { achGroup = ag.dataset.agroup as AchGroupSel; void renderStats(false); return; } // 0.59
+  const av = el.closest<HTMLElement>("[data-aview]"); if (av) { achView = av.dataset.aview as AchView; void renderStats(false); return; }
+  const o = el.closest<HTMLElement>("[data-open]"); if (o) { const r = statsHist.battles.find(b => b.meta.id === o.dataset.open); if (r) openReport(r); }
+});
+$("st-diff").addEventListener("change", e => { stFilter.diff = (e.target as HTMLSelectElement).value as StatsFilter["diff"]; void renderStats(false); });
+$("st-city").addEventListener("change", e => { stFilter.city = (e.target as HTMLSelectElement).value; void renderStats(false); });
+// a past battle's report, read-only (no heatmap, no story logs: those need the live battle)
+let rvRec: BattleRecord | null = null, rvTab: Tab = "overview", rvCols: Col[] = [...DEFAULT_COLS];
+function openReport(r: BattleRecord) { rvRec = r; rvTab = "overview"; rvCols = [...DEFAULT_COLS]; renderViewer(); $("rv").hidden = false; }
+function renderViewer() {
+  if (!rvRec) return;
+  $("rv-head").innerHTML = headerHtml(rvRec, { xpLine: "", news: "" });
+  $("rv-tabs").innerHTML = tabsHtml(rvTab, false);
+  $("rv-body").innerHTML = tabHtml(rvTab, rvRec, { broken: [], live: false, timelineCols: rvCols });
+}
+$("rv").addEventListener("click", ev => {
+  const el = ev.target as HTMLElement;
+  if (el.closest("#rv-close")) { $("rv").hidden = true; rvRec = null; return; }
+  const t = el.closest<HTMLElement>("[data-tab]"); if (t) { rvTab = t.dataset.tab as Tab; renderViewer(); }
+});
+$("rv").addEventListener("change", ev => { // review I1: the viewer's Timeline checkboxes
+  if (!(ev.target as HTMLInputElement).dataset.col) return;
+  rvCols = Array.from($("rv").querySelectorAll<HTMLInputElement>("[data-col]")).filter(x => x.checked).map(x => x.dataset.col as Col);
+  renderViewer();
+});
+$("rv").addEventListener("mousemove", ev => { if (rvRec) chartHover(ev, rvRec, rvTab, rvCols); });
 function back() {
   stack.pop();
   const top = stack[stack.length - 1] ?? null;
@@ -658,10 +704,6 @@ function recordResult(r: Score) {
   const news: string[] = [];
   const fresh = P.newlyUnlocked(xp0, save.xp ?? 0).map(toolName);
   if (fresh.length) news.push(`Unlocked: ${fresh.join(", ")}`);
-  save.achievements = save.achievements ?? {};
-  const got = P.earned({ r, kills: sim.kills, held: Math.max(0, sim.time - C.WARNING_S), lifts: sim.liftsFlown, nukes: sim.nukesUsed, unitsLost: sim.unitsLost, daily: !!dailyDate, usedAbilities: sim.abilitiesUsed }, save.achievements);
-  for (const a of got) save.achievements[a.id] = new Date().toISOString().slice(0, 10);
-  if (got.length) { news.push(`Achievement${got.length > 1 ? "s" : ""}: ${got.map(a => a.name).join(", ")}`); log("info", "achievements", { ids: got.map(a => a.id) }); }
   if (fresh.length) log("info", "unlocked", { tools: fresh, xp: save.xp });
   lastNews = news.join(" · ");
   Save.store(save);
@@ -707,6 +749,7 @@ function placesFor(s: Sim): Places {
   return places;
 }
 function battleKind(): BattleKind { return dailyDate ? "daily" : customMap ? "osm" : city?.recipe ? "campaign" : city?.real ? "real" : city ? "campaign" : "quick"; }
+function battleCityId(): string { return dailyDate ? `daily:${dailyDate}` : customMap ? "osm" : city?.id ?? "quick"; }
 function battleName(): string { return dailyDate ? `Daily ${dailyDate}${city ? ": " + city.name : ""}` : customMap ? customMap.name : city ? city.name : "Quick battle"; }
 /** Build this battle's record now (synchronously, from the live sim) and queue the history write. */
 function writeRecord(kind: "round" | "final" | "abandoned", r: Score, done?: () => void): BattleRecord {
@@ -714,23 +757,31 @@ function writeRecord(kind: "round" | "final" | "abandoned", r: Score, done?: () 
   let town; try { town = buildTownReport(townInputFromSim(s, placesFor(s), battleName()), Number.parseInt(s.stats.battleId.replace(/[^0-9a-f]/gi, "").slice(0, 7) || "0", 16)); }
   catch (err) { log("error", "town-report", { error: String((err as Error)?.stack ?? err) }); }
   const pp = partPoints(r.parts);
+  s.syncCounters(); // 0.59
   const rec = makeRecord(
-    { id: s.stats.battleId, date: new Date().toLocaleDateString("en-CA"), version: C.VERSION, cityId: dailyDate ? `daily:${dailyDate}` : customMap ? "osm" : city?.id ?? "quick",
+    { id: s.stats.battleId, date: new Date().toLocaleDateString("en-CA"), version: C.VERSION, cityId: battleCityId(),
       cityName: battleName(), kind: battleKind(), difficulty: s.difficulty, sirenMin: s.startMin, flags: { dev: !!s.stats.flags?.dev || !!save.settings.devMode, modded: !!s.stats.flags?.modded } },
     { medal: r.medal ?? null, score: r.score, parts: { saved: pp.saved, speed: pp.speed, city: pp.city, kills: pp.kills }, roundComplete: s.roundDone, abandoned: kind === "abandoned",
-      keepFighting: r.mayhem !== undefined || s.stats.ev.k.includes(SE_KEEP_FIGHTING), ...(r.mayhem !== undefined ? { mayhem: r.mayhem } : {}) },
+      keepFighting: r.mayhem !== undefined || s.stats.ev.k.includes(SE_KEEP_FIGHTING), ...(r.mayhem !== undefined ? { mayhem: r.mayhem } : {}),
+      underBudget: !!r.underBudget, bonus: r.bonus ?? null, ...(r.left !== undefined ? { left: r.left } : {}) }, // unknown left stays absent (never read as nobody left)
     r, s.stats, { roundAt: s.roundAt, nukes: s.nukesUsed, bridges: s.blown.size, crushed: s.crushed, budget: s.budget, held: Math.max(0, (kind === "round" && s.roundAt !== null ? s.roundAt : s.time) - C.WARNING_S), people: s.civN, town });
   if (kind !== "round") recordDone = true;
+  if (countsInCareer(rec)) award(A.newlyEarned("battle", A.factsFromRecord(rec), save.achievements ?? {}), s); // 0.59: the full record (town included) catches what the live check could not see
+  if (s.stats.earned?.length) rec.earned = [...s.stats.earned];
   lastRecord = rec; lastBroken = [];
   log("info", "battle-record", { kind, id: rec.meta.id, ms: Math.round(performance.now() - t0), stories: town?.stories.length ?? 0, flags: rec.meta.flags });
   const slot = Save.activeSlot();
-  if (!slot) { done?.(); return rec; } // no slot picked: shown, not kept
+  if (!slot) { if (SHOTS) { const i = shotHistory.battles.findIndex(b => b.meta.id === rec.meta.id); if (i >= 0) shotHistory.battles[i] = rec; else shotHistory.battles.push(rec); } done?.(); return rec; } // no slot picked: shown, not kept (shot mode keeps it in memory)
   recQueue = recQueue.then(async () => {
     if (Save.activeSlot() !== slot) { log("warn", "battle-record-skipped", { id: rec.meta.id, why: "slot changed" }); return; } // the player switched slots meanwhile: leave that slot alone
     const res = await persistRecord(() => Save.readHistory(slot), h => Save.writeHistory(slot, h), save.career ?? emptyCareer(), rec);
     if (!res.career) { log("error", "battle-record-not-kept", { id: rec.meta.id, why: res.why }); return; } // 0.57 review: the career only counts what the history kept
     save.career = res.career; Save.store(save);
     if (lastRecord === rec) lastBroken = res.broken;
+    if (countsInCareer(rec) && res.history) { // 0.59: career achievements (totals, medals, rank)
+      const got = A.newlyEarned("career", A.careerFacts(res.career, res.history, save.legacyMedals, save.xp ?? 0), save.achievements ?? {});
+      if (got.length) { award(got, null); rec.earned = [...(rec.earned ?? []), ...got.map(a => a.id)]; }
+    }
     done?.();
   }).catch(err => log("error", "battle-record-failed", { error: String((err as Error)?.stack ?? err) }));
   return rec;
@@ -743,6 +794,39 @@ function closeOutBattle() {
   if (o === "final" && sim.phase === "battle") sim.callIt(); // leaving during Keep fighting: score it as pulled out
   const r = o === "abandoned" ? sim.scoreNow("You left the battle before the round was over.") : sim.result ?? sim.roundResult;
   if (r) writeRecord(o === "abandoned" ? "abandoned" : "final", r);
+}
+
+// ---------- 0.59: achievements ----------
+/** Mark achievements earned (today's date), say so on the ticker, and note them on the battle they came from. */
+function award(got: A.AchDef[], from: Sim | null) {
+  if (!got.length) return;
+  save.achievements = save.achievements ?? {};
+  const day = new Date().toLocaleDateString("en-CA"), fresh = got.filter(a => !save.achievements![a.id]);
+  if (!fresh.length) return;
+  for (const a of fresh) {
+    save.achievements[a.id] = day;
+    if (from) (from.stats.earned ??= []).push(a.id);
+  }
+  if (mode === "game") notify(`Achievement${fresh.length > 1 ? "s" : ""}: ${fresh.map(a => a.name).join(", ")}`); // one line however many came at once
+  Save.store(save);
+  log("info", "achievements", { ids: fresh.map(a => a.id) });
+}
+let achSeen: { s: Sim | null; n: number; e: number; round: boolean; over: boolean } = { s: null, n: -1, e: -1, round: false, over: false };
+/** Live check: only when the recorder has a new sample or event (or the round ends), never per tick. */
+function checkLiveAchievements() {
+  if (mode !== "game" || sim.phase === "plan" || !sim.stats.flags || sim.stats.flags.dev || sim.stats.flags.modded || save.settings.devMode) return;
+  const r = sim.stats, over = sim.phase === "over";
+  if (achSeen.s === sim && achSeen.n === r.cols.t.length && achSeen.e === r.ev.k.length && achSeen.round === sim.roundDone && achSeen.over === over) return;
+  achSeen = { s: sim, n: r.cols.t.length, e: r.ev.k.length, round: sim.roundDone, over };
+  award(A.newlyEarned("battle", A.factsLive(sim, battleKind(), battleCityId()), save.achievements ?? {}), sim);
+}
+/** 0.59 carry-over: medals from before achievements count toward the city ones (seeded once per slot). */
+function seedAchievements() {
+  if (save.legacyMedals) return;
+  save.legacyMedals = A.seedLegacy(save.best, save.daily);
+  Save.store(save);
+  // city achievements only: XP from before may include Dev mode's XP buttons, so General waits for a counting battle
+  award(A.newlyEarned("career", A.careerFacts(save.career ?? emptyCareer(), null, save.legacyMedals, save.xp ?? 0), save.achievements ?? {}).filter(a => a.group === "Cities"), null);
 }
 
 // 0.57: the after-action report on the end card
@@ -773,15 +857,17 @@ $("end").addEventListener("change", ev => {
   erCols = Array.from($("end").querySelectorAll<HTMLInputElement>("[data-col]")).filter(x => x.checked).map(x => x.dataset.col as Col);
   renderReport();
 });
-$("end").addEventListener("mousemove", ev => { // hover readout on a chart
-  const svg = (ev.target as Element).closest?.("svg.er-svg") as SVGSVGElement | null; if (!svg || !lastRecord) return;
+$("end").addEventListener("mousemove", ev => { if (lastRecord) chartHover(ev, lastRecord, erTab, erCols); });
+/** Hover readout on a report chart (end card and past-report viewer). */
+function chartHover(ev: MouseEvent, rec: BattleRecord, tab: Tab, tlCols: Col[]) {
+  const svg = (ev.target as Element).closest?.("svg.er-svg") as SVGSVGElement | null; if (!svg || !svg.dataset.w) return;
   const w = Number(svg.dataset.w), pl = Number(svg.dataset.pl), pr = Number(svg.dataset.pr), rc = svg.getBoundingClientRect();
-  const x = (ev.clientX - rc.left) / rc.width * w, sm = sampleAt(lastRecord, x - pl, w - pl - pr); if (!sm) return;
+  const x = (ev.clientX - rc.left) / rc.width * w, sm = sampleAt(rec, x - pl, w - pl - pr); if (!sm) return;
   const ro = svg.nextElementSibling?.querySelector(".er-readout"); if (!ro) return;
-  const cols = erTab === "money" ? ["money", "spent"] as Col[] : erTab === "timeline" ? erCols : DEFAULT_COLS;
+  const cols = tab === "money" ? ["money", "spent"] as Col[] : tab === "timeline" ? tlCols : DEFAULT_COLS;
   ro.textContent = `${fmtT(sm.t)}: ` + cols.map(c => `${COL_NAMES[c]} ${c === "money" || c === "spent" || c === "damage" ? C.money(sm[c]) : Math.round(sm[c]).toLocaleString("en-US")}`).join(" \u00b7 ");
   const cur = svg.querySelector(".er-cursor"); if (cur) { cur.setAttribute("x1", String(x)); cur.setAttribute("x2", String(x)); cur.setAttribute("stroke-opacity", "0.4"); }
-});
+}
 const clockSpanText = (t: number) => formatClock(clockMin(sim.startMin, t));
 
 // ---------- Input ----------
@@ -1145,6 +1231,7 @@ addEventListener("keydown", e => {
   if (act === "squad.next" && mode === "game" && !stack.length) { e.preventDefault(); cycleSquad(e.shiftKey); return; } // 0.52
   if (act === "speed.half" || act === "speed.normal" || act === "speed.fast") { e.preventDefault(); if (mode === "game" && !stack.length) setSpeed(act === "speed.half" ? 0.5 : act === "speed.normal" ? 1 : 2); return; } // 0.50: speed moved off 1/2/3
   if (k === "Escape") {
+    if (!$("rv").hidden) { $("rv").hidden = true; rvRec = null; return; } // 0.58: the report viewer first
     if (!stack.length && mode === "game" && armedMenu) { setMenu(null); return; } // 0.55: a waiting build menu first
     if (stack.length) { const top = stack[stack.length - 1]; if (top !== "title" && !(top === "slots" && !Save.activeSlot())) back(); return; }
     if (mode === "game" && selPerson >= 0) { closePerson(); return; } // 0.39
@@ -3475,6 +3562,7 @@ $("opt-crowd").addEventListener("change", e => {
 });
 $("opt-dev").addEventListener("change", e => { save.settings.devMode = (e.target as HTMLInputElement).checked; Save.store(save);
   if (save.settings.devMode && mode === "game" && sim.phase !== "plan" && sim.stats.flags) sim.stats.flags.dev = true; // 0.57: sticks for this battle
+  checkLiveAchievements(); // 0.59
   log("info", "setting", { devMode: save.settings.devMode }); syncDev(); });
 $("devbtn").addEventListener("click", toggleDevPanel);
 document.querySelectorAll<HTMLButtonElement>("[data-dspeed]").forEach(b => b.addEventListener("click", () => { setSpeed(Number(b.dataset.dspeed), true); devLog("speed", { speed }); }));
@@ -3607,6 +3695,7 @@ async function loadBattle(n: number) {
 /** The slot's profile is now the game's: settings, quick bar and speed follow it. */
 function applyProfile() {
   if (save.xp == null) { save.xp = P.grandfatherXp(save.best); Save.store(save); }
+  seedAchievements(); // 0.59
   quick = cleanQuickbar(save.settings.quickbar, t => buildToolSet().has(t)); applyBinds(cleanKeys(save.settings.keys, save.settings.quickKeys)); // 0.54 (0.55: all keys)
   pausedSpeed = save.settings.speed ?? 1;
   showRanges = save.settings.showRanges;
@@ -3738,6 +3827,11 @@ if (SHOTS) {
       case "camera": cam.scale = op.scale; centerOn(op.x, op.y); following = false; break;
       case "endround": { const e = sim.endRoundNow(); if (e) throw new Error(`endround: ${e}`); if (sim.roundResult && !roundShown) { roundShown = true; speed = 0; showEnd(sim.roundResult, true); } break; } // 0.57: as hud() would
       case "report": erTab = op.tab as Tab; renderReport(); break;
+      case "stats": startAttract(); stTab = op.tab as StatsTab; go("record"); break; // 0.58: as a player gets there (Menu, then Statistics)
+      case "retry": { // 0.58: End here (final record), then Try again with the plan kept
+        if (sim.phase === "battle") { sim.callIt(); if (sim.result) showEnd(sim.result, false); }
+        newSim(true); break;
+      }
     }
   };
   const step = (s: number) => { const n = Math.round(s / C.DT); for (let i = 0; i < n && sim.phase === "battle"; i++) sim.step(C.DT); };
@@ -3758,3 +3852,4 @@ if (SHOTS) {
   };
 }
 (window as any).horde = { get lastRecord() { return lastRecord; }, openCodex, get codex() { return codex; }, get sim() { return sim; }, get mode() { return mode; }, get save() { return save; }, cities: C.CITIES, recentLog, click, closeDraft, startBattle, setTool, setSpeed, cam, playCity, startAttract, pause, resume, saveGame, loadBattle, get startMin() { return startMin; }, get selPerson() { return selPerson; }, get following() { return following; } };
+seedAchievements(); // 0.59: after every top-level declaration (award reads mode and the ticker)

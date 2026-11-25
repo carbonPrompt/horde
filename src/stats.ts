@@ -13,7 +13,7 @@ export const SE_SIRENS = 1, SE_HORDE = 2, SE_BREACH = 3, SE_GATE_TO_WALL = 4, SE
   SE_ROUND = 14, SE_KEEP_FIGHTING = 15;
 export type OtherKill = "guard" | "civilian" | "train" | "bridge" | "demolition" | "env";
 export const OTHER_KILLS: OtherKill[] = ["guard", "civilian", "train", "bridge", "demolition", "env"];
-export interface StrikeRec { kind: string; t: number; x: number; y: number; kills: number; civ: number }
+export interface StrikeRec { kind: string; t: number; x: number; y: number; kills: number; civ: number; dropKills?: number } // 0.59 dropKills: a paratrooper drop's squads' kills (also counted on their units)
 export interface UnitRec { kind: string; label: string; placedT: number; kills: number; lostT: number } // lostT -1 = alive
 export interface Recorder {
   battleId: string; nextT: number;
@@ -26,6 +26,7 @@ export interface Recorder {
     strikeKinds: Record<string, number> };
   win: number[]; // kill times inside the rolling 60 s window
   flags?: { dev: boolean; modded: boolean }; // set by the page at Start Battle; dev sticks once switched on
+  earned?: string[]; // 0.59: achievement ids earned in this battle (a snapshot carries them)
 }
 
 /** tools/statsperf.ts: switch recording off to measure what it costs (never off in the game). */
@@ -84,10 +85,47 @@ export function strike(r: Recorder, kind: string, t: number, x: number, y: numbe
   return r.strikes.length - 1;
 }
 
+/** 0.59: a paratrooper squad's kill also counts toward its drop (the strike's own kill bucket is unchanged). */
+export function dropKill(r: Recorder, strike: number): void {
+  if (STATS_OFF) return;
+  const s = r.strikes[strike]; if (s) s.dropKills = (s.dropKills ?? 0) + 1;
+}
+
 export function killTotal(r: Recorder): number {
   let n = 0;
   for (const u of r.units) n += u.kills;
   for (const s of r.strikes) n += s.kills;
   for (const k of OTHER_KILLS) n += r.other[k];
   return n;
+}
+
+/** 0.59: the per-battle numbers the achievements read that the samples and buckets don't keep. Built from the live
+ *  recorder (live checks) and kept on the battle record (trimmed records lose their events, not these). */
+export interface RecCounters {
+  swimmers: number; guardKills: number; crushedByVehicles: number; grenadierKills: number; fortifies: number; topUps: number; repairs: number;
+  talkedOut: number; longShot: number; best60: number; maxZone: number;
+  gatesToWall: number; demolitions: number; lockdown: number; saved5: number; infectedLeft: number; // lockdown 0/1
+}
+export const REC_COUNTER_KEYS: (keyof RecCounters)[] = ["swimmers", "guardKills", "crushedByVehicles", "grenadierKills", "fortifies", "topUps", "repairs",
+  "talkedOut", "longShot", "best60", "maxZone", "gatesToWall", "demolitions", "lockdown", "saved5", "infectedLeft"];
+export const LOCKDOWN_MIN_S = 300, QUICK_EXIT_S = 300;
+
+export function recCounters(r: Recorder, roundAt: number | null): RecCounters {
+  const e = r.ev, c = r.c;
+  let gatesToWall = 0, demolitions = 0, sirensT = -1, lockT = -1, lastBreach = -1;
+  for (let i = 0; i < e.k.length; i++) {
+    const k = e.k[i];
+    if (k === SE_GATE_TO_WALL) gatesToWall++;
+    else if (k === SE_DEMOLISH) demolitions++;
+    else if (k === SE_SIRENS && sirensT < 0) sirensT = e.t[i];
+    else if (k === SE_GATES_LOCKED && e.a[i] > 0 && (roundAt === null || e.t[i] <= roundAt)) lockT = e.t[i];
+    else if (k === SE_BREACH && (roundAt === null || e.t[i] <= roundAt)) lastBreach = e.t[i];
+  }
+  const lockdown = roundAt !== null && lockT >= 0 && lastBreach < lockT && roundAt - lockT >= LOCKDOWN_MIN_S ? 1 : 0;
+  const ts = r.cols.t, sv = r.cols.saved, inf = r.cols.infected;
+  let saved5 = 0;
+  if (sirensT >= 0) for (let i = 0; i < ts.length && ts[i] <= sirensT + QUICK_EXIT_S; i++) saved5 = sv[i];
+  return { swimmers: c.swimmers, guardKills: c.guardKills, crushedByVehicles: c.crushedByVehicles, grenadierKills: c.grenadierKills, fortifies: c.fortifies,
+    topUps: c.topUps, repairs: c.repairs, talkedOut: c.talkedOut, longShot: Math.round(c.longShot), best60: c.best60, maxZone: c.maxZone,
+    gatesToWall, demolitions, lockdown, saved5, infectedLeft: inf.length ? inf[inf.length - 1] : 0 };
 }

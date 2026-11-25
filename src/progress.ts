@@ -1,6 +1,5 @@
-// Progression (phase 5): XP from every battle unlocks hardware, ranks mark the way, achievements reward play styles.
+// Progression (phase 5): XP from every battle unlocks hardware, ranks mark the way. (0.59: achievements live in achievements.ts.)
 // Pure functions only (no DOM), so the sim tests can cover them.
-import type { Score } from "./sim";
 import * as C from "./config";
 import { anyMedal } from "./scoring";
 
@@ -39,33 +38,6 @@ export function grandfatherXp(best: Record<string, { pct: number; medal: string 
   let xp = 0;
   for (const b of Object.values(best)) xp += Math.round(b.pct * 10) + (b.medal ? 200 : 0);
   return xp;
-}
-
-export interface BattleStats { r: Score; kills: number; held: number; lifts: number; nukes: number; unitsLost: number; daily: boolean; usedAbilities: number }
-export interface Achievement { id: string; name: string; desc: string; check: (b: BattleStats) => boolean }
-
-export const ACHIEVEMENTS: Achievement[] = [
-  { id: "first_out", name: "First Lift", desc: "Evacuate your first people.", check: b => b.r.saved > 0 },
-  { id: "round_one", name: "Held the Line", desc: "Complete a round: get everyone you can out of the city.", check: b => b.r.round },
-  { id: "gold", name: "Gold Standard", desc: "Earn Gold or better.", check: b => b.r.medal === "Gold" || b.r.medal === "Platinum" },
-  { id: "platinum", name: "Nobody Left Behind", desc: "Earn Platinum (75 points).", check: b => b.r.medal === "Platinum" },
-  { id: "evac_10k", name: "Airlift", desc: "Evacuate 10,000 people in one battle.", check: b => b.r.saved >= 10000 },
-  { id: "lifts_100", name: "Shuttle Run", desc: "Fly 100 evac lifts in one battle.", check: b => b.lifts >= 100 },
-  { id: "hold_20", name: "Last Stand", desc: "Hold 20 minutes after the outbreak.", check: b => b.held >= 1200 },
-  { id: "waves_30", name: "Tide Breaker", desc: "Survive 30 hordes.", check: b => b.r.waves >= 30 },
-  { id: "kills_10k", name: "Grinder", desc: "Kill 10,000 infected in one battle.", check: b => b.kills >= 10000 },
-  { id: "light_touch", name: "Light Touch", desc: "Finish with the city at least 90% intact.", check: b => b.r.bonus === "Light Touch" && b.r.waves >= 5 },
-  { id: "scorched", name: "Scorched Earth", desc: "Finish with at least 35% of the city wrecked.", check: b => b.r.bonus === "Scorched Earth" },
-  { id: "no_losses", name: "Everyone Comes Home", desc: "Complete a round without losing a unit.", check: b => b.r.round && b.unitsLost === 0 },
-  { id: "ground_game", name: "Boots Only", desc: "Complete a round without calling in any strike.", check: b => b.r.round && b.usedAbilities === 0 },
-  { id: "billion", name: "Billion Dollar Bill", desc: "Run up $1 billion in property damage in one battle.", check: b => b.r.damage >= 1e9 },
-  { id: "nuclear", name: "Nuclear Option", desc: "Use a tactical nuke. It costs you.", check: b => b.nukes > 0 },
-  { id: "daily", name: "Daily Duty", desc: "Complete a round in a Daily Challenge.", check: b => b.daily && b.r.round },
-];
-
-/** Achievements earned by this battle that were not already held. */
-export function earned(b: BattleStats, have: Record<string, string>) {
-  return ACHIEVEMENTS.filter(a => !have[a.id] && a.check(b));
 }
 
 /** 0.35: campaign city i is open when it is the first, the previous city has a medal, or the save carries medals on

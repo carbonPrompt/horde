@@ -20,7 +20,9 @@ export type ShotOp =
   | { op: "cursor"; on: false } // hides the pointer (and the hover panel) for a clean still
   | { op: "camera"; x: number; y: number; scale: number } // centers on (x, y) at a zoom
   | { op: "endround" } // 0.57: End round now (the after-action report opens)
-  | { op: "report"; tab: string }; // 0.57: picks a tab of the after-action report
+  | { op: "report"; tab: string } // 0.57: picks a tab of the after-action report
+  | { op: "stats"; tab: string } // 0.58: opens the Statistics page on a tab
+  | { op: "retry" }; // 0.58: ends a running battle as End here would, then Try again (plan kept)
 
 export interface ShotApi { apply(op: ShotOp): void; step(seconds: number): void }
 
@@ -51,6 +53,8 @@ export function parseOp(line: string): ShotOp {
     case "cursor": return a.length === 1 && a[0] === "off" ? { op, on: false } : bad(line);
     case "camera": { if (a.length !== 2) bad(line); const [x, y] = pt(a[0], line); return { op, x, y, scale: num(a[1], line) }; }
     case "endround": return a.length === 0 ? { op } : bad(line);
+    case "stats": return a.length === 1 && ["career", "units", "strikes", "cities", "records", "history", "achievements"].includes(a[0]) ? { op, tab: a[0] } : bad(line);
+    case "retry": return a.length === 0 ? { op } : bad(line);
     case "report": return a.length === 1 && ["overview", "timeline", "units", "strikes", "town", "money", "heatmap"].includes(a[0]) ? { op, tab: a[0] } : bad(line);
     default: return bad(line);
   }

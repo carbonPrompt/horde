@@ -45,6 +45,11 @@ every release, and Settings can install updates automatically. Your save is back
   kills, and tells the town's story: which families got out together, who was lost, the people who refused to leave,
   and a dozen short stories taken from what really happened to them. Every battle is kept in your save slot's history,
   with career totals.
+- **Statistics.** Career totals, every battle's score, kills and cost per unit and strike, your best medal on every
+  city and difficulty, personal records and the full battle history, filterable by difficulty and city. Any past
+  battle reopens its after-action report.
+- **Achievements.** 117 of them in ten groups, earned the moment they happen during a battle. Each one says exactly
+  how to earn it, with a progress bar toward it. Recognition only: they unlock nothing.
 - **Codex.** The game's manual. It opens on How to Play: one full round in twelve illustrated chapters, from
   placing your first zone to the medal. Then a searchable reference for every rule, key and unit with pictures, short
   clips and diagrams, and every key shown is the one you set. There is no tutorial; read as much as you like.

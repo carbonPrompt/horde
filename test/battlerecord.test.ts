@@ -154,3 +154,11 @@ test("persistRecord: a good write returns the new career and records broken", as
   const res = await persistRecord(async () => ({ ok: true, history: { v: 1, battles: [] } }), async h => { stored = h; return true; }, emptyCareer(), rec({ saved: 50 }));
   expect(res.career!.saved).toBe(50); expect(stored!.battles.length).toBe(1); expect(res.broken.some(b => b.key === "mostSaved")).toBe(true);
 });
+
+test("0.58: the final record of a battle still reports the records its round record broke", () => {
+  let s = upsert(emptyH(), emptyCareer(), rec({ id: "old", saved: 100 }));
+  s = upsert(s.history, s.career, rec({ id: "new", saved: 500 })); // round record
+  s = upsert(s.history, s.career, rec({ id: "new", saved: 520 })); // final record, same battle
+  const b = s.broken.find(x => x.key === "mostSaved")!;
+  expect(b).toBeDefined(); expect(b.was).toBe(100); expect(b.now).toBe(520);
+});

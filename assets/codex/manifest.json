@@ -120,18 +120,18 @@
   "h": 168
  },
  "end-report-overview": {
-  "version": "0.57.0",
+  "version": "0.59.0",
   "rev": 1,
   "recipeHash": "10ef0fdf0bdf",
-  "bytes": 61692,
+  "bytes": 64938,
   "w": 1520,
   "h": 800
  },
  "end-report-town": {
-  "version": "0.57.0",
+  "version": "0.58.0",
   "rev": 1,
   "recipeHash": "eb493156db60",
-  "bytes": 102990,
+  "bytes": 103185,
   "w": 1520,
   "h": 800
  },
@@ -184,7 +184,7 @@
   "h": 276
  },
  "howto-12-pause": {
-  "version": "0.57.0",
+  "version": "0.59.0",
   "rev": 1,
   "recipeHash": "836bece728ec",
   "bytes": 114155,
@@ -302,6 +302,22 @@
   "bytes": 30626,
   "w": 960,
   "h": 276
+ },
+ "stats-achievements": {
+  "version": "0.59.0",
+  "rev": 1,
+  "recipeHash": "11881149e41d",
+  "bytes": 118489,
+  "w": 1440,
+  "h": 868
+ },
+ "stats-career": {
+  "version": "0.59.0",
+  "rev": 1,
+  "recipeHash": "9b2bb22cfbe4",
+  "bytes": 78716,
+  "w": 1440,
+  "h": 868
  },
  "support-radius": {
   "version": "0.56.0",
