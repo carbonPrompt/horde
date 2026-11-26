@@ -45,3 +45,12 @@ test("report block: one row per event with what it was worth; empty without even
   expect(h).toContain("-5 score");
   expect(h).toContain("Dr. Bo Kim");
 });
+
+test("0.62.1: the card's points follow the config (mods)", () => {
+  const [getS, setS] = C.TUNABLE.EVENT_SCORE, [getF, setF] = C.TUNABLE.EVENT_FAIL_SCORE, s0 = getS(), f0 = getF();
+  try {
+    setS(7); setF(9);
+    expect(bevCardHtml(ev({ state: "won", frac: 1 }), 400, "")).toContain("+7 score");
+    expect(bevCardHtml(ev({ state: "lost" }), 400, "")).toContain("-9 score");
+  } finally { setS(s0); setF(f0); }
+});

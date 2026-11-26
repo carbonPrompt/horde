@@ -5012,6 +5012,7 @@ export class Sim {
   /** 0.45: an escort is over once nobody in the family is still out in the city. */
   private escortDone(who: number): boolean {
     if (who < 0 || who >= this.civN) return true;
+    if (this.bev && this.bev.events.some(e => e.kind !== "power" && e.alertT !== null && (e.state === "won" || e.state === "lost") && e.people.includes(who))) return true; // 0.62.1: an event escort ends with its event
     const grp = this.bevGroupOf(who); if (grp) return !grp.some(m => this.state[m] === CIV); // 0.62
     const lead = this.famLead[who], a = lead >= 0 ? lead : who, b = lead >= 0 ? lead + this.famSize[lead] : who + 1;
     for (let m = a; m < b; m++) if (this.state[m] === CIV) return false;

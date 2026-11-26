@@ -160,3 +160,11 @@ test("I7: the shelter note carries home and lead; a zone rescue is not soldiers"
   const r = s.storyOf(e.lead).find(v => v.code === EV_RESCUED)!;
   expect(r.arg).toBe(1);
 }, 120000);
+
+test("0.62.1 (M6): an event escort ends with the event; it does not go on to the lead's own family", () => {
+  const s = mk(); s.startBattle(); go(s, 1);
+  const e = first(s, "mayor"); alertNow(s);
+  expect((s as any).escortDone(e.lead)).toBe(false);
+  (s as any).bevResolve(e, false, 0);
+  expect((s as any).escortDone(e.lead)).toBe(true);
+}, 120000);

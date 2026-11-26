@@ -1,7 +1,7 @@
 // 0.62: Battle Events, what the player sees: the card under the top bar and the block in the after-action report.
 // Pure: HTML strings only (main.ts places them).
 import type { BevEvent } from "./events";
-import { bevGoal } from "./events";
+import { bevGoal, bevReward } from "./events";
 import type { BevOutcome } from "./stats";
 
 const esc = (s: string) => s.replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]!));
@@ -17,8 +17,10 @@ export function bevWorth(o: { won: boolean; score: number; cash: number; xp: num
 export function bevCardHtml(e: BevEvent, now: number, place: string): string {
   const where = place ? `<div class="bev-where">Near ${esc(place)}</div>` : "";
   let status: string;
-  if (e.state === "won") status = `<div class="bev-out won">Done. ${bevWorth({ won: true, score: 4 * (e.kind === "class" ? e.frac : 1), cash: 0, xp: 0 }).split(",")[0]}</div>`;
-  else if (e.state === "lost") status = `<div class="bev-out lost">Failed. ${bevWorth({ won: false, score: -5 * (e.kind === "class" ? 1 - e.frac : 1), cash: 0, xp: 0 })}</div>`;
+  if (e.state === "won" || e.state === "lost") { // (0.62.1: the points come from the config, so mods show right)
+    const won = e.state === "won", sc = bevWorth({ won, score: bevReward(e.kind, won, e.frac, 1, 1).score, cash: 0, xp: 0 }).split(",")[0];
+    status = `<div class="bev-out ${e.state}">${won ? "Done" : "Failed"}. ${sc}</div>`;
+  }
   else if (e.endT === null) status = `<div class="bev-clock">Hold until the round ends</div>`;
   else if (e.reached) status = `<div class="bev-clock">Reached: they are on their way to the zone</div>`;
   else status = `<div class="bev-clock">${mss(e.endT - now)} left to reach them</div>`;
