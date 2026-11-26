@@ -18,7 +18,7 @@ import * as Snap from "./snapshot";
 import * as P from "./progress";
 import * as A from "./achievements";
 import * as Sup from "./supply";
-import { inventoryHtml, type InvZone } from "./inventory";
+import { inventoryHtml, waitingList, type InvZone } from "./inventory";
 import { inEngineerReach } from "./engineers";
 import * as Mods from "./mods";
 // Mods first: they change numbers that everything below reads. Desktop: <userData>\mods\*.json; browser: stored copies.
@@ -2120,7 +2120,7 @@ function renderSelection() {
   const box = $("hud-sel");
   const live = sel.filter(e => !("orbit" in e)) as ({ unit: import("./sim").Unit } | { support: import("./sim").Support })[];
   const g = selectionGrid(live.map(e => "unit" in e
-    ? { kind: e.unit.kind, hp: e.unit.hp ?? 1, max: C.maxHp(C.UNITS[e.unit.kind]) ?? 1, soldiers: e.unit.soldiers?.map(so => ({ name: so.name, hp: so.hp, max: C.SOLDIER_HP, alive: so.alive })) }
+    ? { kind: e.unit.kind, hp: e.unit.hp ?? 1, max: C.maxHp(C.UNITS[e.unit.kind]) ?? 1, dry: !!e.unit.dry && sim.isSupplied(e.unit) && e.unit.ammo < 1, soldiers: e.unit.soldiers?.map(so => ({ name: so.name, hp: so.hp, max: C.SOLDIER_HP, alive: so.alive })) }
     : { kind: e.support.kind, hp: 1, max: 1 }));
   const bar = (h: number) => `<span class="sh"><i style="width:${Math.round(h * 100)}%;background:${h > 0.6 ? "#4ade80" : h > 0.3 ? "#fbbf24" : "#f87171"}"></i></span>`;
   let html = "";
@@ -2133,7 +2133,7 @@ function renderSelection() {
   } else if (g.mode === "units") {
     html = `<div class="sel-head">${live.length} selected</div><div class="sel-grid">` + g.items.map(it => {
       const name = (C.UNITS as Record<string, C.UnitSpec | undefined>)[it.kind]?.name ?? (C.SUPPORTS as Record<string, { name: string } | undefined>)[it.kind]?.name ?? it.kind, img = SPRITE_URL[it.kind as SpriteKey];
-      return `<button class="sel-tile" data-idx="${it.index}" title="${name}: click to select only this, Shift-click to drop it">${img ? `<img src="${img}" alt="">` : name.slice(0, 3)}${bar(it.health)}</button>`;
+      return `<button class="sel-tile${it.dry ? " dry" : ""}" data-idx="${it.index}" title="${name}${it.dry ? " (no ammo)" : ""}: click to select only this, Shift-click to drop it">${img ? `<img src="${img}" alt="">` : name.slice(0, 3)}${bar(it.health)}</button>`;
     }).join("") + `</div>`;
   } else if (selPerson < 0 && mode === "game" && squadsNow().length) { // 0.52: the roster: every squad and what it is doing
     const qs = squadsNow(), n: Record<string, number> = {};
@@ -2300,7 +2300,7 @@ function invZonesNow(): InvZone[] {
       rateSmall: Sup.useRate(zs.log, sim.time), rateVehicle: Sup.useRate(zs.logV, sim.time), auto: zs.auto, prio: zs.prio,
       engineers: zs.crew.filter(e => e.alive).length, depot: zs.depotGiven ? C.ENGINEERS_DEPOT : 0, engineerPrice: Sup.engineerPrice(zs.engineersBought, sim.difficulty),
       inbound: zs.orders.map(o => ({ what: o.unit !== undefined ? `${o.crates} magazine${o.crates > 1 ? "s" : ""} for ${(() => { const u = sim.units.find(v => v.sid === o.unit); return u ? label(u) : "a battery"; })()}` : `${(o.crates * Sup.crateRounds(o.cls)).toLocaleString("en-US")} ${o.cls === "small" ? "small arms" : "vehicle rounds"}`, eta: o.at - sim.time })),
-      waiting: mine.filter(u => u.waitingSupply || u.ai === "supply" || (u.dry && Sup.ammoClass(u.kind))).map(u => `${label(u)}${u.waitingSupply ? " (at the wall)" : u.ai === "supply" ? " (on the way)" : " (no ammo)"}`),
+      waiting: waitingList(mine.filter(u => u.waitingSupply || u.ai === "supply" || (u.dry && sim.isSupplied(u))).map(u => ({ label: label(u), state: u.dry && u.ammo < 1 && !(u.reserve && u.reserve > 0) ? "dry" as const : u.waitingSupply ? "wall" as const : "way" as const }))), // 0.60.1: dry first
       waitingMoney: !!zs.waitingMoney,
       batteries: mine.filter(u => { const c = Sup.ammoClass(u.kind); return c === "shells" || c === "rockets"; }).map(u => ({ label: label(u), reserve: Math.floor(u.reserve ?? 0), mag: C.UNITS[u.kind].ammo, unit: sim.sidOf(u) })), // review I3: a stable id, not an array index
     };

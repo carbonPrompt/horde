@@ -493,6 +493,7 @@
   #hud-sel .sel-grid { display: grid; grid-template-columns: repeat(auto-fill, 40px); gap: 3px; }
   #hud-sel .sel-tile { width: 40px; height: 44px; padding: 2px; flex-direction: column; justify-content: space-between; min-height: 0; }
   #hud-sel .sel-tile img { width: 28px; height: 28px; image-rendering: pixelated; }
+  #hud-sel .sel-tile.dry img { filter: grayscale(1); opacity: .55; } /* 0.60.1: out of ammo */
   #hud-sel .sh { display: block; width: 100%; min-width: 34px; height: 4px; border-radius: 2px; background: rgba(148, 163, 184, 0.25); }
   #hud-sel .sel-row .sh { width: 60px; }
   #hud-sel .sh i { display: block; height: 100%; border-radius: 2px; }

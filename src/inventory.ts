@@ -20,6 +20,11 @@ function stockRow(label: string, cls: "small" | "vehicle", have: number, cap: nu
     `<button data-inv="${cls}" data-n="${crates}"${money < price ? " disabled" : ""}>+${n0(crates * (cls === "small" ? C.CRATE_SMALL : C.CRATE_VEHICLE))} ${esc(C.money(price))}</button></div>`;
 }
 
+/** 0.60.1: the "waiting for supply" line: units out of ammo first, then those at the wall, then those on the way (stable inside each). */
+export function waitingList(units: { label: string; state: "dry" | "wall" | "way" }[]): string[] {
+  const order = { dry: 0, wall: 1, way: 2 }, word = { dry: "no ammo", wall: "at the wall", way: "on the way" };
+  return units.map((u, i) => ({ u, i })).sort((a, b) => order[a.u.state] - order[b.u.state] || a.i - b.i).map(({ u }) => `${u.label} (${word[u.state]})`);
+}
 export function inventoryHtml(zones: InvZone[], cur: number, money: number, phase: "plan" | "battle"): string {
   if (!zones.length) return `<div class="inv-empty">Draw a safe zone first: each zone keeps its own ammo stock.</div>`;
   const z = zones[Math.max(0, Math.min(zones.length - 1, cur))], N = 10;

@@ -56,15 +56,15 @@ export function commandCard(ctx: { phase: "plan" | "battle" | "over"; orderable:
   return out;
 }
 
-type SelIn = { kind: string; hp: number; max: number; soldiers?: { name: string; hp: number; max: number; alive: boolean }[] };
-export type SelGrid = { mode: "empty" } | { mode: "squad"; soldiers: { name: string; health: number; alive: boolean }[] } | { mode: "units"; items: { kind: string; health: number; index: number }[] };
+type SelIn = { kind: string; hp: number; max: number; dry?: boolean; soldiers?: { name: string; hp: number; max: number; alive: boolean }[] };
+export type SelGrid = { mode: "empty" } | { mode: "squad"; soldiers: { name: string; health: number; alive: boolean }[] } | { mode: "units"; items: { kind: string; health: number; index: number; dry: boolean }[] };
 const share = (hp: number, max: number) => max > 0 ? Math.max(0, Math.min(1, hp / max)) : 1;
 
 /** The selection panel: one squad lists its soldiers; anything else lists the selected units (index into the selection). */
 export function selectionGrid(sel: SelIn[]): SelGrid {
   if (!sel.length) return { mode: "empty" };
   if (sel.length === 1 && sel[0].soldiers) return { mode: "squad", soldiers: sel[0].soldiers.map(s => ({ name: s.name, health: s.alive ? share(s.hp, s.max) : 0, alive: s.alive })) };
-  return { mode: "units", items: sel.map((u, index) => ({ kind: u.kind, health: share(u.hp, u.max), index })) };
+  return { mode: "units", items: sel.map((u, index) => ({ kind: u.kind, health: share(u.hp, u.max), index, dry: !!u.dry })) }; // 0.60.1: dry = out of ammo, drawn gray
 }
 
 /** The build panel's tabs (the old categories, in order) and which one is open. */

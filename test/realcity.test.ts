@@ -589,6 +589,6 @@ test("a 0.35 battle snapshot of a real city is refused as another version (revie
   const s = new Sim(1, { realCityId: "denver" } as any);
   const gz = await Snap.pack("0.35.1", "Denver, CO", s, { cityId: "castle-rock" });
   const meta = await Snap.peek(gz);
-  expect(C.VERSION).toBe("0.60.0");
+  expect(C.VERSION).toBe("0.60.1");
   expect(meta!.version === C.VERSION).toBe(false); // main.ts loadBattle refuses it
 }, 60000);

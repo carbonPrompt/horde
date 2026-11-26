@@ -40,8 +40,8 @@ export interface Support {
 /** A way into the city along the map edge: a road, highway, rail line, bridge or the river. */
 /** 0.48: minimap alerts. zone = someone bitten inside a safe zone, bite = out in the city, unit = a unit clawed at,
  *  wall = infected gnawing a wall or gate, breach = a wall cell down, abort = an evac lift waved off. */
-export type PingKind = "zone" | "bite" | "unit" | "wall" | "breach" | "abort" | "ammo";
-export const PING_KINDS: PingKind[] = ["zone", "bite", "unit", "wall", "breach", "abort", "ammo"];
+export type PingKind = "zone" | "bite" | "unit" | "wall" | "breach" | "abort" | "ammo" | "crew";
+export const PING_KINDS: PingKind[] = ["zone", "bite", "unit", "wall", "breach", "abort", "ammo", "crew"]; // at most 8 (the ping key packs the index in 3 bits)
 export interface Ping { kind: PingKind; x: number; y: number; t: number }
 export interface Score {
   saved: number; pct: number; medal: string | null; reason: string; intact: number; bonus: string | null; xp: number; waves: number; round: boolean; damage: number; spent: number;
@@ -1116,6 +1116,7 @@ export class Sim {
   }
   // While planning, spending is worked out from the plan (so removing refunds). From the battle on it is a
   // ledger: what was locked in at the start plus every purchase since. Losses and used abilities never refund.
+  planResPaid = 0; // 0.60.1: planning reserves, locked in when the battle starts
   lockedSpend = 0; battleSpend = 0; earned = 0; lastIncome = 0; private incomeT = 0; private killsPaid = 0;
   upkeepPaid = 0; lastUpkeep = 0; // 0.48: cost of operations (Insane), charged with each income tick; part of battleSpend
   unitsLost = 0;
@@ -2914,6 +2915,8 @@ export class Sim {
     });
     for (const [i, n] of reserves ?? []) { const u = placed[i]; if (u && this.units.includes(u)) this.buyReserve(u, n); }
   }
+  /** 0.60.1: a unit the supply system feeds and reports on: has an ammo class, and is not a paratrooper or an APC's dismount team (they walk home when dry). */
+  isSupplied(u: Unit): boolean { return !!Sup.ammoClass(u.kind) && u.kind !== "para" && !u.parentUnit; }
   /** 0.60 review: a unit's stable id (the recorder's index; array positions shift as units go). */
   sidOf(u: Unit): number { return St.unitIndex(this.stats, u, this.time); }
   unitBySid(sid: number): Unit | undefined { return this.units.find(v => v.sid === sid); }
@@ -2943,7 +2946,11 @@ export class Sim {
           this.spawnHelo(o.unit !== undefined ? "helo_uh60" : "helo_ch47", tx + 0.5, ty + 0.5, C.CHINOOK_RETRY_S + 3, 2, "#ffb74d", "SUPPLY: COMING AROUND");
           continue;
         }
-        if (o.unit !== undefined) { const u = this.units.find(v => v.sid === o.unit); if (u) u.reserve = (u.reserve ?? 0) + o.crates * C.UNITS[u.kind].ammo; }
+        if (o.unit !== undefined) {
+          const u = this.units.find(v => v.sid === o.unit);
+          if (u) u.reserve = (u.reserve ?? 0) + o.crates * C.UNITS[u.kind].ammo;
+          else { const back = o.crates * Sup.cratePrice(o.cls); this.battleSpend -= back; zs.spent -= back; } // 0.60.1: the battery is gone: refunded
+        }
         else if (o.cls === "small" || o.cls === "vehicle") zs[o.cls] += o.crates * Sup.crateRounds(o.cls);
         St.event(this.stats, St.SE_CHINOOK, this.time, tx, ty, o.crates);
         zs.orders.splice(i--, 1);
@@ -2981,10 +2988,10 @@ export class Sim {
       zs.store = this.storeOf(z);
       const depot = this.supports.some(b => b.kind === "supply" && b.extractT === undefined && this.zoneAt(b.x, b.y) === z);
       if (depot && !zs.depotGiven) {
-        for (let i = 0; i < C.ENGINEERS_DEPOT && zs.crew.filter(e => e.alive).length < C.ENGINEERS_MAX; i++) zs.crew.push(newEngineer(this, z, zs.crew.length));
+        for (let i = 0; i < C.ENGINEERS_DEPOT && zs.crew.filter(e => e.alive).length < C.ENGINEERS_MAX; i++) { const e = newEngineer(this, z, zs.crew.length); e.depot = true; zs.crew.push(e); }
         zs.depotGiven = true;
       } else if (!depot && zs.depotGiven && this.phase === "plan") {
-        zs.crew.splice(Math.max(0, zs.crew.length - C.ENGINEERS_DEPOT), C.ENGINEERS_DEPOT); zs.depotGiven = false;
+        zs.crew = zs.crew.filter(e => !e.depot); zs.depotGiven = false; // 0.60.1: only the Depot's own (at the cap it gave none), never paid ones
       }
     });
   }
@@ -3071,6 +3078,7 @@ export class Sim {
     this.findEntries();
     this.planWave(r);
     this.lockedSpend = this.spent();
+    this.planResPaid = 0; for (const u of this.units) this.planResPaid += u.resPaid ?? 0; // 0.60.1
     this.origFloors = Uint8Array.from(this.map.height);
     this.phase = "battle";
     St.event(this.stats, St.SE_SIRENS, this.time, 0, 0); // 0.57
@@ -4897,7 +4905,7 @@ export class Sim {
       if (u.resT <= 0) { const n = Math.min(mag, u.reserve); u.reserve -= n; u.ammo += n; u.resT = undefined; u.dry = false; }
       return;
     }
-    if (!u.dry && Sup.ammoClass(u.kind)) { u.dry = true; this.ping("ammo", u.x, u.y); St.event(this.stats, St.SE_OUT_OF_AMMO, this.time, u.x, u.y, u.sid ?? -1); }
+    if (!u.dry && this.isSupplied(u)) { u.dry = true; this.ping("ammo", u.x, u.y); St.event(this.stats, St.SE_OUT_OF_AMMO, this.time, u.x, u.y, u.sid ?? -1); }
   }
   /** 0.49: the squad's soldiers still standing. */
   livingSoldiers(u: Unit): Soldier[] { return u.soldiers ? u.soldiers.filter(so => so.alive) : []; }
@@ -5495,7 +5503,7 @@ export class Sim {
   /** 0.59: copy the sim's own running counts into the recorder (each sample, and before the record is built). */
   syncCounters() {
     const c = this.stats.c; c.swimmers = this.swimmersKilled; c.guardKills = this.guardKills; c.talkedOut = this.talkedOut;
-    let sp = 0; for (const z of this.supply) sp += z.bought + z.spent; for (const u of this.units) sp += u.resPaid ?? 0;
+    let sp = this.planResPaid; for (const z of this.supply) sp += z.bought + z.spent; if (this.phase === "plan") for (const u of this.units) sp += u.resPaid ?? 0; // 0.60.1: planning reserves are locked in at the start (a lost battery keeps its share)
     c.supplySpent = sp; // 0.60
   }
   /** 0.57: one recorder sample (every SAMPLE_S of battle time); also registers units placed since the last one. */

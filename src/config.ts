@@ -453,6 +453,8 @@ export let ENGINEER_SPEED = 1.4; // cells per second (a jog with a load, about 2
 export let ENGINEER_CLIMB_S = 3; // up or down a closed wall
 export let ENGINEER_LEASH = 6; // cells past a wall
 export let ENGINEER_REPAIR_HPS = 40; // wall HP per second per engineer (a Repair Yard heals 30 x REPAIR_YARD_MUL in its whole radius)
+export let ENGINEER_RADIO_MUL = 1.15; // 0.60.1: an engineer under a Radio Tower walks and works this much faster (a Command Post uses COMMAND_RATE_MUL)
+export let ENGINEER_NOPATH_S = 5; // 0.60.1: an engineer that found no way to its goal waits this long before searching again
 export let ENGINEER_RELOAD_FRAC = 0.4; // a unit under this share of its magazine gets an engineer
 export let ENGINEER_STAIRS_S = 2;
 export let AUTO_RESTOCK_FRAC = 0.25;
@@ -553,7 +555,7 @@ export function cityGunProfile(cityId?: string): CityGunProfile {
   return { country: "US", avgHousehold: 2.5, armedRate: CIV_ARMED_BASE, cityFactor: 1.0, mix: US_MIX, militiaFactor: 1.0 };
 }
 
-export const VERSION = "0.60.0";
+export const VERSION = "0.60.1";
 
 /** The campaign: fixed cities that unlock in order (a medal on one opens the next). */
 export interface CityDef { id: string; name: string; seed: number; budget: number; waveMul: number; sites: number; speedMul: number; blurb: string; real?: boolean; trial?: string; recipe?: CityRecipe; clearXp?: number; intro?: string[]; areas?: AreaDef[]; realArea?: string } // 0.36: areas = a real city's battle areas; realArea = this def is one area ("<city>/<area>") // 0.35: recipe = designed campaign map; clearXp = one-time bonus for the first medal; intro = lines shown the first time // trial: hardware this city lends you before you unlock it
@@ -1209,6 +1211,8 @@ export const TUNABLE: Record<string, [() => number, (v: number) => void]> = {
   ENGINEER_CLIMB_S: [() => ENGINEER_CLIMB_S, v => { ENGINEER_CLIMB_S = v; }],
   ENGINEER_LEASH: [() => ENGINEER_LEASH, v => { ENGINEER_LEASH = v; }],
   ENGINEER_REPAIR_HPS: [() => ENGINEER_REPAIR_HPS, v => { ENGINEER_REPAIR_HPS = v; }],
+  ENGINEER_RADIO_MUL: [() => ENGINEER_RADIO_MUL, v => { ENGINEER_RADIO_MUL = v; }],
+  ENGINEER_NOPATH_S: [() => ENGINEER_NOPATH_S, v => { ENGINEER_NOPATH_S = v; }],
   ENGINEER_RELOAD_FRAC: [() => ENGINEER_RELOAD_FRAC, v => { ENGINEER_RELOAD_FRAC = v; }],
   ENGINEER_STAIRS_S: [() => ENGINEER_STAIRS_S, v => { ENGINEER_STAIRS_S = v; }],
   AUTO_RESTOCK_FRAC: [() => AUTO_RESTOCK_FRAC, v => { AUTO_RESTOCK_FRAC = v; }],

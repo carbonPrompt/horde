@@ -144,10 +144,10 @@
   "h": 800
  },
  "engineer-carry": {
-  "version": "0.60.0",
+  "version": "0.60.1",
   "rev": 1,
   "recipeHash": "7bb3709fd785",
-  "bytes": 16772,
+  "bytes": 16711,
   "w": 960,
   "h": 276
  },
@@ -344,10 +344,10 @@
   "h": 868
  },
  "support-radius": {
-  "version": "0.60.0",
+  "version": "0.60.1",
   "rev": 1,
   "recipeHash": "efa68adfca71",
-  "bytes": 33385,
+  "bytes": 33370,
   "w": 960,
   "h": 276
  },

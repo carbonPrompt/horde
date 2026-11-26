@@ -50,8 +50,15 @@ function passable(sim: Sim, i: number, leash: Uint8Array): boolean {
 }
 
 /** BFS path (cell indices, start excluded) from cell a to the nearest cell in goal; [] if none. */
+/** 0.60.1: how many path searches ran (a cheap counter for the no-path cooldown's test). */
+export const pathStats = { searches: 0 };
+/** 0.60.1: auras at (x, y) on an engineer's walking and work: Command Post x COMMAND_RATE_MUL, Radio Tower x ENGINEER_RADIO_MUL. */
+export function engineerBoost(sim: Sim, x: number, y: number): number {
+  return (sim.hasActiveSupport("command", x, y) ? C.COMMAND_RATE_MUL : 1) * (sim.hasActiveSupport("radio", x, y) ? C.ENGINEER_RADIO_MUL : 1);
+}
 function pathTo(sim: Sim, a: number, goal: Set<number>, leash: Uint8Array): number[] | null {
   if (goal.has(a)) return [];
+  pathStats.searches++;
   const prev = new Map<number, number>([[a, -1]]), q = [a];
   for (let h = 0; h < q.length && q.length < MAX_BFS; h++) {
     const i = q[h], x = i % sim.w, y = (i / sim.w) | 0;
@@ -121,13 +128,13 @@ export function stepEngineers(sim: Sim, dt: number, rnd: () => number) {
     }
     const taken = new Set<string>();
     for (const e of crew) if (e.job) taken.add(`${e.job.kind}:${e.job.id}`);
-    const speed = C.ENGINEER_SPEED * (sim.hasActiveSupport("command", zs.store[0], zs.store[1]) ? C.COMMAND_RATE_MUL : 1);
     const fromDepot = sim.supports.some(b => b.kind === "supply" && b.extractT === undefined && b.x === zs.store[0] && b.y === zs.store[1]);
     for (const e of crew) {
       // bites: outside the wall, or with infected right next to them
       if (sim.dev.bites && sim.nearest(e.x, e.y, C.BITE_RANGE, INF, 255, 20) >= 0 && rnd() < 1 - Math.pow(1 - C.BITE_CHANCE, 2)) { lose(sim, zs, e); continue; }
-      if (e.climbT > 0) { e.climbT -= dt; continue; }
-      if (e.workT > 0) { e.workT -= dt; if (e.workT > 0) continue; }
+      const boost = engineerBoost(sim, e.x, e.y), speed = C.ENGINEER_SPEED * boost; // 0.60.1: auras where the engineer stands
+      if (e.climbT > 0) { e.climbT -= dt * boost; continue; }
+      if (e.workT > 0) { e.workT -= dt * boost; if (e.workT > 0) continue; }
       // a job, or keep the one held if it still makes sense
       if (e.job && !jobValid(sim, zs, e, byId)) { if (e.carry === "small" || e.carry === "vehicle") zs[e.carry] += e.carryN ?? Sup.crateRounds(e.carry); e.carry = null; e.carryN = 0; dropJob(e); } // the crate goes back to the store
       if (!e.job) {
@@ -163,7 +170,7 @@ export function stepEngineers(sim: Sim, dt: number, rnd: () => number) {
         const i = job.id, cells = workCells(sim, i % sim.w, (i / sim.w) | 0, leash, 1);
         if (atCells(sim, e, cells)) {
           const max = sim.inZone[i] === 3 ? sim.gateMaxHp() : sim.wallMaxHp();
-          sim.wallHp[i] = Math.min(max, sim.wallHp[i] + C.ENGINEER_REPAIR_HPS * dt);
+          sim.wallHp[i] = Math.min(max, sim.wallHp[i] + C.ENGINEER_REPAIR_HPS * boost * dt);
           if (sim.wallHp[i] >= max) dropJob(e);
         } else walk(sim, e, cells, leash, speed, dt);
       }
@@ -194,8 +201,9 @@ function goHome(sim: Sim, zs: Sup.ZoneSupply, e: Sup.Engineer, leash: Uint8Array
 function walk(sim: Sim, e: Sup.Engineer, goal: Set<number>, leash: Uint8Array, speed: number, dt: number) {
   const here = sim.idx(Math.floor(e.x), Math.floor(e.y));
   if (!e.path.length || !goal.has(e.path[e.path.length - 1])) {
+    if (sim.time < (e.noPathT ?? 0)) { dropJob(e); return; } // 0.60.1: searched in vain a moment ago
     const p = pathTo(sim, here, goal, leash);
-    if (!p) { dropJob(e); return; }
+    if (!p) { e.noPathT = sim.time + C.ENGINEER_NOPATH_S; dropJob(e); return; }
     e.path = p;
   }
   let left = speed * dt;
@@ -217,5 +225,5 @@ function lose(sim: Sim, zs: Sup.ZoneSupply, e: Sup.Engineer) {
   sim.spawnInfected(e.x, e.y, C.INF_HP * sim.infHpMul);
   sim.stats.c.engineersLost = (sim.stats.c.engineersLost ?? 0) + 1;
   St.event(sim.stats, St.SE_ENGINEER_LOST, sim.time, e.x, e.y);
-  sim.ping("unit", e.x, e.y);
+  sim.ping("crew", e.x, e.y); // 0.60.1: its own alert
 }

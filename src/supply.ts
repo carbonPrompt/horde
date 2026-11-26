@@ -3,7 +3,7 @@
 import * as C from "./config";
 
 /** 0.60: an engineer (Task 4 steps them). A plain record on the zone's supply, like a squad's soldiers. */
-export interface Engineer { x: number; y: number; alive: boolean; name: string; job: Job; carry: AmmoClass | null; carryN?: number; climbT: number; path: number[]; side: "in" | "out"; workT: number }
+export interface Engineer { x: number; y: number; alive: boolean; name: string; job: Job; carry: AmmoClass | null; carryN?: number; climbT: number; path: number[]; side: "in" | "out"; workT: number; depot?: boolean; noPathT?: number } // depot: one of the Depot's engineers; noPathT: no search before this time (0.60.1)
 /** 0.60: an order in flight: a Chinook to the store point (zone stock) or a sling load to a battery (unit sid). */
 export interface SupplyOrder { cls: AmmoClass; crates: number; at: number; auto: boolean; unit?: number; waveOffs: number }
 /** 0.60: one safe zone's supply, parallel to sim.zones. small/vehicle in rounds; bought/spent in dollars. */

@@ -39,9 +39,9 @@ test("selectionGrid: empty, one squad (RF2: all dead still listed, marked dead),
   expect(selectionGrid([])).toEqual({ mode: "empty" });
   const sq = selectionGrid([{ kind: "garrison", hp: 0, max: 400, soldiers: [{ name: "A", hp: 0, max: 100, alive: false }, { name: "B", hp: 50, max: 100, alive: true }] }]);
   expect(sq).toEqual({ mode: "squad", soldiers: [{ name: "A", health: 0, alive: false }, { name: "B", health: 0.5, alive: true }] });
-  expect(selectionGrid([{ kind: "apc", hp: 450, max: 900 }])).toEqual({ mode: "units", items: [{ kind: "apc", health: 0.5, index: 0 }] });
+  expect(selectionGrid([{ kind: "apc", hp: 450, max: 900 }])).toEqual({ mode: "units", items: [{ kind: "apc", health: 0.5, index: 0, dry: false }] });
   const many = selectionGrid([{ kind: "apc", hp: 900, max: 900 }, { kind: "tank", hp: 2000, max: 1000 }]);
-  expect(many).toEqual({ mode: "units", items: [{ kind: "apc", health: 1, index: 0 }, { kind: "tank", health: 1, index: 1 }] });
+  expect(many).toEqual({ mode: "units", items: [{ kind: "apc", health: 1, index: 0, dry: false }, { kind: "tank", health: 1, index: 1, dry: false }] });
 });
 
 test("buildTabs: first category by default; unknown falls back", () => {
