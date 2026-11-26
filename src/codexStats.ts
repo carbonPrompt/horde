@@ -42,7 +42,7 @@ export function statRows(key: string): [string, string][] {
       ["Range", `${s.minRange ? m(s.minRange) + " to " : ""}${m(s.range)}${s.roofBonus ? ` (+${m(s.roofBonus)} per floor)` : ""}`],
       ["Damage", s.damage.toLocaleString("en-US") + (s.splash ? ` (${m(s.splash)} blast)` : "")],
       ["Fire rate", `${s.rate} per s`],
-      ["Ammo", s.ammo === Infinity ? "Unlimited" : s.ammo.toLocaleString("en-US") + (s.reloadsInZone ? " (unlimited in the zone)" : "")],
+      ["Ammo", s.ammo === Infinity ? "Unlimited" : s.ammo.toLocaleString("en-US") + " a magazine (engineers refill it from the zone's stock)"],
       ["Setup time", `${s.deploy} s`]];
     const squad = k === "garrison" ? `${C.SQUAD_GARRISON} soldiers, one fortified squad per building` : k === "sniper" ? "Sniper + spotter, one team per building" : k === "para" ? `${C.SQUAD_PARA} soldiers`
       : k === "police" ? `${C.SQUAD_POLICE} officers` : k === "militia" ? `${C.SQUAD_MILITIA} fighters` : ""; // 0.49 (0.52: police, militia)

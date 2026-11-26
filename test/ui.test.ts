@@ -593,3 +593,18 @@ test("0.57: clean keeps a valid career and drops a junk one", () => {
   expect(clean({ ...base057, career: c } as any).career).toEqual(c);
   expect(clean({ ...base057, career: "x" } as any).career).toBeUndefined();
 });
+
+test("0.60: the Inventory button and panel are in the page", () => {
+  const html = require("node:fs").readFileSync(new URL("../index.html", import.meta.url), "utf8");
+  expect(html).toContain('id="invbtn"'); expect(html).toContain('data-oicon="inventory"');
+  expect(html).toContain('<div id="inv" hidden>'); expect(html).toContain('id="inv-body"'); expect(html).toContain('id="inv-close"');
+});
+
+test("review I2 (and a 0.59 slip): live achievements and the Inventory refresh run every frame in hud(), not in a settings handler", () => {
+  const main = require("fs").readFileSync(import.meta.dir + "/../src/main.ts", "utf8") as string;
+  const i = main.indexOf("function hud(now: number) {"), body = main.slice(i, main.indexOf("\nfunction ", i + 10));
+  expect(body).toContain("checkLiveAchievements();");
+  expect(body).toContain("renderInv();");
+  const dev = main.slice(main.indexOf('$("opt-dev").addEventListener'), main.indexOf('$("opt-dev").addEventListener') + 600);
+  expect(dev).not.toContain("checkLiveAchievements");
+});

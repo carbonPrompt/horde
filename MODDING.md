@@ -38,7 +38,7 @@ Mods load in file-name order, so a later file wins when two change the same valu
 
 | Section | What it changes | Keys |
 |---|---|---|
-| `constants` | Every plain number in the rules: horde size and growth, timings, evac rate and pay, income, zone costs, blast radii, damage | names from the template, e.g. `HORDE_SIZE_POW`, `EVAC_CAP`, `EVAC_PAY`, `WARNING_S`, `EVAC_COST_MUL`, `SCORE_W_SAVED`, `NUKE_RADIUS` |
+| `constants` | Every plain number in the rules: horde size and growth, timings, evac rate and pay, income, zone costs, blast radii, damage | names from the template, e.g. `HORDE_SIZE_POW`, `EVAC_CAP`, `EVAC_PAY`, `WARNING_S`, `EVAC_COST_MUL`, `SCORE_W_SAVED`, `NUKE_RADIUS`; supply (0.60): `CRATE_SMALL`, `CRATE_PRICE_SMALL`, `ENGINEERS_FREE`, `ENGINEER_SPEED`, `ENGINEER_REPAIR_HPS`, `AUTO_RESTOCK_FRAC`, `CHINOOK_ETA_MIN`, `REPAIR_YARD_MUL` |
 | `units` | Buildable and spawned units | unit id, then any field: `name`, `cost`, `deploy`, `range`, `rate`, `damage`, `ammo`, `splash`, `salvo`, `cannon {...}`, `mobile {speed, hp, leash, flee}` |
 | `unitInfo` | The hover cards: role, description, special notes | unit id, then `role`, `desc`, `specials` (a list of text) |
 | `supports` | Support buildings (Evac Point, Command Post...) | id, then `name`, `cost`, `deploy`, `radius`, `hint` |

@@ -8,7 +8,8 @@ import { cleanCareer, parseHistoryText, type Career, type History } from "./batt
 const CODEX_SECTIONS: string[] = SECTIONS.map(s => s.id);
 
 // 0.45: Plan.units entries: 5th = the unit's orders (present = commanded), 6th = stand by
-export interface Plan { poly: [number, number][]; zones?: [number, number][][]; walls: number[]; units: [C.UnitKind, number, number, C.TargetMode?, Order[]?, boolean?][]; supports?: [C.SupportKind, number, number][]; abilities?: Partial<Record<C.AbilityKind, number>>; c4?: number[]; demo?: number[]; start?: number; groups?: PlanGroup[] } // 0.50: battle groups (unit indices into units, or a zone)
+export interface Plan { poly: [number, number][]; zones?: [number, number][][]; walls: number[]; units: [C.UnitKind, number, number, C.TargetMode?, Order[]?, boolean?][]; supports?: [C.SupportKind, number, number][]; abilities?: Partial<Record<C.AbilityKind, number>>; c4?: number[]; demo?: number[]; start?: number; groups?: PlanGroup[];
+  supply?: { small: number; vehicle: number; auto: boolean; prio: "ammo" | "repair"; engineers: number }[]; reserves?: [number, number][] } // 0.60: supply bought in planning, per zone; battery reserves (plan unit index, magazines) // 0.50: battle groups (unit indices into units, or a zone)
 export interface Settings { fullscreen: boolean; edgeScroll: boolean; showRanges: boolean; devMode?: boolean; crowd?: number; quickbar?: (string | null)[]; quickKeys?: (string | null)[]; keys?: Record<string, string | null>; /* 0.55: key overrides (keymap.ts action ids) */ vol?: { master: number; sfx: number; music: number }; difficulty?: C.Difficulty; codexSeen?: string; codexOpen?: string[]; /* 0.47: last version the Codex was opened in, open sections */
   autoUpdate?: boolean; checkUpdates?: boolean; updatePin?: string; speed?: number; tips?: boolean; tipsSeen?: string[] } // 0.26 updater: install by itself / look on start / stay on a picked older version
 export interface Best { pct: number; medal: string | null; mayhem?: number; perM?: number; underBudget?: boolean } // 0.48: best people saved per $1M, Under Budget badge // pct: round score 0..100 since 0.20 ("% evacuated" before)
@@ -57,6 +58,15 @@ export function clean(s: SaveData): SaveData {
       const ord = cleanOrders(u[4]);
       return ord ? [u[0], u[1], u[2], u[3], ord, ...(u[5] === true ? [true] : [])] as Plan["units"][number] : [u[0], u[1], u[2], u[3]] as Plan["units"][number];
     });
+    if (pl.supply !== undefined) { // 0.60
+      const n = (v: unknown, max: number) => (typeof v === "number" && Number.isFinite(v) ? Math.max(0, Math.min(max, Math.floor(v))) : 0);
+      pl.supply = Array.isArray(pl.supply) ? pl.supply.slice(0, 16).filter(x => x && typeof x === "object").map((x: any) => ({ small: n(x.small, 10000), vehicle: n(x.vehicle, 10000), auto: x.auto === false ? false : true, prio: x.prio === "repair" ? "repair" : "ammo", engineers: n(x.engineers, 12) })) : undefined;
+      if (!pl.supply) delete pl.supply;
+    }
+    if (pl.reserves !== undefined) {
+      pl.reserves = Array.isArray(pl.reserves) ? pl.reserves.slice(0, 400).filter((r): r is [number, number] => Array.isArray(r) && Number.isInteger(r[0]) && r[0] >= 0 && Number.isFinite(r[1]) && r[1] > 0).map(r => [r[0], Math.min(1000, Math.floor(r[1]))] as [number, number]) : undefined;
+      if (!pl.reserves) delete pl.reserves;
+    }
     plans[k] = pl;
   }
   const settings = { ...s.settings };

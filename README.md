@@ -48,6 +48,9 @@ every release, and Settings can install updates automatically. Your save is back
 - **Statistics.** Career totals, every battle's score, kills and cost per unit and strike, your best medal on every
   city and difficulty, personal records and the full battle history, filterable by difficulty and city. Any past
   battle reopens its after-action report.
+- **Supply.** Ammo is a stock in each safe zone, not endless. Engineers (real people, orange dots) carry crates to
+  your units, climb closed walls to reach the ones outside and repair walls. Restock by Chinook from the Inventory
+  window, or let auto-restock do it on Easy and Medium. Nobody opens a gate for supply.
 - **Achievements.** 117 of them in ten groups, earned the moment they happen during a battle. Each one says exactly
   how to earn it, with a progress bar toward it. Recognition only: they unlock nothing.
 - **Codex.** The game's manual. It opens on How to Play: one full round in twelve illustrated chapters, from

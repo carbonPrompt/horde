@@ -409,7 +409,7 @@ export const SUPPORTS: Record<SupportKind, SupportSpec> = {
   },
   repair: {
     name: "Repair Yard", foot: 4, cost: 1_800_000, deploy: 8, radius: 45, color: "#4dd0e1",
-    hint: "Click a building inside your safe zone. Continuously repairs damaged walls, gates and friendly vehicles within 90 m.",
+    hint: "Click a building inside your safe zone. Repairs damaged walls, gates and friendly vehicles within 90 m (at half rate on Hard and Insane, where engineers do most repairs).",
   },
   radio: {
     name: "Radio Tower", foot: 4, cost: 2_000_000, deploy: 8, radius: 65, color: "#80deea",
@@ -417,7 +417,7 @@ export const SUPPORTS: Record<SupportKind, SupportSpec> = {
   },
   supply: {
     name: "Supply Depot", foot: 4, cost: 2_000_000, deploy: 8, radius: 50, color: "#ffb74d",
-    hint: "Click a building inside your safe zone. Feeds ammo to turrets, mobile squads and forward units outside the walls within 100 m, and halves vehicle reload time.",
+    hint: "Click a building inside your safe zone. The zone's ammo store: Chinooks land here, it adds 2 engineers and their trips from here are faster.",
   },
   command: {
     name: "Command Post", foot: 4, cost: 2_400_000, deploy: 10, radius: 50, color: "#ba68c8",
@@ -438,6 +438,39 @@ export let REPAIR_WALL_HPS = 30;
 export let REPAIR_UNIT_HPS = 25;
 export let RADIO_RANGE_MUL = 1.4;
 export let SUPPLY_AMMO_RATE = 0.08; // fraction of magazine restored per second
+// 0.60 Supply (design ~/plans/2026-11-25-horde-0.60-supply-design.md)
+export let CRATE_SMALL = 800; // small-arms rounds in one crate (one Troops magazine)
+export let CRATE_VEHICLE = 300; // vehicle rounds in one crate (one APC load)
+export let CRATE_PRICE_SMALL = 40_000;
+export let CRATE_PRICE_VEHICLE = 60_000;
+export let CRATE_PRICE_SHELLS = 120_000; // one mortar/howitzer magazine
+export let CRATE_PRICE_ROCKETS = 300_000; // one HIMARS magazine
+export let ENGINEERS_FREE = 4; // free engineers per safe zone
+export let ENGINEERS_DEPOT = 2; // extra engineers while a Supply Depot stands in the zone
+export let ENGINEERS_MAX = 12;
+export let ENGINEER_PRICE = 150_000;
+export let ENGINEER_SPEED = 1.4; // cells per second (a jog with a load, about 2.8 m/s)
+export let ENGINEER_CLIMB_S = 3; // up or down a closed wall
+export let ENGINEER_LEASH = 6; // cells past a wall
+export let ENGINEER_REPAIR_HPS = 40; // wall HP per second per engineer (a Repair Yard heals 30 x REPAIR_YARD_MUL in its whole radius)
+export let ENGINEER_RELOAD_FRAC = 0.4; // a unit under this share of its magazine gets an engineer
+export let ENGINEER_STAIRS_S = 2;
+export let AUTO_RESTOCK_FRAC = 0.25;
+export let AUTO_CRATES = 10;
+export let CHINOOK_ETA_MIN = 20;
+export let CHINOOK_ETA_MAX = 40;
+export let CHINOOK_RETRY_S = 15;
+export let DEPOT_TRIP_MUL = 0.7; // trips that start at a Supply Depot take this share of the time
+export let REPAIR_YARD_MUL = 0.5; // Repair Yard rate on Hard and Insane since engineers (0.60; Easy/Medium keep 1)
+export let BASIC_LOAD_SMALL = 3; // spare magazines a small-arms unit carries on hand (0.60 lab: one magazine lasts ~25 s of fighting)
+export let BASIC_LOAD_VEHICLE = 2;
+/** Spare magazines for kinds whose magazine is small (a sniper's 80 rounds). */
+export const BASIC_LOAD_KIND: Partial<Record<UnitKind, number>> = { sniper: 8 };
+export let ENGINEER_CRATES = 3; // crates an engineer carries per trip (what one unit doesn't need goes on to the next)
+export let SUPPLY_RETRY_S = 30; // after giving up waiting at the wall (out of reach, nothing to fill it with), no new trip for this long
+export let SUPPLY_WAIT_GATE_D = 5; // cells a unit waiting for supply keeps clear of every gate
+/** Free starting stock per new zone, in crates: [small arms, vehicle rounds, battery reserve in magazines]. */
+export const STOCK_START: Record<Difficulty, [number, number, number]> = { easy: [60, 20, 4], medium: [40, 12, 3], hard: [20, 6, 2], insane: [12, 4, 1] };
 export let COMMAND_RATE_MUL = 1.3;
 export let COMMAND_LEASH_MUL = 1.25;
 export let POLICE_MAX_SQUADS = 2, POLICE_SPAWN_S = 35;
@@ -520,7 +553,7 @@ export function cityGunProfile(cityId?: string): CityGunProfile {
   return { country: "US", avgHousehold: 2.5, armedRate: CIV_ARMED_BASE, cityFactor: 1.0, mix: US_MIX, militiaFactor: 1.0 };
 }
 
-export const VERSION = "0.59.0";
+export const VERSION = "0.60.0";
 
 /** The campaign: fixed cities that unlock in order (a medal on one opens the next). */
 export interface CityDef { id: string; name: string; seed: number; budget: number; waveMul: number; sites: number; speedMul: number; blurb: string; real?: boolean; trial?: string; recipe?: CityRecipe; clearXp?: number; intro?: string[]; areas?: AreaDef[]; realArea?: string } // 0.36: areas = a real city's battle areas; realArea = this def is one area ("<city>/<area>") // 0.35: recipe = designed campaign map; clearXp = one-time bonus for the first medal; intro = lines shown the first time // trial: hardware this city lends you before you unlock it
@@ -598,8 +631,8 @@ export const MUTATORS: Record<MutatorId, MutatorSpec> = {
     desc: "Horde waves arrive 35% faster and move 15% faster, but kill bounties pay 50% more.", color: "#ffd54f",
   },
   supply_shortage: {
-    id: "supply_shortage", name: "Supply Shortage", short: "Finite zone ammo, +30% budget",
-    desc: "Safe zones do not grant infinite ammo (units inside start with 2x magazine and need Supply Depots). +30% budget, Supply Depots cost 50% less.", color: "#ffb74d",
+    id: "supply_shortage", name: "Supply Shortage", short: "Thin zone stock, slow Chinooks, +30% budget",
+    desc: "Each safe zone starts with half the usual ammo stock and Chinook restocks take 50% longer. +30% budget, Supply Depots cost 50% less.", color: "#ffb74d",
   },
   fragile_walls: {
     id: "fragile_walls", name: "Crumbling Barricades", short: "50% wall HP, +30% roof range",
@@ -898,10 +931,10 @@ export const SUPPORT_INFO: Record<SupportKind, SupportInfoSpec> = {
     specials: ["Stacks multiplicatively with skyscraper rooftop elevation", "Turns Snipers and Howitzers into map-wide overwatch"],
   },
   supply: {
-    role: "Automated Drone Resupply Hub",
+    role: "Zone Ammunition Store",
     transport: "CH-47 Chinook modular lift",
-    effect: "+8% mag/s via Cargo Drones · -50% vehicle reload time within 100 m",
-    specials: ["Dispatches quad-rotor cargo drones to feed Turrets and outside units", "Essential during Supply Shortage mutator"],
+    effect: "The zone's store point: Chinook restocks land here · +2 engineers · engineer trips from here 30% faster",
+    specials: ["One per zone is enough: the store moves to the next Depot, Evac Point or the zone's middle if it goes", "Essential during the Supply Shortage mutator"],
   },
   command: {
     role: "Tactical Fire-Direction Center",
@@ -1118,9 +1151,13 @@ export const TUNABLE: Record<string, [() => number, (v: number) => void]> = {
   SQUAD_GARRISON: [() => SQUAD_GARRISON, v => { SQUAD_GARRISON = v; }],
   SQUAD_SNIPER: [() => SQUAD_SNIPER, v => { SQUAD_SNIPER = v; }],
   SQUAD_PARA: [() => SQUAD_PARA, v => { SQUAD_PARA = v; }],
-  SQUAD_POLICE: [() => SQUAD_POLICE, v => { SQUAD_POLICE = v; }],
   GREN_DMG: [() => GREN_DMG, v => { GREN_DMG = v; }],
+  GREN_SPLASH: [() => GREN_SPLASH, v => { GREN_SPLASH = v; }],
+  GREN_MAX_HITS: [() => GREN_MAX_HITS, v => { GREN_MAX_HITS = v; }],
+  GREN_EVERY_S: [() => GREN_EVERY_S, v => { GREN_EVERY_S = v; }],
   GREN_AMMO: [() => GREN_AMMO, v => { GREN_AMMO = v; }],
+  GREN_MIN_PACK: [() => GREN_MIN_PACK, v => { GREN_MIN_PACK = v; }],
+  SQUAD_POLICE: [() => SQUAD_POLICE, v => { SQUAD_POLICE = v; }],
   SQUAD_MILITIA: [() => SQUAD_MILITIA, v => { SQUAD_MILITIA = v; }],
   BUILDING_MAX_CELLS: [() => BUILDING_MAX_CELLS, v => { BUILDING_MAX_CELLS = v; }],
   SQUAD_SPREAD: [() => SQUAD_SPREAD, v => { SQUAD_SPREAD = v; }],
@@ -1158,6 +1195,34 @@ export const TUNABLE: Record<string, [() => number, (v: number) => void]> = {
   REPAIR_UNIT_HPS: [() => REPAIR_UNIT_HPS, v => { REPAIR_UNIT_HPS = v; }],
   RADIO_RANGE_MUL: [() => RADIO_RANGE_MUL, v => { RADIO_RANGE_MUL = v; }],
   SUPPLY_AMMO_RATE: [() => SUPPLY_AMMO_RATE, v => { SUPPLY_AMMO_RATE = v; }],
+  CRATE_SMALL: [() => CRATE_SMALL, v => { CRATE_SMALL = v; }],
+  CRATE_VEHICLE: [() => CRATE_VEHICLE, v => { CRATE_VEHICLE = v; }],
+  CRATE_PRICE_SMALL: [() => CRATE_PRICE_SMALL, v => { CRATE_PRICE_SMALL = v; }],
+  CRATE_PRICE_VEHICLE: [() => CRATE_PRICE_VEHICLE, v => { CRATE_PRICE_VEHICLE = v; }],
+  CRATE_PRICE_SHELLS: [() => CRATE_PRICE_SHELLS, v => { CRATE_PRICE_SHELLS = v; }],
+  CRATE_PRICE_ROCKETS: [() => CRATE_PRICE_ROCKETS, v => { CRATE_PRICE_ROCKETS = v; }],
+  ENGINEERS_FREE: [() => ENGINEERS_FREE, v => { ENGINEERS_FREE = v; }],
+  ENGINEERS_DEPOT: [() => ENGINEERS_DEPOT, v => { ENGINEERS_DEPOT = v; }],
+  ENGINEERS_MAX: [() => ENGINEERS_MAX, v => { ENGINEERS_MAX = v; }],
+  ENGINEER_PRICE: [() => ENGINEER_PRICE, v => { ENGINEER_PRICE = v; }],
+  ENGINEER_SPEED: [() => ENGINEER_SPEED, v => { ENGINEER_SPEED = v; }],
+  ENGINEER_CLIMB_S: [() => ENGINEER_CLIMB_S, v => { ENGINEER_CLIMB_S = v; }],
+  ENGINEER_LEASH: [() => ENGINEER_LEASH, v => { ENGINEER_LEASH = v; }],
+  ENGINEER_REPAIR_HPS: [() => ENGINEER_REPAIR_HPS, v => { ENGINEER_REPAIR_HPS = v; }],
+  ENGINEER_RELOAD_FRAC: [() => ENGINEER_RELOAD_FRAC, v => { ENGINEER_RELOAD_FRAC = v; }],
+  ENGINEER_STAIRS_S: [() => ENGINEER_STAIRS_S, v => { ENGINEER_STAIRS_S = v; }],
+  AUTO_RESTOCK_FRAC: [() => AUTO_RESTOCK_FRAC, v => { AUTO_RESTOCK_FRAC = v; }],
+  AUTO_CRATES: [() => AUTO_CRATES, v => { AUTO_CRATES = v; }],
+  CHINOOK_ETA_MIN: [() => CHINOOK_ETA_MIN, v => { CHINOOK_ETA_MIN = v; }],
+  CHINOOK_ETA_MAX: [() => CHINOOK_ETA_MAX, v => { CHINOOK_ETA_MAX = v; }],
+  CHINOOK_RETRY_S: [() => CHINOOK_RETRY_S, v => { CHINOOK_RETRY_S = v; }],
+  DEPOT_TRIP_MUL: [() => DEPOT_TRIP_MUL, v => { DEPOT_TRIP_MUL = v; }],
+  REPAIR_YARD_MUL: [() => REPAIR_YARD_MUL, v => { REPAIR_YARD_MUL = v; }],
+  BASIC_LOAD_SMALL: [() => BASIC_LOAD_SMALL, v => { BASIC_LOAD_SMALL = v; }],
+  BASIC_LOAD_VEHICLE: [() => BASIC_LOAD_VEHICLE, v => { BASIC_LOAD_VEHICLE = v; }],
+  ENGINEER_CRATES: [() => ENGINEER_CRATES, v => { ENGINEER_CRATES = v; }],
+  SUPPLY_RETRY_S: [() => SUPPLY_RETRY_S, v => { SUPPLY_RETRY_S = v; }],
+  SUPPLY_WAIT_GATE_D: [() => SUPPLY_WAIT_GATE_D, v => { SUPPLY_WAIT_GATE_D = v; }],
   COMMAND_RATE_MUL: [() => COMMAND_RATE_MUL, v => { COMMAND_RATE_MUL = v; }],
   COMMAND_LEASH_MUL: [() => COMMAND_LEASH_MUL, v => { COMMAND_LEASH_MUL = v; }],
   POLICE_MAX_SQUADS: [() => POLICE_MAX_SQUADS, v => { POLICE_MAX_SQUADS = v; }],

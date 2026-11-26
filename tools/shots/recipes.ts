@@ -75,6 +75,13 @@ export const RECIPES: Recipe[] = [
   { ...FH, id: "end-report-overview", kind: "shot", size: [1600, 900], crop: [40, 20, 1520, 800], camera: { x: 191, y: 106, scale: 3 }, setup: [...BASE, "battle", "advance 240", "endround", "report overview", "cursor off"] },
   { ...FH, id: "end-report-town", kind: "shot", size: [1600, 900], crop: [40, 20, 1520, 800], camera: { x: 191, y: 106, scale: 3 }, setup: [...BASE, "battle", "advance 240", "endround", "report town", "cursor off"] },
   // 0.58: Statistics after two Fairhaven battles (kept in memory in shot mode)
+  // 0.60: supply
+  { ...FH, id: "inventory-window", kind: "shot", size: [1600, 900], crop: [380, 56, 840, 300], camera: { x: 191, y: 106, scale: 3 },
+    setup: [...BASE, "place mortar 196,112", "battle", "advance 40", "ammo turret 300", "supply small 3", "advance 4", "key i", "cursor off"] },
+  { ...FH, id: "engineer-carry", kind: "shot", camera: { x: 192, y: 93, scale: 18 }, crop: MAP, // frame-exact: at 46 s two engineers carry crates around (197,90) and (177,98)
+    setup: [...BASE, "battle", "advance 30", "ammo turret 200", "ammo garrison 100", "ammo sniper 10", "advance 16", "cursor off"] },
+  { ...FH, id: "chinook-drop", kind: "shot", camera: { x: 191, y: 106, scale: 4 }, crop: MAP,
+    setup: [...BASE, "battle", "advance 20", "supply small 4", "advance 18", "store 4", "cursor off"] },
   { ...FH, id: "stats-achievements", kind: "shot", size: [1600, 900], crop: [80, 16, 1440, 868], camera: { x: 191, y: 106, scale: 3 },
     setup: [...BASE, "battle", "advance 240", "endround", "stats achievements", "cursor off"] },
   { ...FH, id: "stats-career", kind: "shot", size: [1600, 900], crop: [80, 16, 1440, 868], camera: { x: 191, y: 106, scale: 3 },

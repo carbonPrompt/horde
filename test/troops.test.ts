@@ -106,7 +106,7 @@ test("top-up works on a ground squad", () => {
   expect(s.map.tile[s.idx(n.x | 0, n.y | 0)]).not.toBe(BUILDING);
 }, 120000);
 
-test("RF3: a squad outside a zone with no ammo holds fire; back in a zone it refills", () => {
+test("RF3: a squad outside a zone with no ammo holds fire; back in a zone it is not refilled for free (0.60: engineers)", () => {
   const s = mk(), u = groundTroops(s);
   s.dev.bites = false; s.dev.waves = false; s.dev.unitDamage = false; s.startBattle(); s.devClearInfected();
   let ox = -1; const oy = u.y; // due east, past the zone's east wall (34 cells from its middle), on this street
@@ -116,7 +116,7 @@ test("RF3: a squad outside a zone with no ammo holds fire; back in a zone it ref
   for (let t = 0; t < 60 && !(s.inZone[s.idx(u.x | 0, u.y | 0)] === 0 && !s.unitInZone(u)); t += C.DT) s.step();
   expect(s.unitInZone(u)).toBe(false);
   expect(Number.isFinite(u.ammo)).toBe(true);
-  u.ammo = 0; const k0 = u.kills;
+  u.ammo = 0; u.reserve = 0; const k0 = u.kills; // 0.60: no spares either
   for (let j = 0; j < 5; j++) s.spawnInfected(u.x + 3.5, u.y + 0.5, 50);
   for (let t = 0; t < 3; t += C.DT) s.step();
   expect(u.kills).toBe(k0);
@@ -125,7 +125,7 @@ test("RF3: a squad outside a zone with no ammo holds fire; back in a zone it ref
   expect(s.issue(u, { k: "move", x: bx, y: by }, false)).toBeNull();
   for (let t = 0; t < 60 && s.inZone[s.idx(u.x | 0, u.y | 0)] !== 1; t += C.DT) s.step();
   s.step();
-  expect(u.ammo).toBe(Infinity);
+  expect(u.ammo).toBe(0); // 0.60: no endless zone ammo; an engineer brings a crate (test/engineers.test.ts)
 }, 120000);
 
 // ---- Task 3: fortify and dismount ----

@@ -51,14 +51,22 @@ test("names never contain an em-dash", () => {
   expect(all).not.toContain("—");
 });
 
-test("baked streets: Castle Rock downtown has real names, Boston has none", async () => {
+test("baked streets: all 13 real cities have real names (Castle Rock downtown, Boston)", async () => {
   const { realAreaStreets } = await import("../src/realcity/load");
   const cr = C.REAL_CITIES.find(c => c.id === "castle-rock")!.areas!.find(a => a.key.includes("downtown"))!;
   const st = realAreaStreets(cr.key);
   expect(st && st.length).toBeGreaterThan(10);
   expect(st!.some(([n]) => /Wilcox Street/.test(n))).toBe(true);
   const bos = C.REAL_CITIES.find(c => c.id === "boston")!.areas![0];
-  expect(realAreaStreets(bos.key)).toBeUndefined();
+  const bst = realAreaStreets(bos.key);
+  expect(bst && bst.length).toBeGreaterThan(10);
+  for (const city of C.REAL_CITIES) {
+    for (const area of city.areas ?? []) {
+      const streets = realAreaStreets(area.key);
+      expect(streets && streets.length, area.key).toBeGreaterThan(0);
+      for (const [n] of streets!) expect(n, area.key).not.toContain("\u2014");
+    }
+  }
 });
 
 test("adding street names leaves the baked maps unchanged", async () => {
@@ -77,4 +85,10 @@ test("streetNear finds the street beside a doorstep cell", () => {
   const p = buildPlaces(m, 1, { generate: false, streets: [["Elm Avenue", [5, 55, 95, 55]]], schools: 0 });
   expect(p.streetNear(4 * 10 + 3)).toBe("Elm Avenue"); // one row above the road
   expect(p.streetNear(0)).toBeNull(); // too far
+});
+
+test("0.60: live OSM street names lose em dashes", async () => {
+  const { cleanStreetName } = await import("../src/realcity/streets");
+  expect(cleanStreetName("Promenade des Berges de la Seine \u2014 Andr\u00e9 Gorz")).toBe("Promenade des Berges de la Seine - Andr\u00e9 Gorz");
+  expect(cleanStreetName("  Main Street ")).toBe("Main Street");
 });

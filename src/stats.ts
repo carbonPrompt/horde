@@ -10,11 +10,12 @@ export type Col = typeof COLS[number];
 // event kinds (SE_: people.ts already uses EV_)
 export const SE_SIRENS = 1, SE_HORDE = 2, SE_BREACH = 3, SE_GATE_TO_WALL = 4, SE_WALL_TO_GATE = 5, SE_GATES_LOCKED = 6,
   SE_BRIDGE = 7, SE_STRIKE = 8, SE_UNIT_PLACED = 9, SE_UNIT_LOST = 10, SE_LIFT = 11, SE_LIFT_ABORT = 12, SE_DEMOLISH = 13,
-  SE_ROUND = 14, SE_KEEP_FIGHTING = 15;
+  SE_ROUND = 14, SE_KEEP_FIGHTING = 15,
+  SE_CHINOOK = 16, SE_CHINOOK_ABORT = 17, SE_ENGINEER_LOST = 18, SE_OUT_OF_AMMO = 19; // 0.60 supply
 export type OtherKill = "guard" | "civilian" | "train" | "bridge" | "demolition" | "env";
 export const OTHER_KILLS: OtherKill[] = ["guard", "civilian", "train", "bridge", "demolition", "env"];
 export interface StrikeRec { kind: string; t: number; x: number; y: number; kills: number; civ: number; dropKills?: number } // 0.59 dropKills: a paratrooper drop's squads' kills (also counted on their units)
-export interface UnitRec { kind: string; label: string; placedT: number; kills: number; lostT: number } // lostT -1 = alive
+export interface UnitRec { kind: string; label: string; placedT: number; kills: number; lostT: number; dryS?: number } // lostT -1 = alive; 0.60 dryS: seconds out of ammo
 export interface Recorder {
   battleId: string; nextT: number;
   cols: Record<Col, number[]>;
@@ -23,7 +24,7 @@ export interface Recorder {
   other: Record<OtherKill, number>;
   c: { maxZone: number; best60: number; longShot: number; swimmers: number; guardKills: number; crushedByVehicles: number;
     grenadierKills: number; fortifies: number; topUps: number; repairs: number; talkedOut: number;
-    strikeKinds: Record<string, number> };
+    strikeKinds: Record<string, number>; crates?: number; engineersLost?: number; supplySpent?: number }; // 0.60: crates delivered by engineers, engineers lost
   win: number[]; // kill times inside the rolling 60 s window
   flags?: { dev: boolean; modded: boolean }; // set by the page at Start Battle; dev sticks once switched on
   earned?: string[]; // 0.59: achievement ids earned in this battle (a snapshot carries them)
@@ -105,17 +106,20 @@ export interface RecCounters {
   swimmers: number; guardKills: number; crushedByVehicles: number; grenadierKills: number; fortifies: number; topUps: number; repairs: number;
   talkedOut: number; longShot: number; best60: number; maxZone: number;
   gatesToWall: number; demolitions: number; lockdown: number; saved5: number; infectedLeft: number; // lockdown 0/1
+  crates: number; supplySpent: number; engineersLost: number; chinooks: number; waveOffs: number; // 0.60
 }
 export const REC_COUNTER_KEYS: (keyof RecCounters)[] = ["swimmers", "guardKills", "crushedByVehicles", "grenadierKills", "fortifies", "topUps", "repairs",
-  "talkedOut", "longShot", "best60", "maxZone", "gatesToWall", "demolitions", "lockdown", "saved5", "infectedLeft"];
+  "talkedOut", "longShot", "best60", "maxZone", "gatesToWall", "demolitions", "lockdown", "saved5", "infectedLeft", "crates", "supplySpent", "engineersLost", "chinooks", "waveOffs"];
 export const LOCKDOWN_MIN_S = 300, QUICK_EXIT_S = 300;
 
 export function recCounters(r: Recorder, roundAt: number | null): RecCounters {
   const e = r.ev, c = r.c;
-  let gatesToWall = 0, demolitions = 0, sirensT = -1, lockT = -1, lastBreach = -1;
+  let gatesToWall = 0, demolitions = 0, sirensT = -1, lockT = -1, lastBreach = -1, chinooks = 0, waveOffs = 0;
   for (let i = 0; i < e.k.length; i++) {
     const k = e.k[i];
     if (k === SE_GATE_TO_WALL) gatesToWall++;
+    else if (k === SE_CHINOOK) chinooks++;
+    else if (k === SE_CHINOOK_ABORT) waveOffs++;
     else if (k === SE_DEMOLISH) demolitions++;
     else if (k === SE_SIRENS && sirensT < 0) sirensT = e.t[i];
     else if (k === SE_GATES_LOCKED && e.a[i] > 0 && (roundAt === null || e.t[i] <= roundAt)) lockT = e.t[i];
@@ -127,5 +131,6 @@ export function recCounters(r: Recorder, roundAt: number | null): RecCounters {
   if (sirensT >= 0) for (let i = 0; i < ts.length && ts[i] <= sirensT + QUICK_EXIT_S; i++) saved5 = sv[i];
   return { swimmers: c.swimmers, guardKills: c.guardKills, crushedByVehicles: c.crushedByVehicles, grenadierKills: c.grenadierKills, fortifies: c.fortifies,
     topUps: c.topUps, repairs: c.repairs, talkedOut: c.talkedOut, longShot: Math.round(c.longShot), best60: c.best60, maxZone: c.maxZone,
-    gatesToWall, demolitions, lockdown, saved5, infectedLeft: inf.length ? inf[inf.length - 1] : 0 };
+    gatesToWall, demolitions, lockdown, saved5, infectedLeft: inf.length ? inf[inf.length - 1] : 0,
+    crates: c.crates ?? 0, supplySpent: c.supplySpent ?? 0, engineersLost: c.engineersLost ?? 0, chinooks, waveOffs };
 }

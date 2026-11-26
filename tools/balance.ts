@@ -42,6 +42,7 @@ for (const [name, seed, opts] of runs) {
   const cx = st0 ? st0.x : s.w / 2, cy = st0 ? st0.y : s.h / 3;
   const err = s.setZone([[cx - 40, cy - 28], [cx + 40, cy - 28], [cx + 46, cy + 24], [cx - 36, cy + 30]]);
   if (err) { console.log(seed, err); continue; }
+  if (process.argv.includes("--restock")) s.supply.forEach((_, z) => s.buySupply(z, "small", 10)); // 0.60: the planner buys stock before the army
   const gates: number[][] = [];
   for (let i = 0; i < s.inZone.length; i++) if (s.inZone[i] === 3) gates.push([i % s.w, (i / s.w) | 0]);
   const cand: number[][] = [];
@@ -163,6 +164,10 @@ for (const [name, seed, opts] of runs) {
       if (!s.dismount(best, i % s.w, (i / s.w) | 0)) { sent.set(best, { home, phase: "down", t: s.time, gate: i }); microSorties++; }
     }
   };
+  // 0.60: --norestock: auto-restock off everywhere and nothing bought (a player who never opens the Inventory on Hard);
+  // --restock: auto-restock on and 10 extra small-arms crates per zone bought in planning
+  if (process.argv.includes("--norestock")) s.supply.forEach((_, z) => s.setAuto(z, false));
+  if (process.argv.includes("--restock")) s.supply.forEach((_, z) => s.setAuto(z, true));
   s.startBattle();
   let peakInf = 0, peakSafe = 0; const firstBreach = { t: -1 };
   let closed = false;
@@ -188,6 +193,10 @@ for (const [name, seed, opts] of runs) {
     if (micro && s.tick % 25 === 0) microStep();
     if (defend && s.tick % 25 === 0) for (const u of s.units) if (u.mode !== "wall" && !u.parentSupport) u.mode = "wall";
     s.step(C.DT * 2);
+    if (process.env.ENG_DEBUG && s.tick % 1500 === 0) { // every 30 s of sim: what the crews and the low units are doing
+      const zs = s.supply[0], low = s.units.filter(u => Number.isFinite(u.ammo) && u.ammo + (u.reserve ?? 0) < C.UNITS[u.kind].ammo * 1.6 && u.kind !== "para");
+      console.log(`t=${s.time.toFixed(0)} stock=${zs.small} crew=${zs.crew.map(e => `${e.alive ? "" : "X"}${e.job ? e.job.kind[0] + e.job.id : "-"}${e.carry ? "c" : ""}@${e.x.toFixed(0)},${e.y.toFixed(0)}${e.climbT > 0 ? "^" : ""}`).join(" ")} low=${low.map(u => `${u.kind}#${s.units.indexOf(u)}:${Math.round(u.ammo)}+${Math.round(u.reserve ?? 0)}@${u.x | 0},${u.y | 0}z${s.zoneAt(u.x, u.y)}${s.isFortified(u) ? "F" : ""}`).join(" ")}`);
+    }
     if (s.wave !== lastW) {
       if (s.time <= C.WARNING_S + 300) {
         sizes5m.push(s.lastWaveCount);
@@ -198,7 +207,8 @@ for (const [name, seed, opts] of runs) {
     }
     if (s.tick % 50 === 0) { const c = s.counts(); peakInf = Math.max(peakInf, c.inf); peakSafe = Math.max(peakSafe, c.safe); } if (s.breaches && firstBreach.t < 0) firstBreach.t = Math.round(s.time);
   }
+  if (process.env.ENG_DEBUG) { const e = s.stats.ev; for (let i = 0; i < e.k.length; i++) if (e.k[i] === 18) console.log(`engineer lost t=${e.t[i].toFixed(0)} at ${e.x[i].toFixed(1)},${e.y[i].toFixed(1)} cell=${s.inZone[s.idx(e.x[i] | 0, e.y[i] | 0)]} zoneAt=${s.zoneAt(e.x[i], e.y[i])} store=${s.supply[0]?.store}`); }
   const r = (s.result ?? s.roundResult)!;
-  res.push(`${name} [${difficulty}${spam ? " spam " + spam : mix ? " mix" : bare ? " bare" : spend ? " spend" : ""}${micro ? " micro" : ""}${defend ? " defend" + (process.env.REPAIRS ? " x" + process.env.REPAIRS : "") : ""}]: spent=$${(s.spent() / 1e6).toFixed(1)}M perM=${(r.perM ?? 0).toFixed(1)} upkeep=$${(s.upkeepPaid / 1e6).toFixed(1)}M ${r.pct.toFixed(1)}% evac ${r.medal ?? "-"} | ${round || "round not reached"} | ${r.reason} t=${s.time.toFixed(0)} waves=${s.wave} sizes=[${sizes5m.join(",")}] gaps=[${gaps5m.join(",")}] pads=${s.supports.filter(b => b.kind === "evac").length} repairs=${s.supports.filter(b => b.kind === "repair").length} lifts=${s.liftsFlown}/${s.liftsAborted}ab train=${s.trainsEvacuated} intact=${r.intact.toFixed(0)}% xp=${r.xp} kills=${s.kills} breaches=${s.breaches} peakInf=${peakInf} peakSafe=${peakSafe} firstBreach=${firstBreach.t}s units=${s.units.length}${micro ? ` sorties=${microSorties}` : ""} left=$${s.remaining()} earned=$${s.earned}`);
+  res.push(`${name} [${difficulty}${spam ? " spam " + spam : mix ? " mix" : bare ? " bare" : spend ? " spend" : ""}${micro ? " micro" : ""}${defend ? " defend" + (process.env.REPAIRS ? " x" + process.env.REPAIRS : "") : ""}]: spent=$${(s.spent() / 1e6).toFixed(1)}M perM=${(r.perM ?? 0).toFixed(1)} upkeep=$${(s.upkeepPaid / 1e6).toFixed(1)}M ${r.pct.toFixed(1)}% evac ${r.medal ?? "-"} | ${round || "round not reached"} | ${r.reason} t=${s.time.toFixed(0)} waves=${s.wave} sizes=[${sizes5m.join(",")}] gaps=[${gaps5m.join(",")}] pads=${s.supports.filter(b => b.kind === "evac").length} repairs=${s.supports.filter(b => b.kind === "repair").length} lifts=${s.liftsFlown}/${s.liftsAborted}ab train=${s.trainsEvacuated} intact=${r.intact.toFixed(0)}% xp=${r.xp} kills=${s.kills} breaches=${s.breaches} peakInf=${peakInf} peakSafe=${peakSafe} firstBreach=${firstBreach.t}s units=${s.units.length}${micro ? ` sorties=${microSorties}` : ""} left=$${s.remaining()} earned=$${s.earned}${s.supply ? ` supply=$${((s.stats.c.supplySpent ?? 0) / 1e6).toFixed(1)}M crates=${s.stats.c.crates ?? 0} chinooks=${s.stats.ev.k.filter(k => k === 16).length} engLost=${s.stats.c.engineersLost ?? 0} dryS=${Math.round(s.stats.units.reduce((a, u) => a + (u.dryS ?? 0), 0))} stock=${s.supply.map(z => z.small).join("/")}` : ""}`);
 }
 console.log(res.join("\n"));

@@ -69,6 +69,11 @@ const DRAW: Record<string, Draw> = {
     fill(g, OUT, () => g.arc(24, 30, 3, 0, Math.PI * 2)); g.fillStyle = OUT; g.fillRect(23, 30, 2, 7);
   },
   clear: g => { zoneBox(g); line(g, "#ef4444", 5, () => { g.moveTo(10, 40); g.lineTo(40, 8); }); },
+  inventory: g => { // 0.60: an ammo crate with its straps
+    fill(g, "#8d6e63", () => g.rect(8, 14, 32, 24));
+    line(g, "#d7ccc8", 3, () => { g.moveTo(8, 20); g.lineTo(40, 20); g.moveTo(24, 14); g.lineTo(24, 38); });
+    fill(g, "#ffd740", () => g.rect(30, 26, 6, 8));
+  },
 };
 
 export const ORDER_ICON_IDS = Object.keys(DRAW);

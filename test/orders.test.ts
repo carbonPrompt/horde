@@ -164,15 +164,15 @@ test("0.45: a unit whose queue ran out holds there and never chases", () => {
   expect(Math.hypot(apc.x - p[0], apc.y - p[1])).toBeLessThan(2);
 });
 
-test("0.45: a low-ammo unit goes to rearm, then finishes its queue", () => {
+test("0.45: a low-ammo unit goes to rearm (0.60: engineers at the wall), then finishes its queue", () => {
   const { s, apc } = withApc();
   const a = streetFrom(s, apc.x, apc.y, 10), b = streetFrom(s, apc.x, apc.y, 18);
   battle(s);
   expect(s.issue(apc, { k: "move", x: a[0], y: a[1] }, false)).toBeNull();
   expect(s.issue(apc, { k: "move", x: b[0], y: b[1] }, true)).toBeNull();
-  apc.ammo = 10;
+  apc.ammo = 10; apc.reserve = 0; // 0.60: no spares left, so it waits at the wall for an engineer
   let rearmed = false;
-  run(s, 60, () => { if (apc.ai === "reload") rearmed = true; });
+  run(s, 240, () => { if (apc.ai === "supply" || apc.ai === "reload") rearmed = true; });
   expect(rearmed).toBe(true);
   expect(apc.ammo).toBeGreaterThan(10);
   expect(Math.hypot(apc.x - b[0], apc.y - b[1])).toBeLessThanOrEqual(ARRIVE_R + 0.5);

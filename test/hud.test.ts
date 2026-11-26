@@ -85,7 +85,7 @@ test("0.51.1: the panel's buttons carry tooltips instead of text labels", () => 
   const html = fs.readFileSync(import.meta.dir + "/../index.html", "utf8") as string;
   const tools = /<div id="cmdtools">([\s\S]*?)<\/div>\s*<div id="cmdorders"/.exec(html)![1];
   const buttons = tools.match(/<button[^>]*>/g)!;
-  expect(buttons.length).toBe(9);
+  expect(buttons.length).toBe(10); // 0.60: + Inventory (two full rows of five)
   for (const b of buttons) { expect(b).toContain("data-tip="); expect(b).not.toContain(" title="); }
   expect(html).toContain('id="uitip"');
   const main = fs.readFileSync(import.meta.dir + "/../src/main.ts", "utf8") as string;

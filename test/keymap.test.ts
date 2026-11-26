@@ -56,7 +56,7 @@ test("0.55: cleanKeys keeps valid overrides, drops junk, migrates 0.54 quick key
   const a = cleanKeys({ "order.amove": "t" }); expect(a["order.amove"]).toBe("t"); expect(a["order.target"]).toBeNull();
   expect(cleanKeys({ bogus: "z", pause: 7, "order.stop": "escape" })).toEqual(d);
   expect(cleanKeys("nope")).toEqual(d);
-  const q = cleanKeys(undefined, ["i", "o", null, null, null]); expect(q["quick.1"]).toBe("i"); expect(q["quick.2"]).toBe("o"); expect(q["quick.3"]).toBeNull();
+  const q = cleanKeys(undefined, [";", "o", null, null, null]); expect(q["quick.1"]).toBe(";"); // 0.60: "i" is the Inventory now expect(q["quick.2"]).toBe("o"); expect(q["quick.3"]).toBeNull();
   expect(cleanKeys({ "quick.1": "p" }, ["i"])["quick.1"]).toBe("p"); // the new setting wins
   const u = cleanKeys({ "camera.up": null }); expect(u["camera.up"]).toBeNull(); // cleared on purpose stays cleared
 });
@@ -134,10 +134,10 @@ test("0.55 review #1: bindProblem names every clashing action (Swap only makes s
 });
 
 test("0.55 review #3: 0.54 quick keys never take a default menu or camera key", () => {
-  const b = cleanKeys(undefined, ["m", "i", "y", null, "p"]);
+  const b = cleanKeys(undefined, ["m", ";", "y", null, "p"]); // 0.60: "i" is the Inventory now
   expect(b["menu.actions"]).toBe("m"); expect(b["menu.support"]).toBe("y");
   expect(b["quick.1"]).toBe("6"); expect(b["quick.3"]).toBe("8"); // fell back to their defaults
-  expect(b["quick.2"]).toBe("i"); expect(b["quick.4"]).toBeNull(); expect(b["quick.5"]).toBe("p");
+  expect(b["quick.2"]).toBe(";"); expect(b["quick.4"]).toBeNull(); expect(b["quick.5"]).toBe("p");
   expect(cleanKeys({ "quick.1": "m", "menu.actions": "k" })["quick.1"]).toBe("m"); // a 0.55 choice is the player's own
 });
 
@@ -145,4 +145,10 @@ test("0.55 review #6: a bare modifier or a repeat doesn't disarm a waiting menu"
   const { menuStep } = await import("../src/keymap");
   const d = defaultBinds();
   for (const k of ["shift", "control", "alt", "meta", "capslock"]) expect(menuStep("units", k, d)).toEqual({ armed: "units", passThrough: true });
+});
+
+test("0.60: I opens the Inventory and clashes with nothing", () => {
+  const { ACTIONS, defaultBinds } = require("../src/keymap");
+  expect(ACTIONS.some((a: any) => a.id === "inventory")).toBe(true);
+  expect(defaultBinds().inventory).toBe("i");
 });

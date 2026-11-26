@@ -22,7 +22,11 @@ export type ShotOp =
   | { op: "endround" } // 0.57: End round now (the after-action report opens)
   | { op: "report"; tab: string } // 0.57: picks a tab of the after-action report
   | { op: "stats"; tab: string } // 0.58: opens the Statistics page on a tab
-  | { op: "retry" }; // 0.58: ends a running battle as End here would, then Try again (plan kept)
+  | { op: "retry" } // 0.58: ends a running battle as End here would, then Try again (plan kept)
+  | { op: "ammo"; kind: string; n: number } // 0.60: every unit of a kind down to n rounds, spares gone
+  | { op: "supply"; cls: "small" | "vehicle"; n: number } // 0.60: buy crates for the first zone
+  | { op: "engineer"; scale: number } // 0.60: camera on the busiest engineer
+  | { op: "store"; scale: number }; // 0.60: camera on the first zone's store point
 
 export interface ShotApi { apply(op: ShotOp): void; step(seconds: number): void }
 
@@ -55,6 +59,9 @@ export function parseOp(line: string): ShotOp {
     case "endround": return a.length === 0 ? { op } : bad(line);
     case "stats": return a.length === 1 && ["career", "units", "strikes", "cities", "records", "history", "achievements"].includes(a[0]) ? { op, tab: a[0] } : bad(line);
     case "retry": return a.length === 0 ? { op } : bad(line);
+    case "ammo": return a.length === 2 && /^[a-z0-9_]+$/.test(a[0]) ? { op, kind: a[0], n: num(a[1], line) } : bad(line);
+    case "supply": return a.length === 2 && (a[0] === "small" || a[0] === "vehicle") ? { op, cls: a[0], n: num(a[1], line) } : bad(line);
+    case "engineer": case "store": return a.length === 1 ? { op, scale: num(a[0], line) } : bad(line);
     case "report": return a.length === 1 && ["overview", "timeline", "units", "strikes", "town", "money", "heatmap"].includes(a[0]) ? { op, tab: a[0] } : bad(line);
     default: return bad(line);
   }

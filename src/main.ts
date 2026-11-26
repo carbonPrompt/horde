@@ -17,6 +17,9 @@ import * as Save from "./save";
 import * as Snap from "./snapshot";
 import * as P from "./progress";
 import * as A from "./achievements";
+import * as Sup from "./supply";
+import { inventoryHtml, type InvZone } from "./inventory";
+import { inEngineerReach } from "./engineers";
 import * as Mods from "./mods";
 // Mods first: they change numbers that everything below reads. Desktop: <userData>\mods\*.json; browser: stored copies.
 const BROWSER_MODS = "horde.mods";
@@ -256,6 +259,7 @@ function exportPlan(): Plan {
     }),
     supports: sim.supports.map(b => [b.kind, b.x, b.y]),
     abilities: { ...sim.bought }, c4: [...sim.c4], demo: [...sim.demo], start: startMin,
+    ...sim.exportSupplyPlan(planned), // 0.60
   };
 }
 function planSummary() {
@@ -290,6 +294,7 @@ function importPlanInner(p: Plan) {
     if (ord && sim.canOrder(u)) { u.orders = ord.map(o => ({ ...o })); u.cmd = true; u.standby = !!sb; if (sb) u.holdAt = [u.x, u.y]; } // 0.45
   }
   sim.groups = pruneGroups(groupsFromPlan(p.groups, placed, sim.zones.length), u => u !== GONE); // 0.50
+  sim.importSupplyPlan(p.supply, p.reserves, placed); // 0.60
   for (const k of ABILITY_KINDS) for (let n = p.abilities?.[k] ?? 0; n > 0; n--) sim.buyAbility(k);
   for (const b of p.c4 ?? []) if (sim.bridges[b] && sim.remaining() >= C.C4_COST) sim.c4.add(b);
   for (const i of p.demo ?? []) sim.toggleDemo(i % sim.w, (i / sim.w) | 0); // 0.38
@@ -929,7 +934,7 @@ function setTool(t: Tool) {
     apache: "Click anywhere inside your safe zone. An AH-64 flies over everything, hunting infected near its post with a 30 mm gun and rockets. Takes strike orders (Order tool) anywhere.",
     reaper: "Click anywhere inside your safe zone. An MQ-9 drone loiters over a wide area firing Hellfires at the densest packs. Takes strike orders (Order tool) anywhere.",
     howitzer: "Click a street or park inside your zone. Howitzers shell the thickest crowds far away, slowly. Can't hit anything close.",
-    apc: "Click a street, even outside the zone. The APC guards that spot; out of ammo it drives into the zone, reloads and comes back.",
+    apc: "Click a street, even outside the zone. The APC guards that spot; low on ammo it parks at the wall, clear of the gates, until an engineer brings a crate.",
     depot: "Click a fuel depot (orange) to set it off: a huge blast that kills everyone near it, civilians too.",
     gunboat: "Click the river. The gunboat patrols the water near where you put it and shoots crowds by the banks. Infected can't reach it.",
     zone: "Click corners of your safe zone. Click the first corner (or press Enter) to close it. Esc cancels.",
@@ -1261,6 +1266,7 @@ addEventListener("keydown", e => {
   if (act === "alert") { if (sim.phase === "battle") jumpToPing(); return; } // 0.48 (0.54: was F)
   if (act === "view.heights") showHeights = !showHeights;
   else if (act === "view.ranges") showRanges = !showRanges;
+  else if (act === "inventory") toggleInv(); // 0.60
   else if (act === "view.heatmap") { showHeatmap = !showHeatmap; if (endDismissed && !showHeatmap) endDismissed = false; refreshUi(); } // 0.57: heatmap off again brings the report back
   else if (k === "Enter" && tool === "zone" && draft.length) closeDraft();
   else if (act === "tool.zone") setTool("zone");
@@ -1360,6 +1366,8 @@ function hud(now: number) {
   else if (!sel.length && mode === "game" && now - actionsT > 500) { actionsT = now; renderSelection(); } // 0.52: the roster stays live // 0.49: squad strength and the soldier card stay live (0.51: the selection panel and command card too)
   if (mode !== "game" || now - lastHud < 200) return;
   lastHud = now;
+  checkLiveAchievements(); // 0.59 (review: was in the Dev checkbox handler, so it never ran live)
+  if (invOpen && performance.now() - invT > 500) renderInv(); // 0.60
   runTicker(); // picks up alerts queued while the strip was hidden
   if (sim.phase === "battle") { // 0.41: tips the battle itself brings up
     if (sim.liftsAborted > 0) tip("waveOff");
@@ -1850,8 +1858,8 @@ function draw(now: number) {
   /** The hover line next to a unit: range, ammo, kills, aim, buffs, state. */
   function unitHoverLabel(u: import("./sim").Unit, spec: C.UnitSpec, px: number, py: number, r: number) {
     {
-      const ammo = u.ammo === Infinity ? "∞ (in zone)" : `${Math.floor(u.ammo)}${u.supplied ? " (supplied)" : ""}`;
-      const AI: Record<string, string> = { hunt: "hunting", hold: "holding", flee: "backing off", home: "going to reload", reload: "reloading", leave: "heading home" };
+      const ammo = u.ammo === Infinity ? "unlimited" : u.ammo < 1 && !(u.reserve && u.reserve > 0) ? "NO AMMO" : `${Math.floor(u.ammo)}${u.reserve !== undefined ? ` (+${Math.floor(u.reserve)} reserve)` : ""}`;
+      const AI: Record<string, string> = { hunt: "hunting", hold: "holding", flee: "backing off", home: "going to reload", reload: "reloading", leave: "heading home", supply: u.waitingSupply ? "waiting for supply at the wall" : "going to the wall for supply" };
       const apc = u.ai && sim.phase === "battle" ? ` · ${AI[u.ai]}${u.hp !== undefined && u.hp !== Infinity ? ` · ${Math.max(0, Math.round(100 * u.hp / spec.mobile!.hp))}% armor` : ""}` : "";
       const dep = u.extractT !== undefined ? ` · pulling out ${Math.max(0, u.extractT).toFixed(0)} s` : u.deployT && u.deployT > 0 ? ` · deploying ${u.deployT.toFixed(0)} s` : "";
       const buffs: string[] = [];
@@ -1939,6 +1947,7 @@ function draw(now: number) {
     for (const [x, y] of draft) { ctx.beginPath(); ctx.arc(cam.x + x * s, cam.y + y * s, 4, 0, 7); ctx.fill(); }
   }
   drawSoldierDots(s); // 0.49
+  drawEngineers(s); // 0.60
   drawSelection(s);
   drawCursorInfo(s);
 }
@@ -2267,6 +2276,60 @@ function drawSoldierDots(s: number) {
   }
   ctx.globalAlpha = 1;
 }
+/** 0.60: engineers: orange dots; one carrying a crate has a small square beside it. */
+function drawEngineers(s: number) {
+  const dpr = devicePixelRatio, r = Math.max(1.8 * dpr, Math.min(7, s * 0.26));
+  for (const zs of sim.supply) for (const e of zs.crew) {
+    if (!e.alive) continue;
+    const x = cam.x + e.x * s, y = cam.y + e.y * s;
+    if (x < -20 || y < -20 || x > ctx.canvas.width + 20 || y > ctx.canvas.height + 20) continue;
+    ctx.fillStyle = "#ff9800"; ctx.beginPath(); ctx.arc(x, y, r, 0, 7); ctx.fill();
+    if (e.climbT > 0) { ctx.strokeStyle = "#ffe0b2"; ctx.lineWidth = Math.max(1, dpr); ctx.beginPath(); ctx.arc(x, y, r + 2 * dpr, 0, 7); ctx.stroke(); }
+    if (e.carry) { const q = r * 1.3; ctx.fillStyle = "#8d6e63"; ctx.fillRect(x + r * 0.6, y - q, q, q); }
+  }
+}
+// ---------- 0.60: the Inventory window ----------
+let invOpen = false, invZone = 0, invT = 0;
+function invZonesNow(): InvZone[] {
+  const st = Sup.startingStock(sim.difficulty, sim.mutators.has("supply_shortage"));
+  return sim.supply.map((zs, z) => {
+    const label = (u: import("./sim").Unit) => (u.sid !== undefined ? sim.stats.units[u.sid]?.label : undefined) ?? C.UNITS[u.kind].name;
+    const mine = sim.units.filter(u => sim.zoneOfUnit(u) === z);
+    return {
+      name: sim.supply.length > 1 ? `Zone ${z + 1}` : "Safe zone", small: zs.small, vehicle: zs.vehicle, capSmall: Math.max(st.small, zs.small), capVehicle: Math.max(st.vehicle, zs.vehicle),
+      rateSmall: Sup.useRate(zs.log, sim.time), rateVehicle: Sup.useRate(zs.logV, sim.time), auto: zs.auto, prio: zs.prio,
+      engineers: zs.crew.filter(e => e.alive).length, depot: zs.depotGiven ? C.ENGINEERS_DEPOT : 0, engineerPrice: Sup.engineerPrice(zs.engineersBought, sim.difficulty),
+      inbound: zs.orders.map(o => ({ what: o.unit !== undefined ? `${o.crates} magazine${o.crates > 1 ? "s" : ""} for ${(() => { const u = sim.units.find(v => v.sid === o.unit); return u ? label(u) : "a battery"; })()}` : `${(o.crates * Sup.crateRounds(o.cls)).toLocaleString("en-US")} ${o.cls === "small" ? "small arms" : "vehicle rounds"}`, eta: o.at - sim.time })),
+      waiting: mine.filter(u => u.waitingSupply || u.ai === "supply" || (u.dry && Sup.ammoClass(u.kind))).map(u => `${label(u)}${u.waitingSupply ? " (at the wall)" : u.ai === "supply" ? " (on the way)" : " (no ammo)"}`),
+      waitingMoney: !!zs.waitingMoney,
+      batteries: mine.filter(u => { const c = Sup.ammoClass(u.kind); return c === "shells" || c === "rockets"; }).map(u => ({ label: label(u), reserve: Math.floor(u.reserve ?? 0), mag: C.UNITS[u.kind].ammo, unit: sim.sidOf(u) })), // review I3: a stable id, not an array index
+    };
+  });
+}
+function renderInv() {
+  invT = performance.now();
+  if (!invOpen) return;
+  if (invZone >= sim.supply.length) invZone = 0;
+  $("inv-body").innerHTML = inventoryHtml(invZonesNow(), invZone, sim.remaining(), sim.phase === "plan" ? "plan" : "battle");
+}
+function toggleInv(on = !invOpen) { invOpen = on; $("inv").hidden = !on; renderInv(); }
+$("invbtn").addEventListener("click", () => toggleInv());
+$("inv").addEventListener("click", ev => {
+  const el = ev.target as HTMLElement;
+  if (el.closest("#inv-close")) { toggleInv(false); return; }
+  const zt = el.closest<HTMLElement>("[data-invzone]"); if (zt) { invZone = Number(zt.dataset.invzone); renderInv(); return; }
+  const b = el.closest<HTMLButtonElement>("[data-inv]"); if (!b || b.disabled) return;
+  let err: string | null = null;
+  switch (b.dataset.inv) {
+    case "small": case "vehicle": err = sim.buySupply(invZone, b.dataset.inv, Number(b.dataset.n) || 10); break;
+    case "engineer": err = sim.buyEngineer(invZone); break;
+    case "auto": sim.setAuto(invZone, !sim.supply[invZone]?.auto); break;
+    case "prio": sim.setPrio(invZone, b.dataset.v === "repair" ? "repair" : "ammo"); break;
+    case "reserve": { const u = sim.unitBySid(Number(b.dataset.unit)); err = u ? sim.buyReserve(u, 1) : "That battery is gone."; break; }
+  }
+  if (err) say(err); else log("info", "supply", { what: b.dataset.inv, zone: invZone });
+  renderInv(); refreshUi();
+});
 function drawSelection(s: number) {
   if (box) { ctx.strokeStyle = "#80cbc4"; ctx.lineWidth = 1.5; ctx.setLineDash([5, 4]); ctx.strokeRect(Math.min(box[0], box[2]), Math.min(box[1], box[3]), Math.abs(box[2] - box[0]), Math.abs(box[3] - box[1])); ctx.setLineDash([]); }
   if (!selAlive()) return;
@@ -2310,6 +2373,8 @@ function drawCursorInfo(s: number) {
   if (armedCmd) rows.unshift([armedCmd === "amove" ? "Attack-move: click a spot" : armedCmd === "patrol" ? "Patrol: click a spot" : armedCmd === "fortify" ? "Fortify: click a roof" : "Escort: click a person", ORDER_COLOR[armedCmd]]); // 0.45 (0.51: fortify)
   if (est?.blocked) rows.push([est.blocked, "#fbbf24"]);
   else if (est && est.price !== null) rows.push([`Cost ${C.money(est.price)} · ${C.money(est.left!)} left`, est.left! < 0 ? "#f87171" : "#86efac"]);
+  if (!est?.blocked && tool in C.UNITS && Sup.ammoClass(tool as C.UnitKind) && (!C.UNITS[tool as C.UnitKind].mobile || C.UNITS[tool as C.UnitKind].on === "building")
+    && !inEngineerReach(sim, Math.floor(hover[0]), Math.floor(hover[1]))) rows.push(["Outside engineer reach: Supply Drop only", "#ffd740"]); // 0.60
   const dpr = devicePixelRatio, fs = 12 * dpr, lh = 16 * dpr, pad = 6 * dpr;
   ctx.font = `${fs}px system-ui, sans-serif`;
   const w = Math.max(...rows.map(([t]) => ctx.measureText(t).width)) + pad * 2, h = rows.length * lh + pad;
@@ -2603,7 +2668,7 @@ function toolInfoHtml(t: string): { html: string; accent: string } | null {
     const classKills = sim.units.filter(u => u.kind === k).reduce((a, u) => a + u.kills, 0);
     const placeStr = spec.on === "building" ? "Building Rooftop" : spec.on === "water" ? "River / Canal" : spec.roof ? "Street / Park / Rooftop" : "Street / Park";
     const rangeStr = `${spec.minRange ? `${spec.minRange * C.CELL_M}-` : ""}${spec.range * C.CELL_M} m${spec.roofBonus ? ` (+${spec.roofBonus * C.CELL_M}m/flr)` : ""}`;
-    const ammoStr = spec.ammo === Infinity ? "Unlimited" : `${spec.ammo.toLocaleString()} rds${spec.reloadsInZone ? " (∞ in Zone)" : ""}`;
+    const ammoStr = spec.ammo === Infinity ? "Unlimited" : `${spec.ammo.toLocaleString()} rds a magazine (engineers refill it)`; // 0.60
     const spUrl = SPRITE_URL[k];
     return out(
       `<div class="ip-top">${spUrl ? `<img class="ip-portrait" src="${spUrl}" alt="" />` : ""}<div class="ip-meta"><div class="ip-head"><span class="ip-title">${spec.name}${cxLink("unit-" + k)}</span><span class="ip-cost">${C.money(cost)}</span></div>` +
@@ -2736,10 +2801,10 @@ function updateInfoPanel(probe?: [number, number], prefer?: import("./sim").Unit
     const status = u.extractT !== undefined ? `EXTRACTING (${Math.max(0, u.extractT).toFixed(1)}s)`
       : u.deployT && u.deployT > 0 ? `DEPLOYING (${u.deployT.toFixed(1)}s)`
       : u.fort === "climb" ? `FORTIFYING (${Math.max(0, u.fortT ?? 0).toFixed(1)}s)` : u.fort === "descend" ? `COMING DOWN (${Math.max(0, u.fortT ?? 0).toFixed(1)}s)` : u.fort === "up" ? "FORTIFIED" // 0.50
-      : u.ai ? u.ai.toUpperCase() : u.ammo < 1 ? "OUT OF AMMO" : "ACTIVE";
-    const ammoCap = sim.mutators.has("supply_shortage") && spec.reloadsInZone && sim.unitInZone(u) ? spec.ammo * 2 : spec.ammo;
+      : u.waitingSupply ? "WAITING FOR SUPPLY" : u.ai === "supply" ? "GOING FOR SUPPLY" : u.ammo < 1 && !(u.reserve && u.reserve > 0) ? "NO AMMO" : u.ai ? u.ai.toUpperCase() : "ACTIVE"; // 0.60
+    const ammoCap = spec.ammo;
     const ammoPct = u.ammo === Infinity ? 100 : Math.min(100, Math.round((u.ammo / ammoCap) * 100));
-    const ammoText = u.ammo === Infinity ? "Unlimited (In Safe Zone)" : `${Math.floor(u.ammo).toLocaleString()} / ${ammoCap.toLocaleString()} (${ammoPct}%)`;
+    const ammoText = u.ammo === Infinity ? "Unlimited" : `${Math.floor(u.ammo).toLocaleString()} / ${ammoCap.toLocaleString()} (${ammoPct}%)${u.reserve !== undefined ? ` · reserve ${Math.floor(u.reserve).toLocaleString()}` : ""}`;
     const hpMax = C.maxHp(spec), hpPct = u.hp !== undefined && hpMax !== undefined ? Math.max(0, Math.round((u.hp / hpMax) * 100)) : null;
     const buffs: string[] = [];
     if (u.rangeBoosted) buffs.push("+40% Range (Radio Tower)");
@@ -3562,7 +3627,6 @@ $("opt-crowd").addEventListener("change", e => {
 });
 $("opt-dev").addEventListener("change", e => { save.settings.devMode = (e.target as HTMLInputElement).checked; Save.store(save);
   if (save.settings.devMode && mode === "game" && sim.phase !== "plan" && sim.stats.flags) sim.stats.flags.dev = true; // 0.57: sticks for this battle
-  checkLiveAchievements(); // 0.59
   log("info", "setting", { devMode: save.settings.devMode }); syncDev(); });
 $("devbtn").addEventListener("click", toggleDevPanel);
 document.querySelectorAll<HTMLButtonElement>("[data-dspeed]").forEach(b => b.addEventListener("click", () => { setSpeed(Number(b.dataset.dspeed), true); devLog("speed", { speed }); }));
@@ -3825,6 +3889,10 @@ if (SHOTS) {
       case "cursor": cur.hidden = true; hover = null; mouse = null; break;
       case "person": { const k = sim.civAt(op.x, op.y, 14); if (k < 0) throw new Error(`no person near ${op.x},${op.y}`); setTool("pan"); selectPerson(k); pointAt(sim.ax[k] - 0.5, sim.ay[k] - 0.5); break; }
       case "camera": cam.scale = op.scale; centerOn(op.x, op.y); following = false; break;
+      case "ammo": for (const u of sim.units) if (u.kind === op.kind) { u.ammo = op.n; u.reserve = 0; } break; // 0.60: magazine down to n, no spares
+      case "supply": { const e = sim.buySupply(0, op.cls, op.n); if (e) throw new Error(`supply: ${e}`); break; }
+      case "engineer": { const all = sim.supply.flatMap(z => z.crew.filter(e => e.alive)); const e = all.find(x => x.carry) ?? all.find(x => x.job) ?? all[0]; if (!e) throw new Error("no engineer"); cam.scale = op.scale; centerOn(e.x, e.y); following = false; break; }
+      case "store": { const st = sim.supply[0]?.store; if (!st) throw new Error("no zone"); cam.scale = op.scale; centerOn(st[0] + 0.5, st[1] + 0.5); following = false; break; }
       case "endround": { const e = sim.endRoundNow(); if (e) throw new Error(`endround: ${e}`); if (sim.roundResult && !roundShown) { roundShown = true; speed = 0; showEnd(sim.roundResult, true); } break; } // 0.57: as hud() would
       case "report": erTab = op.tab as Tab; renderReport(); break;
       case "stats": startAttract(); stTab = op.tab as StatsTab; go("record"); break; // 0.58: as a player gets there (Menu, then Statistics)

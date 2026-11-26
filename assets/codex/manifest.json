@@ -31,6 +31,14 @@
   "w": 960,
   "h": 276
  },
+ "chinook-drop": {
+  "version": "0.60.0",
+  "rev": 1,
+  "recipeHash": "82682ebf5cef",
+  "bytes": 29342,
+  "w": 960,
+  "h": 276
+ },
  "clip-ac130-arrives": {
   "version": "0.54.0",
   "rev": 1,
@@ -48,10 +56,10 @@
   "h": 230
  },
  "clip-attack-move": {
-  "version": "0.56.0",
+  "version": "0.60.0",
   "rev": 1,
   "recipeHash": "451d0a7cbfcc",
-  "bytes": 154544,
+  "bytes": 154397,
   "w": 800,
   "h": 230
  },
@@ -80,10 +88,10 @@
   "h": 230
  },
  "clip-evac-lift": {
-  "version": "0.56.0",
+  "version": "0.60.0",
   "rev": 1,
   "recipeHash": "8b334fc4c189",
-  "bytes": 282876,
+  "bytes": 281543,
   "w": 800,
   "h": 230
  },
@@ -135,6 +143,14 @@
   "w": 1520,
   "h": 800
  },
+ "engineer-carry": {
+  "version": "0.60.0",
+  "rev": 1,
+  "recipeHash": "7bb3709fd785",
+  "bytes": 16772,
+  "w": 960,
+  "h": 276
+ },
  "howto-1-battle": {
   "version": "0.56.0",
   "rev": 1,
@@ -168,18 +184,18 @@
   "h": 276
  },
  "howto-11-menu": {
-  "version": "0.56.0",
+  "version": "0.60.0",
   "rev": 1,
   "recipeHash": "455902688c7d",
-  "bytes": 13631,
+  "bytes": 13712,
   "w": 480,
   "h": 168
  },
  "howto-11-nofire": {
-  "version": "0.56.0",
+  "version": "0.60.0",
   "rev": 1,
   "recipeHash": "7ce790c21d36",
-  "bytes": 30750,
+  "bytes": 30759,
   "w": 960,
   "h": 276
  },
@@ -272,10 +288,10 @@
   "h": 276
  },
  "howto-8-padcost": {
-  "version": "0.56.0",
+  "version": "0.60.0",
   "rev": 1,
   "recipeHash": "be979f30ae44",
-  "bytes": 31801,
+  "bytes": 31803,
   "w": 960,
   "h": 276
  },
@@ -286,6 +302,14 @@
   "bytes": 173003,
   "w": 800,
   "h": 230
+ },
+ "inventory-window": {
+  "version": "0.60.0",
+  "rev": 1,
+  "recipeHash": "7d4b30d4b512",
+  "bytes": 31098,
+  "w": 840,
+  "h": 300
  },
  "people-person-window": {
   "version": "0.56.0",
@@ -320,10 +344,10 @@
   "h": 868
  },
  "support-radius": {
-  "version": "0.56.0",
+  "version": "0.60.0",
   "rev": 1,
   "recipeHash": "efa68adfca71",
-  "bytes": 33340,
+  "bytes": 33385,
   "w": 960,
   "h": 276
  },

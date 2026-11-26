@@ -540,11 +540,11 @@ test("every shipped real area is pinned and passes checkArea", async () => {
   expect(keys.sort()).toEqual(Object.keys(LAYOUT_REAL).sort());
 }, 300000);
 
-test("baked data stays small: the single-file game under 15 MB", () => {
+test("baked data stays small: the single-file game under 18 MB (0.60: street names for all 13 cities took it past 15)", () => {
   let total = 0; for (const d of Object.values(REAL_DATA)) { total += d.overview.length; for (const a of Object.values(d.areas)) total += a.map.length + JSON.stringify(a.stands).length; }
   expect(total).toBeLessThan(9 * 1024 * 1024);
   const html = new URL("../dist/horde.html", import.meta.url).pathname;
-  if (existsSync(html)) expect(statSync(html).size).toBeLessThan(15 * 1024 * 1024);
+  if (existsSync(html)) expect(statSync(html).size).toBeLessThan(18 * 1024 * 1024);
 });
 
 import { REAL_SAVED } from "../src/realcity/pace";
@@ -589,6 +589,6 @@ test("a 0.35 battle snapshot of a real city is refused as another version (revie
   const s = new Sim(1, { realCityId: "denver" } as any);
   const gz = await Snap.pack("0.35.1", "Denver, CO", s, { cityId: "castle-rock" });
   const meta = await Snap.peek(gz);
-  expect(C.VERSION).toBe("0.59.0");
+  expect(C.VERSION).toBe("0.60.0");
   expect(meta!.version === C.VERSION).toBe(false); // main.ts loadBattle refuses it
 }, 60000);

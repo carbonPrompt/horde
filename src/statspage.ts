@@ -14,7 +14,7 @@ export interface StatsFilter { diff: "all" | "easy" | "medium" | "hard" | "insan
 export type HistorySort = "date" | "score" | "saved" | "kills";
 export interface Agg {
   battles: number; completed: number; abandoned: number;
-  saved: number; kills: number; damage: number; spent: number; held: number; hordes: number; breaches: number; lifts: number; liftsAborted: number; strikes: number; nukes: number; bridges: number;
+  saved: number; kills: number; damage: number; spent: number; held: number; hordes: number; breaches: number; lifts: number; liftsAborted: number; strikes: number; nukes: number; bridges: number; supplySpent: number;
   people: number; medals: Record<string, number>;
   units: { kind: string; uses: number; kills: number; lost: number; cost: number; perM: number }[];
   strikesBy: { kind: string; uses: number; kills: number; civ: number; cost: number; perM: number }[];
@@ -53,10 +53,11 @@ export function cityOptions(h: History): { id: string; name: string }[] {
 export function aggregate(h: History, f: StatsFilter): Agg {
   const all = filterBattles(h, f), counted = all.filter(countsInCareer);
   const a: Agg = { battles: counted.length, completed: 0, abandoned: 0, saved: 0, kills: 0, damage: 0, spent: 0, held: 0, hordes: 0, breaches: 0, lifts: 0, liftsAborted: 0,
-    strikes: 0, nukes: 0, bridges: 0, people: 0, medals: {}, units: [], strikesBy: [], cities: [], records: recomputeRecords({ v: 1, battles: counted }), trend: [], recent: all.slice(-8).reverse() };
+    strikes: 0, nukes: 0, bridges: 0, supplySpent: 0, people: 0, medals: {}, units: [], strikesBy: [], cities: [], records: recomputeRecords({ v: 1, battles: counted }), trend: [], recent: all.slice(-8).reverse() };
   const units = new Map<string, { uses: number; kills: number; lost: number }>(), strikes = new Map<string, { uses: number; kills: number; civ: number }>();
   for (const b of counted) {
     const t = b.totals;
+    a.supplySpent += t.supplySpent ?? 0; // 0.60
     if (b.outcome.roundComplete) a.completed++; if (b.outcome.abandoned) a.abandoned++;
     a.saved += t.saved; a.kills += t.kills; a.damage += t.damage; a.spent += t.spent; a.held += t.held; a.hordes += t.hordes; a.breaches += t.breaches;
     a.lifts += t.lifts; a.liftsAborted += t.liftsAborted; a.strikes += t.strikes; a.nukes += t.nukes; a.bridges += t.bridges; a.people += t.people;
@@ -147,7 +148,7 @@ function career(a: Agg, ctx: StatsCtx, filtered: boolean): string {
     kpi("Medals", med, "#eef2f6", C.MEDALS.map(m => m[0].toLowerCase()).join(" · "));
   const ub = a.units.slice(0, 8), um = Math.max(1, ...ub.map(u => u.kills));
   const sb = a.strikesBy.slice(0, 8), sm = Math.max(1, ...sb.map(s => s.uses));
-  return `<div class="er-kpis st-kpis">${kpis}</div><div class="er-meta er-dim">${n0(a.battles)} battles · ${n0(a.completed)} completed · ${n0(a.abandoned)} left early</div>` +
+  return `<div class="er-kpis st-kpis">${kpis}</div><div class="er-meta er-dim">${n0(a.battles)} battles · ${n0(a.completed)} completed · ${n0(a.abandoned)} left early · ${money(a.supplySpent)} on supply</div>` +
     `<div class="st-grid"><div class="er-panel"><h3>Every battle <span>score per battle, last ${n0(a.trend.length)} · medal color · line = 10-battle average</span></h3>${trendSvg(a) || `<div class="er-dim">No battles counted yet.</div>`}` +
     `<h3 class="er-mt">Saved vs killed per battle</h3>${dualSvg(a)}</div>` +
     `<div class="er-panel"><h3>Career kills by unit <span>${n0(a.units.reduce((s, u) => s + u.kills, 0))}</span></h3>${ub.map((u, i) => bar(unitName(u.kind), u.kills, um, PALETTE[i % PALETTE.length])).join("") || `<div class="er-dim">None yet.</div>`}` +

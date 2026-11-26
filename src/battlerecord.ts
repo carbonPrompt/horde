@@ -16,6 +16,7 @@ export interface BattleTotals {
   saved: number; byTrain: number; people: number; kills: number; killsAfter: number; damage: number; spent: number; budget: number; perM: number | null;
   held: number; hordes: number; breaches: number; lifts: number; liftsAborted: number; unitsPlaced: number; unitsLost: number; strikes: number; nukes: number; bridges: number;
   civKilledByUs: number; crushed: number; refused: number; talkedOut: number; intact: number; maxZone: number; best60: number; longShot: number; xp: number;
+  supplySpent: number; // 0.60
 }
 export interface BattleRecord {
   meta: BattleMeta; outcome: BattleOutcome; totals: BattleTotals; units: UnitRec[]; strikes: StrikeRec[]; other: Record<OtherKill, number>;
@@ -29,6 +30,7 @@ export interface Career {
   lifts: number; liftsAborted: number; unitsLost: number; strikes: number; nukes: number; bridges: number; civKilledByUs: number;
   killsByKind: Record<string, number>; strikesByKind: Record<string, number>; medals: Record<string, number>;
   householdsWhole: number; householdsLost: number; talkedOut: number; fetched: number; wentBack: number; records: Records;
+  supplySpent: number; // 0.60
 }
 export interface History { v: 1; battles: BattleRecord[] } // newest last
 export const TIMELINES_KEPT = 200;
@@ -42,7 +44,7 @@ export function makeRecord(meta: BattleMeta, outcome: BattleOutcome, score: Scor
     held: extras.held ?? Math.max(0, last("t") - C.WARNING_S), hordes: score.waves, breaches: last("breaches"), lifts: last("lifts"), liftsAborted: last("liftsAborted"),
     unitsPlaced: rec.units.length, unitsLost: rec.units.filter(u => u.lostT >= 0).length, strikes: rec.strikes.length, nukes: extras.nukes, bridges: extras.bridges,
     civKilledByUs: score.civKilledByUs ?? last("civKilledByUs"), crushed: extras.crushed, refused: score.refused ?? 0, talkedOut: score.talkedOut ?? rec.c.talkedOut,
-    intact: score.intact, maxZone: rec.c.maxZone, best60: rec.c.best60, longShot: Math.round(rec.c.longShot), xp: score.xp,
+    intact: score.intact, maxZone: rec.c.maxZone, best60: rec.c.best60, longShot: Math.round(rec.c.longShot), xp: score.xp, supplySpent: rec.c.supplySpent ?? 0,
   };
   const copy = <T>(v: T): T => JSON.parse(JSON.stringify(v));
   return { meta: copy(meta), outcome: copy(outcome), totals, units: copy(rec.units), strikes: copy(rec.strikes), other: copy(rec.other),
@@ -62,12 +64,12 @@ function compactEvents(e: Recorder["ev"]): Recorder["ev"] {
 export function emptyCareer(): Career {
   return { battles: 0, completed: 0, abandoned: 0, saved: 0, byTrain: 0, kills: 0, damage: 0, spent: 0, held: 0, hordes: 0, breaches: 0, lifts: 0, liftsAborted: 0,
     unitsLost: 0, strikes: 0, nukes: 0, bridges: 0, civKilledByUs: 0, killsByKind: {}, strikesByKind: {}, medals: {},
-    householdsWhole: 0, householdsLost: 0, talkedOut: 0, fetched: 0, wentBack: 0, records: { city: {} } };
+    householdsWhole: 0, householdsLost: 0, talkedOut: 0, fetched: 0, wentBack: 0, records: { city: {} }, supplySpent: 0 };
 }
 
 export function countsInCareer(r: BattleRecord): boolean { return !r.meta.flags.dev && !r.meta.flags.modded; }
 
-const SUMS = ["saved", "byTrain", "kills", "damage", "spent", "held", "hordes", "breaches", "lifts", "liftsAborted", "unitsLost", "strikes", "nukes", "bridges", "civKilledByUs"] as const;
+const SUMS = ["saved", "byTrain", "kills", "damage", "spent", "held", "hordes", "breaches", "lifts", "liftsAborted", "unitsLost", "strikes", "nukes", "bridges", "civKilledByUs", "supplySpent"] as const;
 /** Add (sign 1) or take back (sign -1) one battle's numbers. Records are not touched here (see recomputeRecords). */
 export function addToCareer(c: Career, r: BattleRecord, sign: 1 | -1): void {
   const bump = (o: Record<string, number>, k: string, v: number) => { const x = (o[k] ?? 0) + sign * v; if (x) o[k] = x; else delete o[k]; };
@@ -178,10 +180,10 @@ function cleanRecord(b: unknown): BattleRecord | null {
     ...(Number.isFinite(o.left) ? { left: pos(o.left) } : {}) };
   const totals = {} as BattleTotals;
   for (const k of ["saved", "byTrain", "people", "kills", "killsAfter", "damage", "spent", "budget", "held", "hordes", "breaches", "lifts", "liftsAborted", "unitsPlaced", "unitsLost",
-    "strikes", "nukes", "bridges", "civKilledByUs", "crushed", "refused", "talkedOut", "intact", "maxZone", "best60", "longShot", "xp"] as const) totals[k] = pos(t[k]);
+    "strikes", "nukes", "bridges", "civKilledByUs", "crushed", "refused", "talkedOut", "intact", "maxZone", "best60", "longShot", "xp", "supplySpent"] as const) totals[k] = pos(t[k]);
   totals.perM = typeof t.perM === "number" && Number.isFinite(t.perM) ? pos(t.perM) : null;
   const units: UnitRec[] = (Array.isArray(b.units) ? b.units : []).slice(0, 400).filter(isObj)
-    .map((u: any) => ({ kind: str(u.kind, 24), label: str(u.label, 60), placedT: pos(u.placedT), kills: pos(u.kills), lostT: typeof u.lostT === "number" && u.lostT >= 0 ? u.lostT : -1 }));
+    .map((u: any) => ({ kind: str(u.kind, 24), label: str(u.label, 60), placedT: pos(u.placedT), kills: pos(u.kills), lostT: typeof u.lostT === "number" && u.lostT >= 0 ? u.lostT : -1, ...(Number.isFinite(u.dryS) && u.dryS > 0 ? { dryS: pos(u.dryS) } : {}) }));
   const strikes: StrikeRec[] = (Array.isArray(b.strikes) ? b.strikes : []).slice(0, 400).filter(isObj)
     .map((s: any) => ({ kind: str(s.kind, 24), t: pos(s.t), x: num(s.x, 1e5), y: num(s.y, 1e5), kills: pos(s.kills), civ: pos(s.civ), ...(Number.isFinite(s.dropKills) ? { dropKills: pos(s.dropKills) } : {}) }));
   const other = Object.fromEntries(OTHER_KILLS.map(k => [k, pos(isObj(b.other) ? b.other[k] : 0)])) as Record<OtherKill, number>;

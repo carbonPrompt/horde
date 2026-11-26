@@ -47,7 +47,7 @@ test("a full battle runs to an end with sane numbers", () => {
   let placed = false;
   for (let i = 0; i < s.inZone.length && !placed; i++) if (s.inZone[i] === 1 && s.map.tile[i] === BUILDING) placed = s.place("sniper", i % s.w, (i / s.w) | 0) === null;
   expect(placed).toBe(true);
-  expect(s.units[0].ammo).toBe(Infinity);
+  expect(s.units[0].ammo).toBe(C.UNITS.sniper.ammo); // 0.60: a full magazine; zone ammo is a stock now
   s.startBattle();
   expect(s.sites.length).toBe(4);
   const t0 = performance.now();
@@ -136,7 +136,7 @@ test("a charged bridge can be blown and becomes river", () => {
   expect(s.blowBridge(x, y)).not.toBeNull(); // only once
 }, 60000);
 
-test("APC thinks: hunts, goes home to reload when low, comes back out", () => {
+test("APC thinks: hunts, goes to wait for supply when low (0.60: engineers), comes back out", () => {
   const s = new Sim(42, { budget: 60_000_000 });
   s.setZone(zoneAroundCenter(s));
   let post: number[] | null = null;
@@ -149,12 +149,12 @@ test("APC thinks: hunts, goes home to reload when low, comes back out", () => {
   const u = s.units[0];
   s.startBattle();
   for (let i = 0; i < 20 * 5; i++) s.step();
-  u.ammo = 5; u.thinkT = 0; // nearly dry
+  u.ammo = 5; u.reserve = 0; u.thinkT = 0; // nearly dry, no spares (0.60)
   const seen = new Set<string>();
-  for (let i = 0; i < 20 * 60 && !(seen.has("reload") && u.ai === "hunt"); i++) { s.step(); seen.add(u.ai!); }
-  expect([...seen]).toEqual(expect.arrayContaining(["home", "reload", "hunt"]));
+  for (let i = 0; i < 20 * 300 && !(seen.has("supply") && u.ai === "hunt"); i++) { s.step(); seen.add(u.ai!); }
+  expect([...seen]).toEqual(expect.arrayContaining(["supply", "hunt"]));
   expect(u.ammo).toBe(C.UNITS.apc.ammo);
-}, 60000);
+}, 180000);
 
 test("gunboat patrols the river; battleship shells from it", () => withWarning45(() => {
   const s = new Sim(1234, { budget: 80_000_000 });
@@ -307,11 +307,12 @@ test("support buildings: budget discount, radio range, command rate, supply ammo
 
   s.startBattle();
   s.wallHp[gateIdx] = 1000; // damaged gate (max 3000)
-  turret.ammo = 500; // depleted from 1800
+  turret.ammo = 500; turret.reserve = 0; // depleted from 1800, no spares (0.60)
 
   for (let i = 0; i < 20 * 10; i++) s.step();
-  expect(s.wallHp[gateIdx]).toBeGreaterThan(1000); // repaired by Repair yard
-  expect(turret.ammo).toBeGreaterThan(500); // resupplied by Supply depot
+  expect(s.wallHp[gateIdx]).toBeGreaterThan(1000); // repaired by Repair yard (and engineers)
+  for (let i = 0; i < 20 * 120 && turret.ammo <= 500; i++) s.step();
+  expect(turret.ammo).toBeGreaterThan(500); // 0.60: an engineer brings a crate from the Depot (the zone's store)
   expect(s.units.some(u => u.kind === "police")).toBe(true); // Precinct spawned Police Squad
   expect(s.units.some(u => u.kind === "militia")).toBe(true); // Armory spawned Militia
   // 0.52: they are people: a squad of soldier dots each (police 3, militia 4)
@@ -412,7 +413,8 @@ test("mutators and daily challenge modify rules deterministically and kill heatm
   for (let i = 0; i < s.inZone.length; i++) if (s.inZone[i] === 1 && s.map.tile[i] === BUILDING) { bld = i; break; }
   expect(s.place("sniper", bld % s.w, (bld / s.w) | 0)).toBeNull();
   const sniper = s.units[0];
-  expect(sniper.ammo).toBe(160); // 2x magazine (not Infinity) under supply_shortage
+  expect(sniper.ammo).toBe(C.UNITS.sniper.ammo); // 0.60: a full magazine
+  expect(s.supply[0].small).toBe(Math.round(C.STOCK_START[s.difficulty][0] * 0.5) * C.CRATE_SMALL); // 0.60: Supply Shortage halves the zone's starting stock
   const lvl = s.map.height[bld];
   expect(sniper.range).toBeCloseTo((22 + 2.5 * lvl) * 1.3, 2); // +30% roof range under fragile_walls
 

@@ -129,3 +129,11 @@ test("0.58: stats and retry ops parse; a bad stats tab is refused", () => {
   expect(parseOp("retry")).toEqual({ op: "retry" });
   expect(() => parseOp("stats nowhere")).toThrow(/bad shot op/);
 });
+
+test("0.60: supply shot ops", () => {
+  expect(parseOp("ammo turret 40")).toEqual({ op: "ammo", kind: "turret", n: 40 });
+  expect(parseOp("supply small 3")).toEqual({ op: "supply", cls: "small", n: 3 });
+  expect(parseOp("engineer 5")).toEqual({ op: "engineer", scale: 5 });
+  expect(parseOp("store 4")).toEqual({ op: "store", scale: 4 });
+  expect(() => parseOp("supply shells 3")).toThrow();
+});

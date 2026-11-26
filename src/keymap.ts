@@ -35,7 +35,7 @@ export const ACTIONS: readonly Action[] = [
   A("camera.down", "Camera", "always", "s", "Move down"), A("camera.right", "Camera", "always", "d", "Move right"),
   A("pause", "Always", "always", " ", "Pause"), A("speed.half", "Always", "always", "f1", "Speed 1/2x"), A("speed.normal", "Always", "always", "f2", "Speed 1x"),
   A("speed.fast", "Always", "always", "f3", "Speed 2x"), A("alert", "Always", "always", "`", "Latest alert"), A("view.heights", "Always", "always", "j", "Building heights"),
-  A("view.ranges", "Always", "always", "n", "Unit ranges"), A("view.heatmap", "Always", "always", "h", "Kill heatmap"), A("quicksave", "Always", "always", "f5", "Quick save"),
+  A("view.ranges", "Always", "always", "n", "Unit ranges"), A("view.heatmap", "Always", "always", "h", "Kill heatmap"), A("quicksave", "Always", "always", "f5", "Quick save"), A("inventory", "Always", "always", "i", "Inventory (ammo, engineers)"),
   A("fullscreen", "Always", "always", "f11", "Fullscreen"), A("squad.next", "Always", "always", "tab", "Next squad (Shift: previous)"),
   A("order.amove", "With units selected", "selected", "q", "Attack-move"), A("order.patrol", "With units selected", "selected", "r", "Patrol"),
   A("order.escort", "With units selected", "selected", "e", "Escort"), A("order.stop", "With units selected", "selected", "f", "Stop"),

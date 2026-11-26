@@ -5,12 +5,14 @@ import { toCell, type Frame } from "./geo";
 import type { OsmData } from "./osmtypes";
 
 const MAX_NAME = 60;
+/** 0.60: an OSM name as the game shows it: trimmed, capped, and no U+2014 (house style; Gemini found one in Paris). */
+export function cleanStreetName(n: string): string { return n.replace(/\s*\u2014\s*/g, " - ").trim().slice(0, MAX_NAME); }
 /** Named highways as polylines in tenths of a cell: [name, [x, y, x, y, ..., -1, x, y, ...]] (-1 separates ways of
  *  the same name). Only ways that touch the area are kept; places.buildPlaces walks them over the map's road cells. */
 export function streetLines(d: OsmData, frame: Frame, m: CityMap): [string, number[]][] {
   const by = new Map<string, number[]>();
   for (const way of d.ways) {
-    const name = way.tags.highway ? String(way.tags.name ?? "").trim().slice(0, MAX_NAME) : "";
+    const name = way.tags.highway ? cleanStreetName(String(way.tags.name ?? "")) : "";
     if (!name || way.geom.length < 2) continue;
     const pts = way.geom.map(p => toCell(frame, p));
     const inside = (q: [number, number]) => q[0] >= -5 && q[1] >= -5 && q[0] < m.w + 5 && q[1] < m.h + 5;

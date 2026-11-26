@@ -11,6 +11,8 @@ import { EV_SAFE, EV_EVAC, EV_TURNED, EV_CRUSHED, EV_KILLED_BY_US, EV_FRIENDLY_F
 import { padCost, roundParts, roundScore, medalFor, mayhem, savedPct, type RoundParts } from "./scoring";
 import { heat, rollGap, rollSize, routesFor } from "./storyteller";
 import * as St from "./stats";
+import * as Sup from "./supply";
+import { newEngineer, stepEngineers, inEngineerReach } from "./engineers";
 import type { OtherKill } from "./stats";
 import { BRIDGE, BUILDING, CityMap, ROAD, INFRA_HIGHWAY, INFRA_RAIL, INFRA_STATION, PARK, WATER, extractRailLines, generateCity, rng, walkable } from "./map";
 import { decodeCityMap } from "./osm";
@@ -38,8 +40,8 @@ export interface Support {
 /** A way into the city along the map edge: a road, highway, rail line, bridge or the river. */
 /** 0.48: minimap alerts. zone = someone bitten inside a safe zone, bite = out in the city, unit = a unit clawed at,
  *  wall = infected gnawing a wall or gate, breach = a wall cell down, abort = an evac lift waved off. */
-export type PingKind = "zone" | "bite" | "unit" | "wall" | "breach" | "abort";
-export const PING_KINDS: PingKind[] = ["zone", "bite", "unit", "wall", "breach", "abort"];
+export type PingKind = "zone" | "bite" | "unit" | "wall" | "breach" | "abort" | "ammo";
+export const PING_KINDS: PingKind[] = ["zone", "bite", "unit", "wall", "breach", "abort", "ammo"];
 export interface Ping { kind: PingKind; x: number; y: number; t: number }
 export interface Score {
   saved: number; pct: number; medal: string | null; reason: string; intact: number; bonus: string | null; xp: number; waves: number; round: boolean; damage: number; spent: number;
@@ -71,6 +73,8 @@ export interface Unit {
   kills: number;
   sid?: number; // 0.57: the recorder's index for this unit
   drop?: number; // 0.59: the paratrooper drop (recorder strike index) this squad came from
+  reserve?: number; resT?: number; dry?: boolean; resPaid?: number; resMags?: number; // 0.60: batteries' rounds beyond the magazine, reload countdown; out of ammo (pinged once)
+  waitingSupply?: boolean; waitAt?: [number, number]; supplyAgainT?: number; // supplyAgainT: no new trip to the wall before this (review I4) // 0.60: parked at the wall for an engineer; the spot it is going to
   shotX: number; shotY: number; shotT: number; // last shot, for tracers
   mode?: C.TargetMode;
   paid?: number;
@@ -85,7 +89,7 @@ export interface Unit {
   // Mobile units (APC, gunboat, paratroopers, police, militia): their own little brain.
   post?: [number, number]; // where you put it; it roams within its leash of this
   hp?: number;
-  ai?: "hunt" | "hold" | "flee" | "home" | "reload" | "leave";
+  ai?: "hunt" | "hold" | "flee" | "home" | "reload" | "leave" | "supply"; // 0.60 supply: driving to a spot at the wall to wait for an engineer
   recallFrom?: [number, number]; // 0.24: its post before a Recall
   crushT?: number; // 0.25: seconds left slowed from crushing infected
   yieldCiv?: boolean; // 0.25: civilians in its way this tick: it creeps
@@ -228,6 +232,7 @@ export class Sim {
 
   // Safe zone.
   zones: [number, number][][] = [];
+  supply: Sup.ZoneSupply[] = []; // 0.60: one per zone (same order as zones)
   /** 0.50: battle groups on keys 1-0 (units or one zone per slot). */
   groups: GroupSlot[] = Array(GROUPS).fill(null);
   /** 0.50: a unit that still belongs in a group: standing, not lost, not being pulled out. */
@@ -1122,6 +1127,8 @@ export class Sim {
     let s = this.zoneCost();
     for (const u of this.units) s += u.paid ?? C.UNITS[u.kind].cost;
     for (const b of this.supports) s += b.paid;
+    for (const z of this.supply) s += z.bought; // 0.60: supply bought in planning
+    for (const u of this.units) s += u.resPaid ?? 0;
     for (const k in this.bought) s += this.abilitySpent(k as C.AbilityKind, this.bought[k as C.AbilityKind]);
     return s + this.c4.size * C.C4_COST + this.demo.size * C.DEMO_COST;
   }
@@ -1197,6 +1204,7 @@ export class Sim {
       else { this.inZone[i] = 3; this.wallHp[i] = this.gateMaxHp(); } // every new crossing starts as a gate
     }
     this.zones.push(poly);
+    this.newZoneSupply(this.zones.length - 1); // 0.60 (sets supply[z])
     this.zoneCellsEach.push(cells.length);
     this.zoneCells += cells.length;
     this.pay(price);
@@ -1212,7 +1220,7 @@ export class Sim {
   clearZone() {
     this.navVersion++; // 0.40
     if (this.phase !== "plan") return;
-    this.zones = []; this.zoneCellsEach = []; this.inZone.fill(0); this.zoneCells = 0;
+    this.zones = []; this.supply = []; this.zoneCellsEach = []; this.inZone.fill(0); this.zoneCells = 0;
     this.supports = []; // support buildings require a safe zone; removing the zone refunds them
     for (let k = 0; k < this.civN; k++) if (this.state[k] === SAFE_CIV) this.state[k] = CIV;
     this.refreshUnitAmmo();
@@ -1443,9 +1451,7 @@ export class Sim {
     const carryOn = u.fort === undefined && !!u.orders?.length; // down on the street with somewhere to go (0.50 review C1)
     u.fortT = undefined; u.fortAt = undefined; u.goal = undefined; u.nav = undefined;
     if (carryOn) { u.cmd = true; u.ai = "hunt"; u.thinkT = 0; } else { u.orders = []; u.cmd = false; }
-    if (this.unitInZone(u) && !this.mutators.has("supply_shortage")) u.ammo = Infinity;
-    else if (u.ammo === Infinity) u.ammo = spec.ammo;
-    this.refreshAuras();
+    this.refreshAuras(); // 0.60: no endless zone ammo (engineers refill)
   }
   /** 0.49: soldiers for a squad unit: rooftop squads spread over their building, ground squads around the point. */
   private squadFor(kind: C.UnitKind, x: number, y: number): Soldier[] | undefined {
@@ -1634,10 +1640,10 @@ export class Sim {
     }
     else if (spec.hp) u.hp = spec.hp; // 0.24: street emplacements can be clawed down
     this.units.push(u);
-    if (this.phase === "plan") this.refreshUnitAmmo();
-    else {
-      const inside = spec.reloadsInZone && this.unitInZone(u);
-      u.ammo = inside ? (this.mutators.has("supply_shortage") ? spec.ammo * 2 : Infinity) : spec.ammo;
+    const cls = Sup.ammoClass(kind);
+    if (cls === "shells" || cls === "rockets") u.reserve = Sup.startingStock(this.difficulty, this.mutators.has("supply_shortage")).reserve * spec.ammo; // 0.60
+    else if (cls) u.reserve = Sup.basicLoad(cls, kind) * spec.ammo; // 0.60 lab: spare magazines on hand, refilled by engineers
+    if (this.phase !== "plan") {
       u.deployT = this.dev.instantDeploy ? 0 : spec.deploy;
       this.pay(cost);
       if (u.deployT > 0) {
@@ -2559,7 +2565,7 @@ export class Sim {
       if (dx * dx + dy * dy > R2) continue;
       const spec = C.UNITS[u.kind];
       if (u.ammo !== Infinity) {
-        const cap = shortage && spec.reloadsInZone && this.unitInZone(u) ? spec.ammo * 2 : spec.ammo;
+        const cap = spec.ammo;
         u.ammo = Math.max(u.ammo, cap);
       }
       if (C.maxHp(spec) !== undefined && u.hp !== undefined && u.hp > 0) {
@@ -2635,7 +2641,7 @@ export class Sim {
             if (dx * dx + dy * dy > R2) continue;
             const spec = C.UNITS[u.kind];
             if (u.ammo !== Infinity) {
-              const cap = shortage && spec.reloadsInZone && this.unitInZone(u) ? spec.ammo * 2 : spec.ammo;
+              const cap = spec.ammo;
               if (u.ammo < cap) u.ammo = Math.min(cap, u.ammo + spec.ammo * 0.12 * dt4);
             }
             if (spec.mobile && spec.mobile.hp !== Infinity && u.hp !== undefined && u.hp > 0 && u.hp < spec.mobile.hp) {
@@ -2725,19 +2731,274 @@ export class Sim {
     return false;
   }
 
+  /** 0.60: no endless ammo in a zone any more: in planning every unit simply starts with a full magazine. */
   private refreshUnitAmmo() {
-    const shortage = this.mutators.has("supply_shortage");
-    for (const u of this.units) {
-      const spec = C.UNITS[u.kind];
-      const inside = spec.reloadsInZone && this.unitInZone(u);
-      const zoneAmmo = shortage ? spec.ammo * 2 : Infinity;
-      if (this.phase === "plan") u.ammo = inside ? zoneAmmo : spec.ammo;
-      else if (inside && !shortage) u.ammo = Infinity; // a zone built around it mid-battle: supplied from now on (never a free refill otherwise)
+    if (this.phase === "plan") for (const u of this.units) u.ammo = C.UNITS[u.kind].ammo;
+  }
+  /** 0.60: a new zone's supply (free starting stock, auto-restock by difficulty). */
+  private newZoneSupply(z: number): Sup.ZoneSupply {
+    const st = Sup.startingStock(this.difficulty, this.mutators.has("supply_shortage"));
+    const zs: Sup.ZoneSupply = { small: st.small, vehicle: st.vehicle, auto: Sup.autoDefault(this.difficulty), prio: "ammo", bought: 0, spent: 0, crew: [], log: [], logV: [], orders: [], store: [0, 0], engineersBought: 0, planCrates: { small: 0, vehicle: 0 } };
+    this.supply[z] = zs; zs.store = this.storeOf(z);
+    for (let i = 0; i < C.ENGINEERS_FREE; i++) zs.crew.push(newEngineer(this, z, i));
+    return zs;
+  }
+  engineersOf(z: number): Sup.Engineer[] { return this.supply[z]?.crew ?? []; }
+  /** 0.60: hire an engineer for zone z (in planning on site now; in battle walks in from the store point). */
+  buyEngineer(z: number): string | null {
+    const zs = this.supply[z]; if (!zs) return "No such safe zone.";
+    if (this.phase === "over") return "The battle is over.";
+    if (zs.crew.filter(e => e.alive).length >= C.ENGINEERS_MAX) return `A safe zone holds at most ${C.ENGINEERS_MAX} engineers.`;
+    const price = Sup.engineerPrice(zs.engineersBought, this.difficulty);
+    if (this.remaining() < price) return "Not enough money.";
+    if (this.phase === "plan") zs.bought += price; else { this.pay(price); zs.spent += price; }
+    zs.engineersBought++;
+    zs.crew.push(newEngineer(this, z, zs.crew.length));
+    return null;
+  }
+  private wallCellsCache: { v: number; n: number; cells: number[][] } | null = null;
+  /** 0.60: wall and gate cells of zone z (each crossing belongs to the zone of an inside cell next to it). */
+  zoneWallCells(z: number): number[] {
+    const c = this.wallCellsCache;
+    if (c && c.v === this.navVersion && c.n === this.zones.length) return c.cells[z] ?? [];
+    const cells: number[][] = this.zones.map(() => []);
+    for (let i = 0; i < this.inZone.length; i++) {
+      if (this.inZone[i] !== 2 && this.inZone[i] !== 3) continue;
+      const x = i % this.w, y = (i / this.w) | 0;
+      let zz = -1;
+      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        const nx = x + dx, ny = y + dy; if (nx < 0 || ny < 0 || nx >= this.w || ny >= this.h) continue;
+        if (this.inZone[this.idx(nx, ny)] === 1) { zz = this.zoneAt(nx, ny); if (zz >= 0) break; }
+      }
+      if (zz < 0) zz = this.zoneAt(x, y);
+      if (zz >= 0 && cells[zz]) cells[zz].push(i);
     }
+    this.wallCellsCache = { v: this.navVersion, n: this.zones.length, cells };
+    return cells[z] ?? [];
+  }
+  /** 0.60: the zone's store point: its Supply Depot, else its first Evac Point, else the zone cell nearest its middle. */
+  storeOf(z: number): [number, number] {
+    const inZ = (b: { x: number; y: number }) => this.zoneAt(b.x, b.y) === z;
+    const live = this.supports.filter(b => b.extractT === undefined && inZ(b));
+    const depot = live.find(b => b.kind === "supply"), evac = live.find(b => b.kind === "evac");
+    const poly = this.zones[z] ?? [];
+    let cx = 0, cy = 0; for (const [x, y] of poly) { cx += x; cy += y; } cx /= Math.max(1, poly.length); cy /= Math.max(1, poly.length);
+    let center: [number, number] = [Math.floor(cx), Math.floor(cy)], bd = Infinity;
+    const r = 40, x0 = Math.max(0, (cx | 0) - r), x1 = Math.min(this.w - 1, (cx | 0) + r), y0 = Math.max(0, (cy | 0) - r), y1 = Math.min(this.h - 1, (cy | 0) + r);
+    for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
+      const i = this.idx(x, y);
+      if (this.inZone[i] !== 1 || !walkable(this.map.tile[i]) || this.zoneAt(x, y) !== z) continue;
+      const d = (x - cx) * (x - cx) + (y - cy) * (y - cy); if (d < bd) { bd = d; center = [x, y]; }
+    }
+    return Sup.storePoint({ depot: depot ? [depot.x, depot.y] : null, evac: evac ? [evac.x, evac.y] : null, center });
+  }
+  private gateMasks: { v: number; near: Uint8Array; approach: Uint8Array } | null = null;
+  /** 0.60 review 7: per navigation version, two masks: cells within SUPPLY_WAIT_GATE_D of a gate, and gate approaches
+   *  (the street straight out from a gate cell, 12 cells out and one either side). One pass over the gates. */
+  private gateMasksNow() {
+    const m = this.gateMasks;
+    if (m && m.v === this.navVersion && m.near.length === this.inZone.length) return m;
+    const near = new Uint8Array(this.inZone.length), approach = new Uint8Array(this.inZone.length), D = C.SUPPLY_WAIT_GATE_D - 1;
+    for (let i = 0; i < this.inZone.length; i++) {
+      if (this.inZone[i] !== 3) continue;
+      const gx = i % this.w, gy = (i / this.w) | 0;
+      for (let y = Math.max(0, gy - D); y <= Math.min(this.h - 1, gy + D); y++) for (let x = Math.max(0, gx - D); x <= Math.min(this.w - 1, gx + D); x++) near[this.idx(x, y)] = 1;
+      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        const ox = gx + dx, oy = gy + dy; if (ox < 0 || oy < 0 || ox >= this.w || oy >= this.h || this.inZone[this.idx(ox, oy)] !== 0) continue; // outward neighbors only
+        for (let k = 1; k <= 12; k++) for (let l = -1; l <= 1; l++) {
+          const px = gx + dx * k + (dy ? l : 0), py = gy + dy * k + (dx ? l : 0);
+          if (px >= 0 && py >= 0 && px < this.w && py < this.h) approach[this.idx(px, py)] = 1;
+        }
+      }
+    }
+    return (this.gateMasks = { v: this.navVersion, near, approach });
+  }
+  /** 0.60: is (x, y) on the way into a gate (see gateMasksNow). */
+  onGateApproach(x: number, y: number): boolean { return x >= 0 && y >= 0 && x < this.w && y < this.h && this.gateMasksNow().approach[this.idx(x, y)] === 1; }
+  /** 0.60: where a low unit outside waits for an engineer: an outside street cell next to one of its zone's walls, at
+   *  least SUPPLY_WAIT_GATE_D from every gate and off every gate approach, not taken by another waiting unit; nearest
+   *  first. null = none (it waits where it is). */
+  supplyWaitSpot(u: Unit): [number, number] | null {
+    const z = this.zoneOfUnit(u); if (z < 0) return null;
+    const gm = this.gateMasksNow();
+    const taken = this.units.filter(v => v !== u && v.waitAt).map(v => v.waitAt!);
+    let best: [number, number] | null = null, bd = Infinity;
+    for (const w of this.zoneWallCells(z)) {
+      if (this.inZone[w] !== 2) continue;
+      const wx = w % this.w, wy = (w / this.w) | 0;
+      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        const x = wx + dx, y = wy + dy; if (x < 0 || y < 0 || x >= this.w || y >= this.h) continue;
+        const i = this.idx(x, y);
+        if (this.inZone[i] !== 0 || !walkable(this.map.tile[i])) continue;
+        const d = (x - u.x) * (x - u.x) + (y - u.y) * (y - u.y); if (d >= bd) continue;
+        if (gm.near[i]) continue;
+        if (taken.some(t => Math.abs(t[0] - x) <= 1 && Math.abs(t[1] - y) <= 1)) continue;
+        if (gm.approach[i]) continue;
+        bd = d; best = [x, y];
+      }
+    }
+    if (best) return best;
+    // no usable wall (a zone of open gates): park inside the zone, clear of every gate and its approach
+    const poly = this.zones[z]; let bx0 = this.w, by0 = this.h, bx1 = 0, by1 = 0;
+    for (const [px, py] of poly) { bx0 = Math.min(bx0, px | 0); by0 = Math.min(by0, py | 0); bx1 = Math.max(bx1, Math.ceil(px)); by1 = Math.max(by1, Math.ceil(py)); }
+    for (let y = Math.max(0, by0); y <= Math.min(this.h - 1, by1); y++) for (let x = Math.max(0, bx0); x <= Math.min(this.w - 1, bx1); x++) {
+      const i = this.idx(x, y);
+      if (this.inZone[i] !== 1 || !walkable(this.map.tile[i])) continue;
+      if (this.zoneAt(x, y) !== z) continue;
+      const d = (x - u.x) * (x - u.x) + (y - u.y) * (y - u.y); if (d >= bd) continue;
+      if (gm.near[i]) continue;
+      if (taken.some(t => Math.abs(t[0] - x) <= 1 && Math.abs(t[1] - y) <= 1)) continue;
+      bd = d; best = [x, y];
+    }
+    return best;
+  }
+  /** 0.60 lab: Repair Yards work at REPAIR_YARD_MUL on Hard and Insane (the corner-Yard play, queue item E); Easy and
+   *  Medium keep the full rate (half cost Medium ~4 points in the lab). */
+  yardMul(): number { return this.difficulty === "hard" || this.difficulty === "insane" ? C.REPAIR_YARD_MUL : 1; }
+  /** 0.60 review: can this unit's zone fill it (stock of its class, or a Chinook on the way)? */
+  supplyCanFill(u: Unit): boolean {
+    const zs = this.supply[this.zoneOfUnit(u)], cls = Sup.ammoClass(u.kind);
+    return !!zs && (cls === "small" || cls === "vehicle") && (zs[cls] > 0 || zs.orders.some(o => o.cls === cls && o.unit === undefined));
+  }
+  /** 0.60 review: is a trip to the wall worth it: a live engineer, and either something to fill it with or repairs to do. */
+  supplyHelps(u: Unit): boolean {
+    const zs = this.supply[this.zoneOfUnit(u)]; if (!zs || !zs.crew.some(e => e.alive)) return false;
+    const mob = C.UNITS[u.kind].mobile, hurt = !!mob && mob.hp !== Infinity && (u.hp ?? mob.hp) < mob.hp;
+    return hurt || this.supplyCanFill(u);
+  }
+  /** 0.60: a crossing cell that is swinging open or shut right now. */
+  isSwitching(i: number): boolean { return this.switching.some(sw => sw.cells.includes(i)); }
+  /** 0.60: buy crates for a zone: in planning they are on site now; in battle a Chinook brings them. */
+  buySupply(z: number, cls: "small" | "vehicle", crates: number): string | null {
+    const zs = this.supply[z]; if (!zs) return "No such safe zone.";
+    if (this.phase === "over") return "The battle is over.";
+    crates = Math.max(1, Math.floor(crates));
+    const price = crates * Sup.cratePrice(cls);
+    if (this.remaining() < price) return "Not enough money.";
+    if (this.phase === "plan") { zs[cls] += crates * Sup.crateRounds(cls); zs.bought += price; zs.planCrates[cls] += crates; return null; }
+    this.pay(price); zs.spent += price;
+    this.orderSupply(zs, { cls, crates, at: 0, auto: false, waveOffs: 0 });
+    return null;
+  }
+  /** 0.60: buy magazines for a battery's reserve: in planning on site now; in battle a sling load to the gun. */
+  buyReserve(u: Unit, mags: number): string | null {
+    const cls = Sup.ammoClass(u.kind);
+    if (cls !== "shells" && cls !== "rockets") return "Only Mortars, Howitzers and HIMARS hold a reserve.";
+    if (this.phase === "over") return "The battle is over.";
+    mags = Math.max(1, Math.floor(mags));
+    const price = mags * Sup.cratePrice(cls), mag = C.UNITS[u.kind].ammo;
+    if (this.remaining() < price) return "Not enough money.";
+    if (this.phase === "plan") { u.reserve = (u.reserve ?? 0) + mags * mag; u.resPaid = (u.resPaid ?? 0) + price; u.resMags = (u.resMags ?? 0) + mags; return null; }
+    this.pay(price);
+    const z = this.zoneOfUnit(u); if (this.supply[z]) this.supply[z].spent += price;
+    const zs = this.supply[z] ?? this.supply[0];
+    if (!zs) { u.reserve = (u.reserve ?? 0) + mags * mag; return null; } // no zone at all: nothing to fly to (cannot happen in a battle)
+    this.orderSupply(zs, { cls, crates: mags, at: 0, auto: false, unit: St.unitIndex(this.stats, u, this.time), waveOffs: 0 });
+    return null;
+  }
+  /** 0.60: what planning bought, for the saved plan (reserves by index into `planned`, the plan's unit list). */
+  exportSupplyPlan(planned: Unit[]): { supply: Sup.PlanSupply[]; reserves: [number, number][] } {
+    const supply = this.supply.map(zs => ({ small: zs.planCrates.small, vehicle: zs.planCrates.vehicle, auto: zs.auto, prio: zs.prio, engineers: zs.engineersBought }));
+    const reserves: [number, number][] = [];
+    planned.forEach((u, i) => { const n = u.resMags ?? 0; if (n > 0) reserves.push([i, n]); });
+    return { supply, reserves };
+  }
+  /** 0.60: buy back what a saved plan had (in planning). Units that didn't fit (not in sim.units) are skipped. */
+  importSupplyPlan(supply: Sup.PlanSupply[] | undefined, reserves: [number, number][] | undefined, placed: Unit[]) {
+    (supply ?? []).forEach((p, z) => {
+      if (!this.supply[z]) return;
+      if (p.small > 0) this.buySupply(z, "small", p.small);
+      if (p.vehicle > 0) this.buySupply(z, "vehicle", p.vehicle);
+      for (let i = 0; i < p.engineers; i++) if (this.buyEngineer(z)) break;
+      this.setAuto(z, p.auto); this.setPrio(z, p.prio);
+    });
+    for (const [i, n] of reserves ?? []) { const u = placed[i]; if (u && this.units.includes(u)) this.buyReserve(u, n); }
+  }
+  /** 0.60 review: a unit's stable id (the recorder's index; array positions shift as units go). */
+  sidOf(u: Unit): number { return St.unitIndex(this.stats, u, this.time); }
+  unitBySid(sid: number): Unit | undefined { return this.units.find(v => v.sid === sid); }
+  setAuto(z: number, on: boolean) { if (this.supply[z]) this.supply[z].auto = on; }
+  setPrio(z: number, p: "ammo" | "repair") { if (this.supply[z]) this.supply[z].prio = p; }
+  /** Where an order flies to: the battery for a reserve order, else the zone's store point. */
+  private orderTarget(zs: Sup.ZoneSupply, o: Sup.SupplyOrder): [number, number] {
+    if (o.unit !== undefined) { const u = this.units.find(v => v.sid === o.unit); if (u) return [u.x, u.y]; }
+    return zs.store;
+  }
+  private orderSupply(zs: Sup.ZoneSupply, o: Sup.SupplyOrder) {
+    const [tx, ty] = this.orderTarget(zs, o), [ex, ey] = this.nearestEdgePoint(tx, ty);
+    const eta = Sup.chinookEta(Math.hypot(tx - ex, ty - ey) - 24, this.mutators.has("supply_shortage"));
+    o.at = this.time + eta; zs.orders.push(o);
+    this.spawnHelo(o.unit !== undefined ? "helo_uh60" : "helo_ch47", tx + 0.5, ty + 0.5, eta + 3, 2, "#ffb74d", o.unit !== undefined ? "SLING LOAD" : "SUPPLY CHINOOK");
+  }
+  private supplyT = 0;
+  /** 0.60: orders land (or wave off and come around again); auto-restock checks every 2 s. */
+  private stepSupply(dt: number) {
+    for (const zs of this.supply) {
+      for (let i = 0; i < zs.orders.length; i++) {
+        const o = zs.orders[i]; if (this.time < o.at) continue;
+        const [tx, ty] = this.orderTarget(zs, o);
+        if (this.countInf(tx + 0.5, ty + 0.5, C.SUPPORTS.evac.radius, C.EVAC_ABORT_INF, false, true) >= C.EVAC_ABORT_INF) {
+          o.waveOffs++; o.at = this.time + C.CHINOOK_RETRY_S;
+          St.event(this.stats, St.SE_CHINOOK_ABORT, this.time, tx, ty, o.crates); this.ping("abort", tx, ty);
+          this.spawnHelo(o.unit !== undefined ? "helo_uh60" : "helo_ch47", tx + 0.5, ty + 0.5, C.CHINOOK_RETRY_S + 3, 2, "#ffb74d", "SUPPLY: COMING AROUND");
+          continue;
+        }
+        if (o.unit !== undefined) { const u = this.units.find(v => v.sid === o.unit); if (u) u.reserve = (u.reserve ?? 0) + o.crates * C.UNITS[u.kind].ammo; }
+        else if (o.cls === "small" || o.cls === "vehicle") zs[o.cls] += o.crates * Sup.crateRounds(o.cls);
+        St.event(this.stats, St.SE_CHINOOK, this.time, tx, ty, o.crates);
+        zs.orders.splice(i--, 1);
+      }
+    }
+    this.supplyT -= dt; if (this.supplyT > 0) return;
+    this.supplyT = 2;
+    const st = Sup.startingStock(this.difficulty, this.mutators.has("supply_shortage"));
+    this.supply.forEach((zs, z) => {
+      if (!zs.auto) { zs.waitingMoney = false; return; }
+      let waiting = false;
+      for (const cls of Sup.ZONE_CLASSES) {
+        if (!Sup.wantsAuto(zs[cls], st[cls], zs.orders.some(o => o.auto && o.cls === cls && o.unit === undefined), true)) continue;
+        const price = C.AUTO_CRATES * Sup.cratePrice(cls);
+        if (this.remaining() < price) { waiting = true; continue; }
+        this.pay(price); zs.spent += price;
+        this.orderSupply(zs, { cls, crates: C.AUTO_CRATES, at: 0, auto: true, waveOffs: 0 });
+      }
+      for (const u of this.units) {
+        const cls = Sup.ammoClass(u.kind); if ((cls !== "shells" && cls !== "rockets") || this.zoneOfUnit(u) !== z || u.deployT) continue;
+        const full = st.reserve * C.UNITS[u.kind].ammo, sid = St.unitIndex(this.stats, u, this.time);
+        if (!Sup.wantsAuto(u.reserve ?? 0, full, zs.orders.some(o => o.unit === sid), true)) continue;
+        const price = st.reserve * Sup.cratePrice(cls);
+        if (this.remaining() < price) { waiting = true; continue; }
+        this.pay(price); zs.spent += price;
+        this.orderSupply(zs, { cls, crates: st.reserve, at: 0, auto: true, unit: sid, waveOffs: 0 });
+      }
+      zs.waitingMoney = waiting;
+    });
+  }
+  /** 0.60: each zone's store point (Depot, else Evac Point, else the middle) and its Depot engineers (+ENGINEERS_DEPOT
+   *  while a Depot stands; in planning they go again with the Depot, in battle they stay: they are people). */
+  private refreshStores() {
+    this.supply.forEach((zs, z) => {
+      zs.store = this.storeOf(z);
+      const depot = this.supports.some(b => b.kind === "supply" && b.extractT === undefined && this.zoneAt(b.x, b.y) === z);
+      if (depot && !zs.depotGiven) {
+        for (let i = 0; i < C.ENGINEERS_DEPOT && zs.crew.filter(e => e.alive).length < C.ENGINEERS_MAX; i++) zs.crew.push(newEngineer(this, z, zs.crew.length));
+        zs.depotGiven = true;
+      } else if (!depot && zs.depotGiven && this.phase === "plan") {
+        zs.crew.splice(Math.max(0, zs.crew.length - C.ENGINEERS_DEPOT), C.ENGINEERS_DEPOT); zs.depotGiven = false;
+      }
+    });
+  }
+  /** 0.60: the zone a unit draws supply from: the one it stands in, else the nearest (by store point), else -1. */
+  zoneOfUnit(u: { x: number; y: number }): number {
+    const z = this.zoneAt(u.x, u.y); if (z >= 0) return z;
+    let best = -1, bd = Infinity;
+    this.supply.forEach((s, i) => { const d = (s.store[0] - u.x) ** 2 + (s.store[1] - u.y) ** 2; if (d < bd) { bd = d; best = i; } });
+    return best;
   }
 
   /** Recompute range, firing rate and supply buffs on every unit from active support buildings. */
   refreshAuras() {
+    this.refreshStores(); // 0.60: supports moved: store points and Depot engineers follow
     const roofMul = this.mutators.has("fragile_walls") ? 1.3 : 1;
     for (const u of this.units) {
       const spec = C.UNITS[u.kind];
@@ -3328,6 +3589,7 @@ export class Sim {
     this.rebuildBuckets();
     this.time += dt; this.tick++;
     if (this.time >= this.stats.nextT) this.sampleStats(); // 0.57
+    if (this.phase === "battle" && this.supply.length) this.stepSupply(dt); // 0.60
     if (this.tick % 10 === 0) this.pruneGroupsNow(); // 0.50 (a closure here slowed the whole tick by ~15%: kept out of this function)
     const tOut = Math.max(0, this.time - C.WARNING_S); // the hordes toughen from the outbreak on
     const infHpScale = 1 + C.INF_HP_GROWTH * this.diff.toughMul * tOut;
@@ -3534,6 +3796,7 @@ export class Sim {
     this.stepSquadMoves(dt); // 0.49
     this.stepRoofShuffle(dt); // 0.52
     this.stepSquadBites(dt, infHpScale, r); // 0.49
+    if (this.phase === "battle" && this.tick % 2 === 0 && this.supply.length) stepEngineers(this, dt * 2, r); // 0.60
     if ((this.tick & 1) === 0) this.stepGuards(dt * 2);
     this.scanEvents();
     this.units = this.units.filter(u => {
@@ -4154,7 +4417,7 @@ export class Sim {
               const maxHp = z === 3 ? this.gateMaxHp() : this.wallMaxHp();
               if (this.wallHp[ci] < maxHp) {
                 if (this.wallHp[ci] < maxHp / 2) this.repairLow.add(ci); // 0.59: a section counts as repaired when it goes from under half to full
-                this.wallHp[ci] = Math.min(maxHp, this.wallHp[ci] + C.REPAIR_WALL_HPS * dt4);
+                this.wallHp[ci] = Math.min(maxHp, this.wallHp[ci] + C.REPAIR_WALL_HPS * this.yardMul() * dt4); // 0.60: engineers do most repairs
                 if (this.wallHp[ci] >= maxHp && this.repairLow.delete(ci)) this.stats.c.repairs++;
               }
             }
@@ -4164,23 +4427,7 @@ export class Sim {
           const max = C.maxHp(C.UNITS[u.kind]); // 0.24: emplacements too
           if (max === undefined || u.hp === undefined || u.hp <= 0 || u.hp >= max) continue;
           const dx = u.x - b.x, dy = u.y - b.y;
-          if (dx * dx + dy * dy <= R2) u.hp = Math.min(max, u.hp + C.REPAIR_UNIT_HPS * dt4);
-        }
-      } else if (b.kind === "supply" && this.tick % 4 === 0) {
-        const dt4 = dt * 4;
-        const shortage = this.mutators.has("supply_shortage");
-        for (const u of this.units) {
-          if (u.ammo === Infinity || u.extractT !== undefined || (u.deployT && u.deployT > 0)) continue;
-          const uspec = C.UNITS[u.kind];
-          const cap = shortage && uspec.reloadsInZone && this.unitInZone(u) ? uspec.ammo * 2 : uspec.ammo;
-          if (u.ammo >= cap) continue;
-          const dx = u.x - b.x, dy = u.y - b.y;
-          if (dx * dx + dy * dy <= R2) {
-            u.ammo = Math.min(cap, u.ammo + uspec.ammo * C.SUPPLY_AMMO_RATE * dt4);
-            if (this.tick % 48 === 0 && this.transports.length < 10 && dx * dx + dy * dy > 9) {
-              this.spawnHelo("drone_supply", u.x + 0.5, u.y + 0.5, 2.2, 0.3, "#ffb74d", undefined, b.x + 0.5, b.y + 0.5);
-            }
-          }
+          if (dx * dx + dy * dy <= R2) u.hp = Math.min(max, u.hp + C.REPAIR_UNIT_HPS * this.yardMul() * dt4);
         }
       } else if (b.kind === "police" || b.kind === "militia") {
         let active = 0;
@@ -4418,6 +4665,7 @@ export class Sim {
         continue;
       }
       if (u.deployT && u.deployT > 0) { u.deployT -= dt; if (u.deployT <= 0) { u.deployT = 0; this.refreshAuras(); } else continue; }
+      if (spec.ammo !== Infinity) this.ammoState(u, spec.ammo, dt); // 0.60
       // 0.24: infected pressing on a street emplacement claw at it like a wall (it keeps shooting)
       if (!spec.mobile && spec.hp && u.hp !== undefined && u.hp > 0 && (this.tick + u.x) % 4 === 0 && this.dev.unitDamage && !this.onRoof(u)) {
         const [x0, y0, x1, y1] = this.footRect(spec.foot, u.x, u.y);
@@ -4426,7 +4674,6 @@ export class Sim {
         if (hurt > 0) this.ping("unit", u.x, u.y); // 0.48
       }
       if (u.fort === "climb" || u.fort === "descend") { this.stepFort(u, dt); continue; } // 0.50: busy on the wall: no firing
-      if ((u.kind === "garrison" || u.kind === "sniper") && !u.fort) this.troopsAmmo(u); // 0.50
       if (spec.mobile && !u.fort) { this.think(u, dt); if (u.ai === "home" || u.ai === "reload" || u.ai === "leave") continue; }
       if (u.standby) continue; // 0.45: stand by = hold fire
       if (u.soldiers) { this.fireSquad(u, dt); continue; } // 0.49: every soldier is a firing point
@@ -4641,10 +4888,16 @@ export class Sim {
   }
   /** 0.50: a ground Troops/Sniper squad: endless ammo inside a zone; leaving one it carries the full pool
    *  (spec.ammo) and fights it down; walking back into a zone refills it. */
-  troopsAmmo(u: Unit) {
-    const spec = C.UNITS[u.kind];
-    if (this.unitInZone(u)) { if (!this.mutators.has("supply_shortage")) u.ammo = Infinity; else if (u.ammo === Infinity) u.ammo = spec.ammo * 2; }
-    else if (u.ammo === Infinity) u.ammo = spec.ammo;
+  /** 0.60: a battery reloads from its own reserve; a supplied unit that runs dry says so once (ping, event). */
+  private ammoState(u: Unit, mag: number, dt: number) {
+    if (u.ammo >= 1) { u.dry = false; return; }
+    if (u.dry && u.sid !== undefined && this.stats.units[u.sid]) this.stats.units[u.sid].dryS = (this.stats.units[u.sid].dryS ?? 0) + dt; // 0.60: time out of ammo
+    if (u.reserve && u.reserve > 0) {
+      u.resT = (u.resT ?? C.APC_RELOAD_S) - dt;
+      if (u.resT <= 0) { const n = Math.min(mag, u.reserve); u.reserve -= n; u.ammo += n; u.resT = undefined; u.dry = false; }
+      return;
+    }
+    if (!u.dry && Sup.ammoClass(u.kind)) { u.dry = true; this.ping("ammo", u.x, u.y); St.event(this.stats, St.SE_OUT_OF_AMMO, this.time, u.x, u.y, u.sid ?? -1); }
   }
   /** 0.49: the squad's soldiers still standing. */
   livingSoldiers(u: Unit): Soldier[] { return u.soldiers ? u.soldiers.filter(so => so.alive) : []; }
@@ -4867,7 +5120,7 @@ export class Sim {
     u.thinkT = (u.thinkT ?? 0) - dt;
     if (u.thinkT <= 0) {
       u.thinkT = 1.5;
-      const low = u.ammo !== Infinity && u.ammo < spec.ammo * 0.15;
+      const low = u.ammo !== Infinity && u.ammo + (u.reserve ?? 0) < spec.ammo * 0.15; // 0.60: spares count
       const hurt = mob.hp !== Infinity && u.hp! < mob.hp * 0.35;
       const crowd = this.countInf(fx, fy, 5, 30);
       const troop = u.kind === "garrison" || u.kind === "sniper"; // 0.50: no flee, no reload trip, no hunting: orders or hold
@@ -4876,8 +5129,18 @@ export class Sim {
         else { u.ai = "hold"; u.goal = undefined; u.nav = undefined; }
       } else if (mob.nav === "air" && (low || u.ammo < 1)) {
         u.ai = "home"; // fly back to the zone to rearm
-      } else if ((low || hurt) && (u.kind === "apc" || u.kind === "tank" || u.kind === "police" || u.kind === "militia") && this.zoneClosed) {
-        u.ai = "home"; // the APC field already leads into the zone
+      } else if (u.ai === "supply" || ((low || hurt) && (u.kind === "apc" || u.kind === "tank" || u.kind === "police" || u.kind === "militia") && this.supply.length && !u.parentUnit
+        && this.time >= (u.supplyAgainT ?? 0) && this.supplyHelps(u))) {
+        // 0.60: no gates open for supply: drive to a spot at the wall, clear of every entrance, and wait
+        const full = spec.ammo * (1 + Sup.basicLoad(Sup.ammoClass(u.kind), u.kind)), onHand = u.ammo + (u.reserve ?? 0), hurtNow = mob.hp !== Infinity && u.hp! < mob.hp;
+        const release = () => { u.waitingSupply = false; u.waitAt = undefined; u.ai = "hunt"; };
+        if (u.waitingSupply && onHand >= full && !hurtNow) release();
+        // review I4: never latched for good: out of engineer reach, no crew left, or nothing to fill it with (and enough to fight) -> back to fighting, try again later
+        else if (u.waitingSupply && (!inEngineerReach(this, Math.floor(fx), Math.floor(fy)) || !this.supplyHelps(u) || (!hurtNow && !this.supplyCanFill(u) && onHand >= spec.ammo * 0.15))) { release(); u.supplyAgainT = this.time + C.SUPPLY_RETRY_S; }
+        else if (!u.waitingSupply) {
+          if (u.ai !== "supply" || !u.waitAt) { u.waitAt = this.supplyWaitSpot(u) ?? [fx | 0, fy | 0]; u.ai = "supply"; this.navTo(u, this.idx(u.waitAt[0], u.waitAt[1])); }
+          if (hyp(fx - u.waitAt[0] - 0.5, fy - u.waitAt[1] - 0.5) < 1.2) u.waitingSupply = true;
+        }
       } else if ((u.kind === "para" || u.parentUnit) && u.ammo < 1) {
         u.ai = "leave"; // out of ammo: the squad walks back to the zone and is evacuated
       } else if (crowd >= mob.flee) {
@@ -4950,7 +5213,15 @@ export class Sim {
       u.x += gx / l * step; u.y += gy / l * step;
       return;
     }
-    if (u.ai === "home" || u.ai === "leave") {
+    if (u.ai === "supply") { // 0.60: to the wait spot, then stand still (it still shoots what comes into range)
+      if (u.waitingSupply || !u.waitAt) return;
+      if (hyp(fx - u.waitAt[0] - 0.5, fy - u.waitAt[1] - 0.5) < 1.2) { u.waitingSupply = true; return; }
+      d = u.nav ? this.downhill(u.nav, cx, cy) : null;
+      if (!d) { // no way there: wait here if an engineer can reach it, else back to fighting (review I4)
+        if (inEngineerReach(this, cx, cy)) u.waitingSupply = true; else { u.ai = "hunt"; u.waitAt = undefined; u.supplyAgainT = this.time + C.SUPPLY_RETRY_S; }
+        return;
+      }
+    } else if (u.ai === "home" || u.ai === "leave") {
       if (this.inZone[this.idx(cx, cy)] === 1) {
         if (u.ai === "leave") { u.hp = -1; if (!u.parentUnit) this.unitsLost--; return; } // evacuated, not lost
         u.ai = "reload"; u.reloadT = C.APC_RELOAD_S; return;
@@ -5222,7 +5493,11 @@ export class Sim {
   /** 0.57: the page says the player chose Keep fighting. */
   markKeepFighting() { St.event(this.stats, St.SE_KEEP_FIGHTING, this.time, 0, 0); }
   /** 0.59: copy the sim's own running counts into the recorder (each sample, and before the record is built). */
-  syncCounters() { const c = this.stats.c; c.swimmers = this.swimmersKilled; c.guardKills = this.guardKills; c.talkedOut = this.talkedOut; }
+  syncCounters() {
+    const c = this.stats.c; c.swimmers = this.swimmersKilled; c.guardKills = this.guardKills; c.talkedOut = this.talkedOut;
+    let sp = 0; for (const z of this.supply) sp += z.bought + z.spent; for (const u of this.units) sp += u.resPaid ?? 0;
+    c.supplySpent = sp; // 0.60
+  }
   /** 0.57: one recorder sample (every SAMPLE_S of battle time); also registers units placed since the last one. */
   private sampleStats() {
     const r = this.stats, c = this.counts();

@@ -150,7 +150,7 @@ function timeline(r: BattleRecord, ctx: TabCtx): string {
 
 function units(r: BattleRecord): string {
   if (!r.units.length) return `<div class="er-panel er-empty">No units this battle.</div>`;
-  const rows = [...r.units].sort((a, b) => b.kills - a.kills).map(u => `<tr><td>${esc(u.label)}</td><td class="n">${n0(u.kills)}</td><td>${mmss(u.placedT)}</td><td style="color:${u.lostT >= 0 ? "#f87171" : "#4ade80"}">${u.lostT >= 0 ? `lost at ${mmss(u.lostT)}` : "came through"}</td></tr>`).join("");
+  const rows = [...r.units].sort((a, b) => b.kills - a.kills).map(u => `<tr><td>${esc(u.label)}</td><td class="n">${n0(u.kills)}</td><td>${mmss(u.placedT)}</td><td style="color:${u.lostT >= 0 ? "#f87171" : "#4ade80"}">${u.lostT >= 0 ? `lost at ${mmss(u.lostT)}` : "came through"}${u.dryS && u.dryS >= 1 ? ` <span style="color:#ffd740">· out of ammo ${mmss(u.dryS)}</span>` : ""}</td></tr>`).join(""); // 0.60
   const rowsK = killRows(r), mx = Math.max(1, ...rowsK.map(x => x[1]));
   return `<div class="er-grid2"><div class="er-panel er-scroll"><h3>Every unit <span>${n0(r.units.length)}</span></h3><table><tr><th>Unit</th><th class="n">Kills</th><th>Placed</th><th>Fate</th></tr>${rows}</table></div>` +
     `<div class="er-panel"><h3>Kills by source</h3>${rowsK.map(([l, v, c]) => bar(l, v, mx, c)).join("") || `<div class="er-empty">No kills.</div>`}</div></div>`;
@@ -191,7 +191,8 @@ function moneyTab(r: BattleRecord): string {
   return `<div class="er-grid2"><div class="er-panel"><h3>Money over the battle</h3>${timelineSvg(r, ["money", "spent"], 880, 340)}</div><div class="er-panel"><h3>The bill</h3>` +
     kv("Starting budget", money(t.budget)) + kv("Spent", money(t.spent)) + kv("People saved per $1M spent", t.perM !== null ? n0(t.perM) : "nothing spent") +
     kv("Damage to the city", money(t.damage)) + kv("City intact", `${n0(t.intact)}%`) + kv("Units placed", n0(t.unitsPlaced)) + kv("Units lost", n0(t.unitsLost)) +
-    kv("Strikes called", n0(t.strikes)) + kv("Bridges blown", n0(t.bridges)) + kv("Tactical nukes", n0(t.nukes)) + `</div></div>`;
+    kv("Strikes called", n0(t.strikes)) + kv("Bridges blown", n0(t.bridges)) + kv("Tactical nukes", n0(t.nukes)) +
+    (r.counters && (r.counters.supplySpent || r.counters.crates) ? kv("Supply", `${money(r.counters.supplySpent)} (${n0(r.counters.crates)} crates, ${n0(r.counters.chinooks)} Chinooks, ${n0(r.counters.waveOffs)} waved off)`) : "") + `</div></div>`; // 0.60
 }
 
 export function tabHtml(tab: Tab, r: BattleRecord, ctx: TabCtx): string {
