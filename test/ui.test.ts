@@ -608,3 +608,19 @@ test("review I2 (and a 0.59 slip): live achievements and the Inventory refresh r
   const dev = main.slice(main.indexOf('$("opt-dev").addEventListener'), main.indexOf('$("opt-dev").addEventListener') + 600);
   expect(dev).not.toContain("checkLiveAchievements");
 });
+
+test("0.61: build menu tiles are 48 px with a 44 px picture; the orders column never squeezes", () => {
+  const html = require("fs").readFileSync(import.meta.dir + "/../index.html", "utf8") as string;
+  expect(html).toMatch(/\.btile \{[^}]*width: 48px; height: 48px;/);
+  expect(html).toMatch(/\.btile img \{ width: 44px; height: 44px;/);
+  expect(html).toMatch(/#hud \{\s*grid-column: 1; display: grid; grid-template-columns: 176px [^;]*minmax\(372px, 1\.7fr\) max-content;/);
+  expect(html).toMatch(/height: 178px;/);
+});
+
+test("0.61: every sprite the redo covered is in assets/sprites, 64 px square", () => {
+  const { readFileSync } = require("fs");
+  for (const k of ["a10", "airstrike", "apc", "barrage", "budget", "c130", "cluster", "command", "depot", "helo_ch47", "helo_uh60", "himars", "howitzer", "jet", "militia_b", "moab", "police", "repair", "sniper", "supply", "turret"]) {
+    const b: Buffer = readFileSync(import.meta.dir + `/../assets/sprites/${k}.png`);
+    expect(b.readUInt32BE(16)).toBe(64); expect(b.readUInt32BE(20)).toBe(64); // PNG IHDR width, height
+  }
+});

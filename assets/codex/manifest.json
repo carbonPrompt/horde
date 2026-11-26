@@ -1,22 +1,22 @@
 {
  "battle-horde-arrow": {
-  "version": "0.56.0",
+  "version": "0.61.0",
   "rev": 1,
-  "recipeHash": "1553a18b10db",
-  "bytes": 35988,
+  "recipeHash": "5e0e0396bdb7",
+  "bytes": 33717,
   "w": 960,
-  "h": 276
+  "h": 262
  },
  "battle-minimap-alerts": {
-  "version": "0.55.0",
-  "rev": 1,
-  "recipeHash": "57f63bc6af4e",
-  "bytes": 8811,
+  "version": "0.61.0",
+  "rev": 2,
+  "recipeHash": "8b1dd0bbe6ef",
+  "bytes": 8856,
   "w": 150,
-  "h": 164
+  "h": 178
  },
  "battle-money-bar": {
-  "version": "0.54.0",
+  "version": "0.61.0",
   "rev": 1,
   "recipeHash": "982c0dff80f3",
   "bytes": 9454,
@@ -24,354 +24,354 @@
   "h": 76
  },
  "battle-overview": {
-  "version": "0.56.0",
+  "version": "0.61.0",
   "rev": 1,
-  "recipeHash": "15908a7175bd",
-  "bytes": 29600,
+  "recipeHash": "056e1672a08b",
+  "bytes": 28542,
   "w": 960,
-  "h": 276
+  "h": 262
  },
  "chinook-drop": {
-  "version": "0.60.0",
+  "version": "0.61.0",
   "rev": 1,
-  "recipeHash": "82682ebf5cef",
-  "bytes": 29342,
+  "recipeHash": "c2c9ab50595c",
+  "bytes": 28913,
   "w": 960,
-  "h": 276
+  "h": 262
  },
  "clip-ac130-arrives": {
-  "version": "0.54.0",
+  "version": "0.61.0",
   "rev": 1,
-  "recipeHash": "221f5db92f3b",
-  "bytes": 148955,
+  "recipeHash": "c05953cb1f8f",
+  "bytes": 137631,
   "w": 800,
-  "h": 230
+  "h": 218
  },
  "clip-airstrike": {
-  "version": "0.54.0",
+  "version": "0.61.0",
   "rev": 1,
-  "recipeHash": "04da71b4e89a",
-  "bytes": 151656,
+  "recipeHash": "06906cf51854",
+  "bytes": 133847,
   "w": 800,
-  "h": 230
+  "h": 218
  },
  "clip-attack-move": {
-  "version": "0.60.0",
+  "version": "0.61.0",
   "rev": 1,
-  "recipeHash": "451d0a7cbfcc",
-  "bytes": 154397,
+  "recipeHash": "84cdae358743",
+  "bytes": 148501,
   "w": 800,
-  "h": 230
+  "h": 218
  },
  "clip-box-select-move": {
-  "version": "0.55.0",
+  "version": "0.61.0",
   "rev": 1,
-  "recipeHash": "f8db543c7c8c",
-  "bytes": 158972,
+  "recipeHash": "6658822fede4",
+  "bytes": 153739,
   "w": 800,
-  "h": 230
+  "h": 218
  },
  "clip-c4-bridge": {
-  "version": "0.54.0",
+  "version": "0.61.0",
   "rev": 1,
-  "recipeHash": "af7f5d391505",
-  "bytes": 43660,
+  "recipeHash": "c96fdaf02ffa",
+  "bytes": 39173,
   "w": 800,
-  "h": 230
+  "h": 218
  },
  "clip-draw-zone": {
-  "version": "0.56.0",
+  "version": "0.61.0",
   "rev": 1,
-  "recipeHash": "80dc4a58731b",
-  "bytes": 21994,
+  "recipeHash": "b8c5560271a7",
+  "bytes": 21325,
   "w": 800,
-  "h": 230
+  "h": 218
  },
  "clip-evac-lift": {
-  "version": "0.60.0",
+  "version": "0.61.0",
   "rev": 1,
-  "recipeHash": "8b334fc4c189",
-  "bytes": 281543,
+  "recipeHash": "15bbaa5c7b4b",
+  "bytes": 256984,
   "w": 800,
-  "h": 230
+  "h": 218
  },
  "clip-gate-to-wall": {
-  "version": "0.56.0",
+  "version": "0.61.0",
   "rev": 1,
-  "recipeHash": "eafe777812cd",
-  "bytes": 260300,
+  "recipeHash": "355b05eacedf",
+  "bytes": 257495,
   "w": 800,
-  "h": 230
+  "h": 218
  },
  "clip-troops-fortify": {
-  "version": "0.56.0",
+  "version": "0.61.0",
   "rev": 2,
   "recipeHash": "44b160bff3aa",
-  "bytes": 357252,
+  "bytes": 340954,
   "w": 800,
   "h": 240
  },
  "controls-groupbar": {
-  "version": "0.54.0",
+  "version": "0.61.0",
   "rev": 2,
-  "recipeHash": "77f2fd69f0fe",
-  "bytes": 7375,
+  "recipeHash": "6aa4107c4cf6",
+  "bytes": 7684,
   "w": 600,
   "h": 58
  },
  "controls-hud": {
-  "version": "0.56.0",
-  "rev": 3,
-  "recipeHash": "c592a900893b",
-  "bytes": 29161,
-  "w": 960,
-  "h": 168
+  "version": "0.61.0",
+  "rev": 4,
+  "recipeHash": "fdd23176bbc2",
+  "bytes": 33595,
+  "w": 1093,
+  "h": 178
  },
  "end-report-overview": {
-  "version": "0.59.0",
+  "version": "0.61.0",
   "rev": 1,
   "recipeHash": "10ef0fdf0bdf",
-  "bytes": 64938,
+  "bytes": 65047,
   "w": 1520,
   "h": 800
  },
  "end-report-town": {
-  "version": "0.58.0",
+  "version": "0.61.0",
   "rev": 1,
   "recipeHash": "eb493156db60",
-  "bytes": 103185,
+  "bytes": 106302,
   "w": 1520,
   "h": 800
  },
  "engineer-carry": {
-  "version": "0.60.1",
+  "version": "0.61.0",
   "rev": 1,
-  "recipeHash": "7bb3709fd785",
-  "bytes": 16711,
+  "recipeHash": "2e211903a5ae",
+  "bytes": 15867,
   "w": 960,
-  "h": 276
+  "h": 262
  },
  "howto-1-battle": {
-  "version": "0.56.0",
+  "version": "0.61.0",
   "rev": 1,
-  "recipeHash": "aca99c52643d",
-  "bytes": 29266,
+  "recipeHash": "94ab916b1cd6",
+  "bytes": 28675,
   "w": 960,
-  "h": 276
+  "h": 262
  },
  "howto-1-plan": {
-  "version": "0.56.0",
+  "version": "0.61.0",
   "rev": 1,
   "recipeHash": "d613ef05bd62",
-  "bytes": 69188,
+  "bytes": 72194,
   "w": 960,
   "h": 540
  },
  "howto-10-late": {
-  "version": "0.56.0",
+  "version": "0.61.0",
   "rev": 1,
-  "recipeHash": "f9b5a35cb857",
-  "bytes": 29340,
+  "recipeHash": "dd5aaa779228",
+  "bytes": 29429,
   "w": 960,
-  "h": 276
+  "h": 262
  },
  "howto-10-locked": {
-  "version": "0.56.0",
+  "version": "0.61.0",
   "rev": 1,
-  "recipeHash": "32c5a6ab12a2",
-  "bytes": 29761,
+  "recipeHash": "b0563d59a5c5",
+  "bytes": 29456,
   "w": 960,
-  "h": 276
+  "h": 262
  },
  "howto-11-menu": {
-  "version": "0.60.0",
+  "version": "0.61.0",
   "rev": 1,
-  "recipeHash": "455902688c7d",
-  "bytes": 13712,
-  "w": 480,
-  "h": 168
+  "recipeHash": "a61498fa5838",
+  "bytes": 18432,
+  "w": 505,
+  "h": 178
  },
  "howto-11-nofire": {
-  "version": "0.60.0",
+  "version": "0.61.0",
   "rev": 1,
-  "recipeHash": "7ce790c21d36",
-  "bytes": 30759,
+  "recipeHash": "479c07a6e2a7",
+  "bytes": 30530,
   "w": 960,
-  "h": 276
+  "h": 262
  },
  "howto-12-pause": {
-  "version": "0.59.0",
+  "version": "0.61.0",
   "rev": 1,
   "recipeHash": "836bece728ec",
-  "bytes": 114155,
+  "bytes": 118824,
   "w": 960,
   "h": 540
  },
  "howto-2-day": {
-  "version": "0.56.0",
+  "version": "0.61.0",
   "rev": 1,
-  "recipeHash": "9aaa149756d1",
-  "bytes": 32911,
+  "recipeHash": "4344d56d2d3c",
+  "bytes": 31770,
   "w": 960,
-  "h": 276
+  "h": 262
  },
  "howto-2-night": {
-  "version": "0.56.0",
+  "version": "0.61.0",
   "rev": 1,
-  "recipeHash": "2d4451e531f7",
-  "bytes": 32097,
+  "recipeHash": "6e2d9ab87c56",
+  "bytes": 30343,
   "w": 960,
-  "h": 276
+  "h": 262
  },
  "howto-3-heights": {
-  "version": "0.56.0",
+  "version": "0.61.0",
   "rev": 1,
-  "recipeHash": "f2036d0cd9a1",
-  "bytes": 27333,
+  "recipeHash": "1f0b8b91e3c1",
+  "bytes": 26346,
   "w": 960,
-  "h": 276
+  "h": 262
  },
  "howto-3-map": {
-  "version": "0.56.0",
+  "version": "0.61.0",
   "rev": 1,
-  "recipeHash": "f024578bb4d3",
-  "bytes": 32911,
+  "recipeHash": "e6aeb390cb7f",
+  "bytes": 31770,
   "w": 960,
-  "h": 276
+  "h": 262
  },
  "howto-4-big": {
-  "version": "0.56.0",
+  "version": "0.61.0",
   "rev": 1,
-  "recipeHash": "302edcf48e37",
-  "bytes": 40032,
+  "recipeHash": "f4fcf1a9325d",
+  "bytes": 38849,
   "w": 960,
-  "h": 352
+  "h": 338
  },
  "howto-4-good": {
-  "version": "0.56.0",
+  "version": "0.61.0",
   "rev": 1,
-  "recipeHash": "6434dc9372d0",
-  "bytes": 28878,
+  "recipeHash": "87ba3996f65a",
+  "bytes": 28203,
   "w": 960,
-  "h": 276
+  "h": 262
  },
  "howto-5-gates": {
-  "version": "0.56.0",
+  "version": "0.61.0",
   "rev": 1,
-  "recipeHash": "7027de3bd5bb",
-  "bytes": 26512,
+  "recipeHash": "9d88fdf7e70d",
+  "bytes": 25792,
   "w": 960,
-  "h": 276
+  "h": 262
  },
  "howto-6-ranges": {
-  "version": "0.56.0",
+  "version": "0.61.0",
   "rev": 1,
-  "recipeHash": "552a8f8ace64",
-  "bytes": 33317,
+  "recipeHash": "69174abb958a",
+  "bytes": 32314,
   "w": 960,
-  "h": 276
+  "h": 262
  },
  "howto-6-sniper": {
-  "version": "0.56.0",
+  "version": "0.61.0",
   "rev": 1,
-  "recipeHash": "b6e20d8cb81a",
-  "bytes": 30153,
+  "recipeHash": "e2906f1f2b50",
+  "bytes": 28745,
   "w": 960,
-  "h": 276
+  "h": 262
  },
  "howto-7-streets": {
-  "version": "0.56.0",
+  "version": "0.61.0",
   "rev": 1,
-  "recipeHash": "26f1f6e7feea",
-  "bytes": 28009,
+  "recipeHash": "f14a9465779b",
+  "bytes": 26778,
   "w": 960,
-  "h": 276
+  "h": 262
  },
  "howto-8-padcost": {
-  "version": "0.60.0",
+  "version": "0.61.0",
   "rev": 1,
-  "recipeHash": "be979f30ae44",
-  "bytes": 31803,
+  "recipeHash": "8068e9a7427a",
+  "bytes": 31210,
   "w": 960,
-  "h": 276
+  "h": 262
  },
  "howto-9-alert": {
-  "version": "0.56.0",
+  "version": "0.61.0",
   "rev": 1,
-  "recipeHash": "3f520f4f4cb7",
-  "bytes": 173003,
+  "recipeHash": "1b8d3046f097",
+  "bytes": 167536,
   "w": 800,
-  "h": 230
+  "h": 218
  },
  "inventory-window": {
-  "version": "0.60.0",
+  "version": "0.61.0",
   "rev": 1,
   "recipeHash": "7d4b30d4b512",
-  "bytes": 31098,
+  "bytes": 31662,
   "w": 840,
   "h": 300
  },
  "people-person-window": {
-  "version": "0.56.0",
+  "version": "0.61.0",
   "rev": 4,
   "recipeHash": "a6da53861da2",
-  "bytes": 60626,
+  "bytes": 63245,
   "w": 960,
   "h": 540
  },
  "start-cursor-label": {
-  "version": "0.56.0",
+  "version": "0.61.0",
   "rev": 1,
-  "recipeHash": "632c3c95af2c",
-  "bytes": 30626,
+  "recipeHash": "5c71586276ad",
+  "bytes": 29595,
   "w": 960,
-  "h": 276
+  "h": 262
  },
  "stats-achievements": {
-  "version": "0.59.0",
+  "version": "0.61.0",
   "rev": 1,
   "recipeHash": "11881149e41d",
-  "bytes": 118489,
+  "bytes": 118535,
   "w": 1440,
   "h": 868
  },
  "stats-career": {
-  "version": "0.59.0",
+  "version": "0.61.0",
   "rev": 1,
   "recipeHash": "9b2bb22cfbe4",
-  "bytes": 78716,
+  "bytes": 78953,
   "w": 1440,
   "h": 868
  },
  "support-radius": {
-  "version": "0.60.1",
+  "version": "0.61.0",
   "rev": 1,
-  "recipeHash": "efa68adfca71",
-  "bytes": 33370,
+  "recipeHash": "047f315ed0c3",
+  "bytes": 32937,
   "w": 960,
-  "h": 276
+  "h": 262
  },
  "units-ac130-orbit": {
-  "version": "0.54.0",
+  "version": "0.61.0",
   "rev": 1,
-  "recipeHash": "27bf104f5db8",
-  "bytes": 31141,
+  "recipeHash": "12b147f5c7a8",
+  "bytes": 29129,
   "w": 960,
-  "h": 276
+  "h": 262
  },
  "units-ranges": {
-  "version": "0.54.0",
+  "version": "0.61.0",
   "rev": 1,
-  "recipeHash": "6ce03a3253d8",
-  "bytes": 27809,
+  "recipeHash": "a33bad8112e5",
+  "bytes": 26475,
   "w": 960,
-  "h": 276
+  "h": 262
  },
  "units-selected-card": {
-  "version": "0.55.0",
+  "version": "0.61.0",
   "rev": 4,
   "recipeHash": "c76a9007cf50",
-  "bytes": 74609,
+  "bytes": 76652,
   "w": 960,
   "h": 540
  }

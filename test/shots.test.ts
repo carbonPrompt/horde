@@ -112,8 +112,8 @@ test("minor #10: run.ts builds from the repo root, whatever the current folder",
 test("0.51 review I5/I6: map crops end above the bottom panel; the minimap-alerts crop is the panel's minimap; retired captions", () => {
   const src = require("fs").readFileSync(import.meta.dir + "/../tools/shots/recipes.ts", "utf8") as string;
   const m = /const MAP: \[number, number, number, number\] = \[(\d+), (\d+), (\d+), (\d+)\]/.exec(src)!;
-  expect(Number(m[2]) + Number(m[4])).toBeLessThanOrEqual(352);
-  expect(src).toMatch(/id: "battle-minimap-alerts"[^\n]*crop: \[0, 35\d, /);
+  expect(Number(m[2]) + Number(m[4])).toBeLessThanOrEqual(338); // 0.61: the panel is 178 px tall
+  expect(src).toMatch(/id: "battle-minimap-alerts"[^\n]*crop: \[0, 33\d, /);
   const codex = require("fs").readFileSync(import.meta.dir + "/../src/codex.ts", "utf8") as string;
   expect(codex).not.toMatch(/selection bar/i);
 });

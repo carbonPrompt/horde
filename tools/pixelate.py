@@ -14,7 +14,7 @@ def key_background(im: Image.Image) -> Image.Image:
     bg = np.median(border, axis=0)                      # the flat background color, sampled from the edges
     dist = np.sqrt(((a - bg) ** 2).sum(axis=2))
     r, g, b = a[:, :, 0], a[:, :, 1], a[:, :, 2]
-    magenta = (r > g + 50) & (b > g + 30)                # the background's cast shadow and fringes (no army is pink)
+    magenta = (r > g + 50) & (b > g + 30) & (np.abs(r - b) < 70)  # the background's cast shadow and fringes (no army is pink; 0.61: a red flag is not magenta)
     alpha = np.where((dist > 70) & ~magenta, 255, 0).astype(np.uint8)
     out = np.dstack([a.astype(np.uint8), alpha])
     return Image.fromarray(out, "RGBA")
@@ -33,8 +33,14 @@ def pixelate(src: str, dst: str, size: int, colors: int):
     small = sq.resize((inner, inner), Image.Resampling.BOX)
     arr = np.asarray(small).copy()
     solid = arr[:, :, 3] >= 128
-    rgb = Image.fromarray(arr[:, :, :3], "RGB").quantize(colors=colors, method=Image.Quantize.MEDIANCUT, dither=Image.Dither.NONE).convert("RGB")
-    q = np.asarray(rgb)
+    src = arr[:, :, :3]
+    rgb = Image.fromarray(src, "RGB").quantize(colors=colors, method=Image.Quantize.MEDIANCUT, dither=Image.Dither.NONE).convert("RGB")
+    q = np.asarray(rgb).copy()
+    # 0.61: keep small saturated details (flags, lights, markings): a pixel whose color is vivid and far from its
+    # palette color keeps its own color, so a few red and blue pixels are not swallowed by the camo greens
+    f = src.astype(np.int32); mx, mn = f.max(axis=2), f.min(axis=2)
+    vivid = (mx - mn > 90) & (np.abs(f - q.astype(np.int32)).sum(axis=2) > 120) & solid
+    q[vivid] = src[vivid]
     out = np.zeros((size, size, 4), np.uint8)
     out[1:-1, 1:-1, :3] = q
     out[1:-1, 1:-1, 3] = np.where(solid, 255, 0)
