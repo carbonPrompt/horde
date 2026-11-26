@@ -2,6 +2,7 @@
 // main.ts calls tip(id) at the moment the thing happens; shouldTip decides; the text goes to the ticker.
 export const TIPS = {
   horde: "Hordes walk in along highways, rail lines, bridges and the river. The amber arrow shows where the next one comes in.",
+  bev: "A Battle Event came in: the card says who, where and how long you have. Reach them with a ground unit; {key:alert} takes you there.",
   ammo: "A unit is low on ammo. Engineers carry crates from the zone's stock; the Inventory ({key:inventory}) shows the stock and buys more.",
   people: "Move/Aim selected: click a white dot to see who that person is. Follow keeps the camera on them.",
   targeting: "Move/Aim: click one of your units to select it, then press {key:order.target} to change what it shoots first (nearest, closest to the walls, or chasers).",

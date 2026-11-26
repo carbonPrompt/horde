@@ -11,7 +11,8 @@ export type Col = typeof COLS[number];
 export const SE_SIRENS = 1, SE_HORDE = 2, SE_BREACH = 3, SE_GATE_TO_WALL = 4, SE_WALL_TO_GATE = 5, SE_GATES_LOCKED = 6,
   SE_BRIDGE = 7, SE_STRIKE = 8, SE_UNIT_PLACED = 9, SE_UNIT_LOST = 10, SE_LIFT = 11, SE_LIFT_ABORT = 12, SE_DEMOLISH = 13,
   SE_ROUND = 14, SE_KEEP_FIGHTING = 15,
-  SE_CHINOOK = 16, SE_CHINOOK_ABORT = 17, SE_ENGINEER_LOST = 18, SE_OUT_OF_AMMO = 19; // 0.60 supply
+  SE_CHINOOK = 16, SE_CHINOOK_ABORT = 17, SE_ENGINEER_LOST = 18, SE_OUT_OF_AMMO = 19, // 0.60 supply
+  SE_EVENT_START = 20, SE_EVENT_WON = 21, SE_EVENT_LOST = 22; // 0.62 Battle Events (a: kind index)
 export type OtherKill = "guard" | "civilian" | "train" | "bridge" | "demolition" | "env";
 export const OTHER_KILLS: OtherKill[] = ["guard", "civilian", "train", "bridge", "demolition", "env"];
 export interface StrikeRec { kind: string; t: number; x: number; y: number; kills: number; civ: number; dropKills?: number } // 0.59 dropKills: a paratrooper drop's squads' kills (also counted on their units)
@@ -28,7 +29,10 @@ export interface Recorder {
   win: number[]; // kill times inside the rolling 60 s window
   flags?: { dev: boolean; modded: boolean }; // set by the page at Start Battle; dev sticks once switched on
   earned?: string[]; // 0.59: achievement ids earned in this battle (a snapshot carries them)
+  bevents?: BevOutcome[]; // 0.62: Battle Events and how they ended
 }
+/** 0.62: one Battle Event's outcome as the record keeps it. */
+export interface BevOutcome { kind: string; won: boolean; frac: number; score: number; cash: number; xp: number; title: string }
 
 /** tools/statsperf.ts: switch recording off to measure what it costs (never off in the game). */
 export let STATS_OFF = false;

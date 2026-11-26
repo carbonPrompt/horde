@@ -5,7 +5,7 @@ import type { Sim } from "./sim";
 import { SAFE_CIV } from "./sim";
 import { hash32, personOf, clockMin, formatClock, EV_EVAC, EV_TURNED, EV_CRUSHED, EV_KILLED_BY_US, EV_FRIENDLY_FIRE, EV_DIED,
   EV_GO_BACK, EV_SAW_TURN, EV_REFUSE, EV_TALKED_OUT, EV_BROKE, EV_FETCH, EV_COLLECTED, EV_SOLO, EV_HOME_WAIT, EV_ZONE_WAIT,
-  EV_SAFE, EV_CLASS, FATE_EVAC, FATE_KILLED_BY_US, PL_HOME, PL_WORK, PL_SCHOOL, PLACE_WORDS, isEnding } from "./people";
+  EV_SAFE, EV_CLASS, FATE_EVAC, FATE_KILLED_BY_US, PL_HOME, PL_WORK, PL_SCHOOL, PLACE_WORDS, isEnding, EV_SHELTER, EV_RESCUED, EV_OVERRUN, EV_CREW, shelterWords } from "./people";
 import type { Places } from "./places";
 
 type Ev = { t: number; code: number; arg: number };
@@ -15,6 +15,7 @@ export interface TownInput {
   person(k: number): { first: string; last: string; age: number }; story(k: number): Ev[];
   clock(t: number): string; city: string; sirenClock: string;
   streetOf(k: number): string | null; schoolOf(k: number): string | null; zoneName(i: number): string;
+  priority?: number[]; // 0.62: Battle Event leads: their stories are told first
 }
 export type StoryTag = "all out" | "lost one" | "lost some" | "none made it" | "refused, talked out" | "refused, ran" | "refused, lost" | "made it alone" | "killed by our fire";
 export interface TownStory { title: string; tag: StoryTag; text: string; members: number[] }
@@ -44,6 +45,7 @@ export function townInputFromSim(sim: Sim, places: Places, city: string): TownIn
     streetOf: k => places.streetNear(at(k)),
     schoolOf: k => { const c = sim.schoolCell[k], i = schoolIdx.get(c); return i === undefined ? null : places.school(i); },
     zoneName: i => `Zone ${i + 1}`,
+    priority: sim.bev ? sim.bev.events.filter(e => e.alertT !== null).map(e => e.lead) : [], // 0.62
   };
 }
 
@@ -177,6 +179,16 @@ export function buildTownReport(inp: TownInput, seed: number): TownReport {
   sum.byPlace = [["Together at home", place.together], ["Split up", place.split], ["All away from home", place.away]]
     .map(([p, v]) => ({ place: p as string, households: (v as number[])[0], allOut: (v as number[])[1] }));
 
+  // 0.62: Battle Events: the event lead's own story, from their log, ahead of everything else
+  for (const k of inp.priority ?? []) {
+    if (k < 0 || k >= civN) continue;
+    const sh = has(k, EV_SHELTER), crew = has(k, EV_CREW), res = has(k, EV_RESCUED), over = has(k, EV_OVERRUN), end = fateOf(k);
+    if (!(sh || crew) || !end) continue;
+    const p = inp.person(k), who = `${p.first} ${p.last}`;
+    const first = crew ? `${who} stayed at the power station to keep it running.` : `${who} ${shelterWords(sh!.arg)}.`;
+    const mid = res ? (res.arg === 1 ? ` A safe zone took ${p.first} in at ${inp.clock(res.t)}.` : ` A ground unit reached ${p.first} at ${inp.clock(res.t)}.`) : over ? ` The infected broke in at ${inp.clock(over.t)}.` : "";
+    cands.push({ score: 100, jitter: 0, kind: "event", story: { title: `${who}, ${p.age}`, tag: made(k) ? "made it alone" : "none made it", text: `${first}${mid} ${p.first} ${end}.`, members: [k] } });
+  }
   // pick: one story per household, at most MAX_PER_TAG per tag, at least 2 each of made it / lost / refused when they exist
   cands.sort((x, y) => y.score - x.score || x.jitter - y.jitter);
   const picked: typeof cands = [], seen = new Set<number>(), perTag = new Map<StoryTag, number>(), perKind = new Map<string, number>();

@@ -19,6 +19,7 @@ import * as P from "./progress";
 import * as A from "./achievements";
 import * as Sup from "./supply";
 import { inventoryHtml, waitingList, type InvZone } from "./inventory";
+import { bevCardHtml, bevPick, bevWorth } from "./eventui";
 import { inEngineerReach } from "./engineers";
 import * as Mods from "./mods";
 // Mods first: they change numbers that everything below reads. Desktop: <userData>\mods\*.json; browser: stored copies.
@@ -36,7 +37,7 @@ import { AlertQueue } from "./ticker";
 import { partPoints, mergeBest, mergeEfficiency, bestKey, anyMedal, difficultyFor, bestOfAreas } from "./scoring";
 import { loadRealArea, realAreaMap, realAreaStreets } from "./realcity/load";
 import { buildPlaces, type Places } from "./places";
-import { SE_KEEP_FIGHTING, type Col } from "./stats";
+import { SE_KEEP_FIGHTING, SE_EVENT_WON, SE_EVENT_LOST, type Col } from "./stats";
 import { headerHtml, tabHtml, tabsHtml, sampleAt, DEFAULT_COLS, COL_NAMES, type Tab } from "./endreport";
 import { aggregate, filterBattles, cityOptions, statsTabHtml, statsTabsHtml, type StatsTab, type StatsFilter, type HistorySort, type AchGroupSel, type AchView } from "./statspage";
 import type { History } from "./battlerecord";
@@ -554,6 +555,7 @@ function startAttract() {
   loadSeq++; // a pending area load must not pull the player back into a battle
   $("timepick").hidden = true; closePerson(); // 0.39
   clearTicker();
+  $("bev").hidden = true; bevHtml = ""; // 0.62: no event card over the title screen
   mode = "attract"; city = null; customMap = null; dailyDate = null; showHeatmap = false;
   document.body.classList.add("attract");
   seed = Math.floor(Math.random() * 1e9);
@@ -1148,8 +1150,34 @@ function stepPings() {
   if (miniPings.width !== mini.width || miniPings.height !== mini.height) { miniPings.width = mini.width; miniPings.height = mini.height; miniPings.style.width = mini.style.width; miniPings.style.height = mini.style.height; }
   drawPings(pingCtx, pings, sim.time, C.PING_LIFE_S, sim.w, sim.h, devicePixelRatio);
 }
-/** F: jump the camera to the most urgent live alert. */
+// 0.62: the Battle Event card: the live event, or the last one for 8 s after it ends
+let bevHtml = "";
+const bevTold = new WeakSet<object>(); // events whose outcome went to the ticker
+function bevShown() {
+  const b = sim.bev; if (!b || sim.phase === "plan") return null;
+  const ended = sim.stats.ev.t.filter((t, i) => (sim.stats.ev.k[i] === SE_EVENT_WON || sim.stats.ev.k[i] === SE_EVENT_LOST)).pop() ?? -1e9;
+  return bevPick(b.events, sim.time, ended);
+}
+function renderBev() {
+  for (const e of sim.bev?.events ?? []) if (e.alertT !== null && (e.state === "won" || e.state === "lost") && !bevTold.has(e)) { // 0.62: every outcome reaches the ticker
+    bevTold.add(e); const o = sim.stats.bevents?.find(v => v.title === e.title);
+    notify(`Battle event ${e.state === "won" ? "won" : "failed"}: ${e.title}.${o ? ` ${bevWorth(o)}.` : ""}`, e.state === "lost", sim.time + 30);
+  }
+  const e = bevShown(), box = $("bev");
+  if (!e) { if (!box.hidden) { box.hidden = true; bevHtml = ""; } return; }
+  const c = Math.floor(e.y) * sim.w + Math.floor(e.x);
+  const html = bevCardHtml(e, sim.time, placesFor(sim).streetNear(c) ?? "");
+  if (html !== bevHtml) { box.innerHTML = html; bevHtml = html; }
+  box.hidden = false;
+}
+$("bev").addEventListener("click", ev => {
+  if (!(ev.target as HTMLElement).closest("[data-bev=go]")) return;
+  const e = bevShown(); if (!e || e.state !== "live") return;
+  const c = sim.bevCenter(e) ?? [e.x, e.y]; following = false; centerOn(c[0], c[1]); miniT = 0;
+});
+/** F: jump the camera to the most urgent live alert (0.62: a Battle Event with a countdown, or the power station under siege, first). */
 function jumpToPing() {
+  const be = sim.bevUrgent(); if (be) { const c = sim.bevCenter(be) ?? [be.x, be.y]; following = false; centerOn(c[0], c[1]); miniT = 0; return; }
   const p = pickPing(pings, sim.time, C.PING_LIFE_S);
   if (!p) { say("No alerts right now.", 1500); return; }
   following = false; centerOn(p.x, p.y); miniT = 0;
@@ -1366,11 +1394,13 @@ function hud(now: number) {
   else if (!sel.length && mode === "game" && now - actionsT > 500) { actionsT = now; renderSelection(); } // 0.52: the roster stays live // 0.49: squad strength and the soldier card stay live (0.51: the selection panel and command card too)
   if (mode !== "game" || now - lastHud < 200) return;
   lastHud = now;
+  renderBev(); // 0.62
   checkLiveAchievements(); // 0.59 (review: was in the Dev checkbox handler, so it never ran live)
   if (invOpen && performance.now() - invT > 500) renderInv(); // 0.60
   runTicker(); // picks up alerts queued while the strip was hidden
   if (sim.phase === "battle") { // 0.41: tips the battle itself brings up
     if (sim.liftsAborted > 0) tip("waveOff");
+    if (sim.bevLive()) tip("bev"); // 0.62
     if (tipPossible("gunship") && sim.orbits.some(o => o.arrived && !o.leaving)) tip("gunship"); // 0.46.1: how to move it / send it home
     if (tipPossible("ammo") && sim.units.some(u => Number.isFinite(u.ammo) && u.ammo < (C.UNITS[u.kind]?.ammo ?? 0) * 0.25)) tip("ammo");
     if (sim.outbreak && !sim.roundDone && tipPossible("endRound") && sim.counts().civ <= sim.civN * 0.05) tip("endRound");
@@ -1555,6 +1585,11 @@ function draw(now: number) {
     ctx.fillStyle = "#4fc3f7"; ctx.fillRect(px - r, py + r + 2, 2 * r * k, 2.5);
   }
 
+  // 0.62: a live Battle Event: a pulsing ring and, zoomed in, its title
+  { const be = sim.bevLive(); if (be) { const c = sim.bevCenter(be) ?? [be.x, be.y], px = cam.x + c[0] * s, py = cam.y + c[1] * s, R = Math.max(14, 6 * s);
+    ctx.strokeStyle = `rgba(255,213,79,${0.55 + 0.35 * Math.sin(now / 220)})`; ctx.lineWidth = Math.max(2, 2 * devicePixelRatio);
+    ctx.beginPath(); ctx.arc(px, py, R, 0, Math.PI * 2); ctx.stroke();
+    if (s >= 3) label(be.title, px - R, py - R - 6 * devicePixelRatio); } }
   // Fires (under the agents so you can see who is burning).
   for (const f of sim.fires) {
     const px = cam.x + f.x * s, py = cam.y + f.y * s, R = f.r * s;
@@ -3891,6 +3926,10 @@ if (SHOTS) {
       case "camera": cam.scale = op.scale; centerOn(op.x, op.y); following = false; break;
       case "ammo": for (const u of sim.units) if (u.kind === op.kind) { u.ammo = op.n; u.reserve = 0; } break; // 0.60: magazine down to n, no spares
       case "supply": { const e = sim.buySupply(0, op.cls, op.n); if (e) throw new Error(`supply: ${e}`); break; }
+      case "bev": { // 0.62: that event next, now
+        const b = sim.bev, e = b?.events.find(v => v.kind === op.kind && v.state === "reserved"); if (!b || !e) throw new Error(`bev: no reserved ${op.kind}`);
+        b.events.splice(b.events.indexOf(e), 1); b.events.unshift(e); b.nextT = sim.time - C.WARNING_S; break;
+      }
       case "engineer": { const all = sim.supply.flatMap(z => z.crew.filter(e => e.alive)); const e = all.find(x => x.carry) ?? all.find(x => x.job) ?? all[0]; if (!e) throw new Error("no engineer"); cam.scale = op.scale; centerOn(e.x, e.y); following = false; break; }
       case "store": { const st = sim.supply[0]?.store; if (!st) throw new Error("no zone"); cam.scale = op.scale; centerOn(st[0] + 0.5, st[1] + 0.5); following = false; break; }
       case "endround": { const e = sim.endRoundNow(); if (e) throw new Error(`endround: ${e}`); if (sim.roundResult && !roundShown) { roundShown = true; speed = 0; showEnd(sim.roundResult, true); } break; } // 0.57: as hud() would
@@ -3906,9 +3945,10 @@ if (SHOTS) {
   document.body.classList.add("shots");
   save.settings.tips = false; save.settings.edgeScroll = false; save.xp = 1e9; // every tool unlocked (memory only)
   (window as any).hordeShot = {
-    load(cityId: string, seedN: number, min: number) {
+    load(cityId: string, seedN: number, min: number, mutators: string[] = []) {
       const c = C.CITIES.find(x => x.id === cityId);
       if (!c) throw new Error(`unknown city ${cityId}`);
+      activeMutators.clear(); for (const m of mutators) if ((C.MUTATOR_IDS as string[]).includes(m)) activeMutators.add(m as C.MutatorId); // 0.62: a recipe may switch mutators on
       save.plans = {}; save.battle = undefined; // every recipe starts clean: no plan saved by an earlier recipe in this profile
       seedRandom(seedN); playCityNow(c, seedN);
       $("timepick").hidden = true; clearTicker();

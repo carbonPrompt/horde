@@ -455,6 +455,16 @@ export let ENGINEER_LEASH = 6; // cells past a wall
 export let ENGINEER_REPAIR_HPS = 40; // wall HP per second per engineer (a Repair Yard heals 30 x REPAIR_YARD_MUL in its whole radius)
 export let ENGINEER_RADIO_MUL = 1.15; // 0.60.1: an engineer under a Radio Tower walks and works this much faster (a Command Post uses COMMAND_RATE_MUL)
 export let ENGINEER_NOPATH_S = 5; // 0.60.1: an engineer that found no way to its goal waits this long before searching again
+// 0.62: Battle Events (mutator battle_events). Times are seconds; the first alert counts from the sirens.
+export let EVENT_FIRST_S = 150, EVENT_FIRST_MAX_S = 240; // first alert, seeded between these
+export let EVENT_GAP_S = 150, EVENT_GAP_MAX_S = 270; // after an event resolves, the next alert comes this long after
+export let EVENTS_MAX = 3; // per battle, each kind at most once, one at a time
+export let EVENT_VIP_S = 240, EVENT_CLASS_S = 300, EVENT_SCI_S = 270; // countdowns from the alert (the power station runs to the round's end)
+export let EVENT_REACH_R = 4; // cells: a ground unit this close reaches the people
+export let EVENT_FAR_MAX = 90; // cells: how far from the zones a picked building may be
+export let EVENT_SCORE = 4, EVENT_FAIL_SCORE = 5; // points on the final score for a win / off it for a loss
+export let EVENT_CASH = 4_000_000, EVENT_XP = 120; // paid at a win (x the difficulty's income scale / XP multiplier)
+export let EVENT_SIEGE_R = 8, EVENT_SIEGE_N = 20, EVENT_SIEGE_S = 40; // power station: this many infected within R cells for S seconds break in
 export let ENGINEER_RELOAD_FRAC = 0.4; // a unit under this share of its magazine gets an engineer
 export let ENGINEER_STAIRS_S = 2;
 export let AUTO_RESTOCK_FRAC = 0.25;
@@ -555,7 +565,7 @@ export function cityGunProfile(cityId?: string): CityGunProfile {
   return { country: "US", avgHousehold: 2.5, armedRate: CIV_ARMED_BASE, cityFactor: 1.0, mix: US_MIX, militiaFactor: 1.0 };
 }
 
-export const VERSION = "0.61.0";
+export const VERSION = "0.62.0";
 
 /** The campaign: fixed cities that unlock in order (a medal on one opens the next). */
 export interface CityDef { id: string; name: string; seed: number; budget: number; waveMul: number; sites: number; speedMul: number; blurb: string; real?: boolean; trial?: string; recipe?: CityRecipe; clearXp?: number; intro?: string[]; areas?: AreaDef[]; realArea?: string } // 0.36: areas = a real city's battle areas; realArea = this def is one area ("<city>/<area>") // 0.35: recipe = designed campaign map; clearXp = one-time bonus for the first medal; intro = lines shown the first time // trial: hardware this city lends you before you unlock it
@@ -610,8 +620,8 @@ export const ALL_CITIES: CityDef[] = [...CITIES, ...REAL_CITIES];
 export function cityById(id: string): CityDef | undefined { return id.includes("/") ? areaCity(id) : [...ALL_CITIES, ...DAILY_GENERATED].find(c => c.id === id); }
 
 /** Battle mutators: optional rule modifiers for custom runs and Daily Challenges. */
-export type MutatorId = "titan_strain" | "swimmer_surge" | "blitz_hordes" | "supply_shortage" | "fragile_walls" | "blood_money";
-export const MUTATOR_IDS: MutatorId[] = ["titan_strain", "swimmer_surge", "blitz_hordes", "supply_shortage", "fragile_walls", "blood_money"];
+export type MutatorId = "titan_strain" | "swimmer_surge" | "blitz_hordes" | "supply_shortage" | "fragile_walls" | "blood_money" | "battle_events";
+export const MUTATOR_IDS: MutatorId[] = ["titan_strain", "swimmer_surge", "blitz_hordes", "supply_shortage", "fragile_walls", "blood_money", "battle_events"];
 export interface MutatorSpec {
   id: MutatorId;
   name: string;
@@ -643,6 +653,10 @@ export const MUTATORS: Record<MutatorId, MutatorSpec> = {
   blood_money: {
     id: "blood_money", name: "Blood Money", short: "-25% budget, 2x battle income",
     desc: "Start with 25% less budget, but survivor tax and kill bounties during battle are doubled.", color: "#ba68c8",
+  },
+  battle_events: { // 0.62
+    id: "battle_events", name: "Battle Events", short: "2-3 incidents, score on the line",
+    desc: "Two or three incidents during the battle, each from real people in the city: the Mayor sheltering in a meeting, a class trapped at school, a research team, the power station crew. Answer in time: a win adds score, money and XP; a loss costs score.", color: "#ffd54f",
   },
 };
 
@@ -1213,6 +1227,23 @@ export const TUNABLE: Record<string, [() => number, (v: number) => void]> = {
   ENGINEER_REPAIR_HPS: [() => ENGINEER_REPAIR_HPS, v => { ENGINEER_REPAIR_HPS = v; }],
   ENGINEER_RADIO_MUL: [() => ENGINEER_RADIO_MUL, v => { ENGINEER_RADIO_MUL = v; }],
   ENGINEER_NOPATH_S: [() => ENGINEER_NOPATH_S, v => { ENGINEER_NOPATH_S = v; }],
+  EVENT_FIRST_S: [() => EVENT_FIRST_S, v => { EVENT_FIRST_S = v; }],
+  EVENT_FIRST_MAX_S: [() => EVENT_FIRST_MAX_S, v => { EVENT_FIRST_MAX_S = v; }],
+  EVENT_GAP_S: [() => EVENT_GAP_S, v => { EVENT_GAP_S = v; }],
+  EVENT_GAP_MAX_S: [() => EVENT_GAP_MAX_S, v => { EVENT_GAP_MAX_S = v; }],
+  EVENTS_MAX: [() => EVENTS_MAX, v => { EVENTS_MAX = v; }],
+  EVENT_VIP_S: [() => EVENT_VIP_S, v => { EVENT_VIP_S = v; }],
+  EVENT_CLASS_S: [() => EVENT_CLASS_S, v => { EVENT_CLASS_S = v; }],
+  EVENT_SCI_S: [() => EVENT_SCI_S, v => { EVENT_SCI_S = v; }],
+  EVENT_REACH_R: [() => EVENT_REACH_R, v => { EVENT_REACH_R = v; }],
+  EVENT_FAR_MAX: [() => EVENT_FAR_MAX, v => { EVENT_FAR_MAX = v; }],
+  EVENT_SCORE: [() => EVENT_SCORE, v => { EVENT_SCORE = v; }],
+  EVENT_FAIL_SCORE: [() => EVENT_FAIL_SCORE, v => { EVENT_FAIL_SCORE = v; }],
+  EVENT_CASH: [() => EVENT_CASH, v => { EVENT_CASH = v; }],
+  EVENT_XP: [() => EVENT_XP, v => { EVENT_XP = v; }],
+  EVENT_SIEGE_R: [() => EVENT_SIEGE_R, v => { EVENT_SIEGE_R = v; }],
+  EVENT_SIEGE_N: [() => EVENT_SIEGE_N, v => { EVENT_SIEGE_N = v; }],
+  EVENT_SIEGE_S: [() => EVENT_SIEGE_S, v => { EVENT_SIEGE_S = v; }],
   ENGINEER_RELOAD_FRAC: [() => ENGINEER_RELOAD_FRAC, v => { ENGINEER_RELOAD_FRAC = v; }],
   ENGINEER_STAIRS_S: [() => ENGINEER_STAIRS_S, v => { ENGINEER_STAIRS_S = v; }],
   AUTO_RESTOCK_FRAC: [() => AUTO_RESTOCK_FRAC, v => { AUTO_RESTOCK_FRAC = v; }],

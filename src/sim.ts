@@ -7,7 +7,8 @@ import { EV_SAFE, EV_EVAC, EV_TURNED, EV_CRUSHED, EV_KILLED_BY_US, EV_FRIENDLY_F
   rallyFor, RALLY_HOME, RALLY_ZONE, PLAN_STRAIGHT, PLAN_GATHER, PLAN_MEET, PLAN_HOME_WAIT, PLAN_FOLLOW, PLAN_NONE,
   EV_HEAD_HOME, EV_HOME_WAIT, EV_FAMILY_TOGETHER, EV_ZONE_WAIT, EV_GAVE_UP, EV_TO_ZONE, EV_CLASS, PLAN_CLASS,
   PLAN_REFUSE, EV_REFUSE, EV_BROKE, EV_TALKED_OUT, EV_SOLO, AGE_PACE, FATE_EVAC,
-  PLAN_GO_BACK, EV_SAW_TURN, EV_FROZE, EV_GO_BACK, EV_GRIEF_STAY } from "./people";
+  PLAN_GO_BACK, EV_SAW_TURN, EV_FROZE, EV_GO_BACK, EV_GRIEF_STAY, PLAN_SHELTER, EV_SHELTER, EV_RESCUED, EV_OVERRUN, EV_CREW, EV_DIED } from "./people";
+import { type Bev, type BevEvent, type BevKind, BEV_KINDS, bevOrder, firstAlertT, nextAlertT, bevReward, bevTitle, bevCountdown } from "./events";
 import { padCost, roundParts, roundScore, medalFor, mayhem, savedPct, type RoundParts } from "./scoring";
 import { heat, rollGap, rollSize, routesFor } from "./storyteller";
 import * as St from "./stats";
@@ -25,6 +26,8 @@ import { labelBuildings, makeSquad, squadSize, soldierStats, type Soldier, fireT
 export const roofLv = (lv: number) => Math.min(lv, C.ROOF_BONUS_MAX_LV);
 
 export const CIV = 0, INF = 1, DEAD = 2, SAFE_CIV = 3; // SAFE_CIV: civilian inside the safe zone
+/** 0.62: Sim.bevMark values. */
+export const BM_SHELTER = 1, BM_CREW = 2, BM_WAIT = 3, BM_CREW_LIVE = 4;
 
 export interface Support {
   kind: C.SupportKind;
@@ -40,8 +43,8 @@ export interface Support {
 /** A way into the city along the map edge: a road, highway, rail line, bridge or the river. */
 /** 0.48: minimap alerts. zone = someone bitten inside a safe zone, bite = out in the city, unit = a unit clawed at,
  *  wall = infected gnawing a wall or gate, breach = a wall cell down, abort = an evac lift waved off. */
-export type PingKind = "zone" | "bite" | "unit" | "wall" | "breach" | "abort" | "ammo" | "crew";
-export const PING_KINDS: PingKind[] = ["zone", "bite", "unit", "wall", "breach", "abort", "ammo", "crew"]; // at most 8 (the ping key packs the index in 3 bits)
+export type PingKind = "zone" | "bite" | "unit" | "wall" | "breach" | "abort" | "ammo" | "crew" | "event";
+export const PING_KINDS: PingKind[] = ["zone", "bite", "unit", "wall", "breach", "abort", "ammo", "crew", "event"]; // at most 16 (0.62: the ping key packs the index in 4 bits)
 export interface Ping { kind: PingKind; x: number; y: number; t: number }
 export interface Score {
   saved: number; pct: number; medal: string | null; reason: string; intact: number; bonus: string | null; xp: number; waves: number; round: boolean; damage: number; spent: number;
@@ -493,7 +496,7 @@ export class Sim {
   private pingAt = new Map<number, number>();
   ping(kind: PingKind, x: number, y: number) {
     if (this.phase !== "battle") return;
-    const key = (((y / C.PING_CELL) | 0) * 1024 + ((x / C.PING_CELL) | 0)) * 8 + PING_KINDS.indexOf(kind);
+    const key = (((y / C.PING_CELL) | 0) * 1024 + ((x / C.PING_CELL) | 0)) * 16 + PING_KINDS.indexOf(kind);
     const last = this.pingAt.get(key);
     if (last !== undefined && this.time - last < C.PING_GAP_S) return;
     this.pingAt.set(key, this.time);
@@ -1117,6 +1120,11 @@ export class Sim {
   // While planning, spending is worked out from the plan (so removing refunds). From the battle on it is a
   // ledger: what was locked in at the start plus every purchase since. Losses and used abilities never refund.
   planResPaid = 0; // 0.60.1: planning reserves, locked in when the battle starts
+  /** 0.62: Battle Events (null unless the mutator is on). bevMark per person (BM_*): 1 sheltering, 3 alerted and not
+   *  reached yet (holds the round), 2 / 4 the power station crew before / after its alert (never holds the round);
+   *  all are indoors: not bitten, not in the crowd model, and not prey except the alerted crew. bevScore / bevXp: what
+   *  the events add up to. */
+  bev: Bev | null = null; bevMark: Uint8Array | null = null; bevScore = 0; bevXp = 0;
   lockedSpend = 0; battleSpend = 0; earned = 0; lastIncome = 0; private incomeT = 0; private killsPaid = 0;
   upkeepPaid = 0; lastUpkeep = 0; // 0.48: cost of operations (Insane), charged with each income tick; part of battleSpend
   unitsLost = 0;
@@ -3086,6 +3094,7 @@ export class Sim {
     this.fieldDirty = true;
     this.rebuildBuckets();
     if (this.dayLife) { this.walkMask = Uint8Array.from(this.map.tile, t => walkable(t) ? 1 : 0); this.navVersion++; this.assignPlans(); }
+    if (this.dayLife && this.mutators.has("battle_events")) this.bevReserve(); // 0.62
   }
   sites: [number, number][] = [];
 
@@ -3173,7 +3182,7 @@ export class Sim {
     if (!this.dayLife || v >= this.civN || this.famLead[v] < 0) return;
     const lead = this.famLead[v], seed = this.seed, vx = this.ax[v], vy = this.ay[v], R2 = C.GRIEF_SIGHT_R * C.GRIEF_SIGHT_R;
     for (let m = lead, e = Math.min(this.civN, lead + this.famSize[v]); m < e; m++) {
-      if (m === v || this.state[m] !== CIV) continue;
+      if (m === v || this.state[m] !== CIV || (this.bevMark && this.bevMark[m])) continue; // (0.62: not Battle Event people indoors)
       const dx = this.ax[m] - vx, dy = this.ay[m] - vy;
       if (dx * dx + dy * dy > R2 || !this.seen(this.ax[m], this.ay[m], vx, vy, true, C.EYE_M)) continue;
       let again = false; for (let ev = this.lastEv[m]; ev >= 0 && !again; ev = this.evPrev[ev]) again = this.evCode[ev] === EV_SAW_TURN && this.evArg[ev] === v;
@@ -3212,13 +3221,13 @@ export class Sim {
   /** Everyone of k's household still out on the street is at home (the rest are safe, out or gone). */
   private homeDone(k: number): boolean {
     const lead = this.famLead[k]; if (lead < 0) return true;
-    for (let m = lead, e = this.famEnd(k); m < e; m++) if (this.state[m] === CIV && this.fate[m] === 0 && !this.solo[m] && !this.cellNear(this.ax[m], this.ay[m], this.homeCell[m], C.HOME_REACHED_CELLS)) return false;
+    for (let m = lead, e = this.famEnd(k); m < e; m++) if (this.state[m] === CIV && this.fate[m] === 0 && !this.solo[m] && !(this.bevMark && this.bevMark[m]) && !this.cellNear(this.ax[m], this.ay[m], this.homeCell[m], C.HOME_REACHED_CELLS)) return false;
     return true;
   }
   /** Nobody of k's household is still out on the street. */
   private meetDone(k: number): boolean {
     const lead = this.famLead[k]; if (lead < 0) return true;
-    for (let m = lead, e = this.famEnd(k); m < e; m++) if (this.state[m] === CIV && this.fate[m] === 0 && !this.solo[m] && !(this.refuser[m] === 1 && this.plan[m] === PLAN_REFUSE)) return false; // (0.43: not for someone staying home)
+    for (let m = lead, e = this.famEnd(k); m < e; m++) if (this.state[m] === CIV && this.fate[m] === 0 && !this.solo[m] && !(this.refuser[m] === 1 && this.plan[m] === PLAN_REFUSE) && !(this.bevMark && this.bevMark[m])) return false; // (0.43: not for someone staying home)
     return true;
   }
   /** Someone of k's household is still on the way home. */
@@ -3243,7 +3252,7 @@ export class Sim {
     if (refusing && this.zStim[k] > 0 && (this.resolve[k] -= this.zStim[k] * C.REFUSE_BREAK_PER_S * dt) <= 0) { // the infected came close: they run after all
       this.refuser[k] = 3; this.broke++; this.plan[k] = PLAN_STRAIGHT; this.goal[k] = -1; this.resetProgress(k); this.note(k, EV_BROKE); return null;
     }
-    if (f > C.ABANDON_FEAR && p !== PLAN_FOLLOW && !refusing && p !== PLAN_GO_BACK) { this.giveUp(k); return null; } // (a refuser's test is their resolve)
+    if (f > C.ABANDON_FEAR && p !== PLAN_FOLLOW && !refusing && p !== PLAN_GO_BACK && p !== PLAN_SHELTER) { this.giveUp(k); return null; } // (a refuser's test is their resolve)
     if (this.planT[k] < 0) return ERRAND_HOLD; // still getting ready to leave
     const check = (k + this.tick) % 10 === 0, g = this.goal[k];
     const toward = (c: number, near: number, travel = false): [number, number] | typeof ERRAND_HOLD | null => {
@@ -3297,13 +3306,14 @@ export class Sim {
         if (d < 1.5) { this.plan[k] = PLAN_STRAIGHT; this.goal[k] = -1; return null; }
         return [tx / d, ty / d];
       }
+      case PLAN_SHELTER: return toward(g, 1); // 0.62: a Battle Event's people stay put (the crew walks to its post first)
       case PLAN_CLASS: { // 0.41: lining up with the teachers, then the class walks to the zone
         if (this.planT[k] >= C.CLASS_READY_S) { this.plan[k] = PLAN_STRAIGHT; this.goal[k] = -1; return null; }
         return toward(g, 2);
       }
       case PLAN_FOLLOW: {
         const l = g;
-        if (l < 0 || this.state[l] !== CIV) { this.plan[k] = PLAN_STRAIGHT; this.goal[k] = -1; return null; } // with them in the zone, or they're gone
+        if (l < 0 || this.state[l] !== CIV || (this.bevMark && this.bevMark[l])) { this.plan[k] = PLAN_STRAIGHT; this.goal[k] = -1; return null; } // with them in the zone, or they're gone (0.62: or staying indoors for a Battle Event)
         if (this.plan[l] === PLAN_STRAIGHT && hyp(this.ax[l] - x, this.ay[l] - y) < 3) { this.plan[k] = PLAN_STRAIGHT; this.goal[k] = -1; return null; } // walking to the zone together
         const tx = this.ax[l] - x, ty = this.ay[l] - y, d = hyp(tx, ty);
         return d < 1.2 ? ERRAND_HOLD : [tx / d, ty / d];
@@ -3548,7 +3558,8 @@ export class Sim {
   }
 
   /** Nearest agent in `want` state within radius r of (x, y); -1 if none. */
-  nearest(x: number, y: number, r: number, want: number, alsoWant = 255, maxCheck = 40) {
+  nearest(x: number, y: number, r: number, want: number, alsoWant = 255, maxCheck = 40, prey = false) {
+    const bm = prey ? this.bevMark : null; // 0.62: infected looking for prey skip Battle Event people indoors
     const b0x = Math.max(0, ((x - r) / BUCKET) | 0), b1x = Math.min(this.bw - 1, ((x + r) / BUCKET) | 0);
     const b0y = Math.max(0, ((y - r) / BUCKET) | 0), b1y = Math.min(this.bh - 1, ((y + r) / BUCKET) | 0);
     let best = -1, bd = r * r;
@@ -3559,6 +3570,7 @@ export class Sim {
         if (--maxCheck <= 0) return best;
         const s = this.state[k];
         if (s !== want && s !== alsoWant) continue;
+        if (bm && k < bm.length && bm[k] !== 0 && bm[k] !== BM_CREW_LIVE) continue;
         const dx = this.ax[k] - x, dy = this.ay[k] - y, d = dx * dx + dy * dy;
         if (d < bd) { bd = d; best = k; }
       }
@@ -3598,6 +3610,7 @@ export class Sim {
     this.time += dt; this.tick++;
     if (this.time >= this.stats.nextT) this.sampleStats(); // 0.57
     if (this.phase === "battle" && this.supply.length) this.stepSupply(dt); // 0.60
+    if (this.bev && this.phase === "battle") this.stepBev(dt); // 0.62
     if (this.tick % 10 === 0) this.pruneGroupsNow(); // 0.50 (a closure here slowed the whole tick by ~15%: kept out of this function)
     const tOut = Math.max(0, this.time - C.WARNING_S); // the hordes toughen from the outbreak on
     const infHpScale = 1 + C.INF_HP_GROWTH * this.diff.toughMul * tOut;
@@ -3667,7 +3680,7 @@ export class Sim {
         if (out >= 0) { this.ax[k] = (out % this.w) + 0.5; this.ay[k] = ((out / this.w) | 0) + 0.5; }
         continue;
       }
-      if (s === CIV) { this.stepCiv(k, r, dt, cellIdx, cellInfra); continue; } // 0.30: the crowd model
+      if (s === CIV) { if (this.bevMark && this.bevMark[k]) continue; this.stepCiv(k, r, dt, cellIdx, cellInfra); continue; } // 0.30: the crowd model (0.62: Battle Event people indoors are not in it)
       {
         const swimmer = this.mutant[k] === 1;
         // 0.22.1: an infected caught inside a standing wall or gate (a person bitten in a gateway,
@@ -3692,7 +3705,7 @@ export class Sim {
         const loud = !deaf && this.noiseB[nb] > C.NOISE_MIN;
         if ((k + this.tick) % 6 === 0) {
           // 0.30: loud gunfire and blasts pull them off the people unless someone is right in front of them
-          const t = this.nearest(x, y, loud && this.noiseB[nb] > 1 ? 4 : C.INF_SENSE, CIV, SAFE_CIV);
+          const t = this.nearest(x, y, loud && this.noiseB[nb] > 1 ? 4 : C.INF_SENSE, CIV, SAFE_CIV, 40, true);
           if (t >= 0) {
             const dx = this.ax[t] - x, dy = this.ay[t] - y, l = hyp(dx, dy) || 1;
             this.hx[k] = dx / l; this.hy[k] = dy / l;
@@ -3738,8 +3751,8 @@ export class Sim {
         }
         // Bite.
         // Safe civilians can only be reached from inside the zone (through a breach).
-        const v = (k + this.tick) % 3 === 0 ? this.nearest(x, y, C.BITE_RANGE, CIV, this.inZone[this.idx(cx, cy)] ? SAFE_CIV : 255) : -1;
-        if (v >= 0 && this.dev.bites) {
+        const v = (k + this.tick) % 3 === 0 ? this.nearest(x, y, C.BITE_RANGE, CIV, this.inZone[this.idx(cx, cy)] ? SAFE_CIV : 255, 40, true) : -1;
+        if (v >= 0 && this.dev.bites && !(this.bevMark && this.bevMark[v])) { // 0.62: Battle Event people indoors are not bitten
           let p = BITE_P3;
           if (this.state[v] === SAFE_CIV) {
             p *= this.dev.safeBiteMul;
@@ -4989,6 +5002,8 @@ export class Sim {
    *  safe) when none is out; null when nobody is left alive. */
   escortCenter(who: number): [number, number] | null {
     if (who < 0 || who >= this.civN) return null;
+    const grp = this.bevGroupOf(who); // 0.62: a Battle Event's group walks together
+    if (grp) { let x = 0, y = 0, n = 0; for (const m of grp) if (this.state[m] === CIV || this.state[m] === SAFE_CIV) { x += this.ax[m]; y += this.ay[m]; n++; } return n ? [x / n, y / n] : null; }
     const lead = this.famLead[who], a = lead >= 0 ? lead : who, b = lead >= 0 ? lead + this.famSize[lead] : who + 1;
     let x = 0, y = 0, n = 0;
     for (let m = a; m < b; m++) if (this.state[m] === CIV || this.state[m] === SAFE_CIV) { x += this.ax[m]; y += this.ay[m]; n++; }
@@ -4997,6 +5012,7 @@ export class Sim {
   /** 0.45: an escort is over once nobody in the family is still out in the city. */
   private escortDone(who: number): boolean {
     if (who < 0 || who >= this.civN) return true;
+    const grp = this.bevGroupOf(who); if (grp) return !grp.some(m => this.state[m] === CIV); // 0.62
     const lead = this.famLead[who], a = lead >= 0 ? lead : who, b = lead >= 0 ? lead + this.famSize[lead] : who + 1;
     for (let m = a; m < b; m++) if (this.state[m] === CIV) return false;
     return true;
@@ -5449,13 +5465,14 @@ export class Sim {
   }
 
   counts() {
-    let civ = 0, safe = 0, inf = 0, refusing = 0, refusedLost = 0;
+    let civ = 0, safe = 0, inf = 0, refusing = 0, refusedLost = 0, bevStay = 0;
     for (let k = 0; k < this.n; k++) {
       const s = this.state[k];
       if (s === CIV) civ++; else if (s === SAFE_CIV) safe++; else if (s === INF) inf++;
+      if (this.bevMark && k < this.civN && this.bevMark[k] && this.bevMark[k] !== BM_WAIT && s === CIV) bevStay++; // 0.62 (alerted people nobody reached hold the round)
       if (this.refusers && k < this.civN && this.refuser[k] === 1) { if (s === CIV) refusing++; else if ((s === INF || s === DEAD) && this.fate[k] !== FATE_EVAC) refusedLost++; } // 0.42
     }
-    return { civ, safe, inf, total: this.civN, refusing, refusedLost };
+    return { civ, safe, inf, total: this.civN, refusing, refusedLost, bevStay };
   }
 
   result: Score | null = null;
@@ -5482,6 +5499,217 @@ export class Sim {
   }
   origFloors?: Uint8Array; // building heights before the battle (collapses lower them)
 
+  // ---------- 0.62: Battle Events (design ~/plans/2026-11-26-horde-0.62-battle-events-design.md) ----------
+  private bevOk(k: number, carriers: Set<number>, used: Set<number>, aMin: number, aMax: number): boolean {
+    if (k < 0 || k >= this.civN || used.has(k) || carriers.has(k) || this.state[k] !== CIV || this.refuser[k] || this.solo[k]) return false;
+    const a = this.age[k]; if (a < aMin || a > aMax) return false;
+    return this.inZone[this.idx(Math.floor(this.ax[k]), Math.floor(this.ay[k]))] === 0;
+  }
+  private bevName(k: number): string { const p = personOf(this.seed, k, this.famLead[k], this.famSize[k]); return `${p.first} ${p.last}`; }
+  /** Groups of people sharing a cell (workCell or schoolCell), with the cell's distance to the zones; far ones first. */
+  private bevGroups(cellOf: (k: number) => number, ok: (k: number) => boolean, minN: number): { cell: number; who: number[]; d: number }[] {
+    const by = new Map<number, number[]>();
+    for (let k = 0; k < this.civN; k++) { const c = cellOf(k); if (c < 0 || !ok(k)) continue; let a = by.get(c); if (!a) by.set(c, a = []); a.push(k); }
+    const out: { cell: number; who: number[]; d: number }[] = [];
+    for (const [cell, who] of by) {
+      if (who.length < minN || this.inZone[cell] !== 0) continue;
+      const d = this.distToZone(cell % this.w, (cell / this.w) | 0);
+      if (d >= 15 && d <= C.EVENT_FAR_MAX) out.push({ cell, who, d });
+    }
+    return out.sort((a, b) => b.d - a.d || a.cell - b.cell);
+  }
+  /** At the start of the battle: pick real people (and a building) for up to EVENTS_MAX kinds and shelter them. */
+  private bevReserve() {
+    const seed = this.seed, r = rng(hash32(seed, 777, 62) >>> 0);
+    const carriers = new Set(this.carriers.map(c => c.k)), used = new Set<number>();
+    const events: BevEvent[] = [], order = bevOrder(seed);
+    const pickOf = <T>(a: T[]) => a[Math.floor(r() * Math.min(8, a.length))];
+    let mayorCell = -1;
+    for (const kind of order) {
+      if (events.length >= C.EVENTS_MAX) break;
+      let people: number[] = [], lead = -1, building = -1, title = "", px = 0, py = 0, home = false, cells: number[] | undefined;
+      if (kind === "mayor") {
+        const g = this.bevGroups(k => this.dayPlace[k] === PL_WORK ? this.workCell[k] : -1, k => this.bevOk(k, carriers, used, 30, 70), 2); // a meeting: at least one other person
+        if (g.length) { const c = pickOf(g); people = c.who.slice(0, 3); mayorCell = c.cell; }
+        else { // night: the Mayor at home with family
+          const g2 = this.bevGroups(k => this.dayPlace[k] === PL_HOME ? this.homeCell[k] : -1, k => this.bevOk(k, carriers, used, 25, 75), 1);
+          if (g2.length) { people = pickOf(g2).who.slice(0, 3); home = true; }
+        }
+        if (people.length) { lead = people[0]; title = bevTitle("mayor", this.bevName(lead), people.length, home); }
+      } else if (kind === "research") {
+        const g = this.bevGroups(k => this.dayPlace[k] === PL_WORK && this.workCell[k] !== mayorCell ? this.workCell[k] : -1, k => this.bevOk(k, carriers, used, 25, 65), 4);
+        if (g.length) { people = pickOf(g).who.slice(0, 4); lead = people[0]; title = bevTitle("research", this.bevName(lead), 4); }
+      } else if (kind === "class") {
+        const g = this.bevGroups(k => this.dayPlace[k] === PL_SCHOOL ? this.schoolCell[k] : -1, k => this.bevOk(k, carriers, used, 5, 17), 6);
+        g.sort((a, b) => b.who.length - a.who.length || a.cell - b.cell);
+        if (g.length) {
+          const c = g[0], cx = c.cell % this.w + 0.5, cy = ((c.cell / this.w) | 0) + 0.5;
+          const kids = c.who.slice().sort((a, b) => hyp(this.ax[a] - cx, this.ay[a] - cy) - hyp(this.ax[b] - cx, this.ay[b] - cy) || a - b).slice(0, 24);
+          const teachers: number[] = [];
+          for (let k = 0; k < this.civN && teachers.length < 2; k++) if (this.workCell[k] === c.cell && this.dayPlace[k] === PL_WORK && this.bevOk(k, carriers, used, 22, 66)) teachers.push(k);
+          people = [...kids, ...teachers]; lead = teachers[0] ?? kids[0];
+          title = bevTitle("class", teachers.length ? this.bevName(teachers[0]) : "", kids.length);
+        }
+      } else { // power: the largest building outside the zones, 25 to EVENT_FAR_MAX cells from one; 6 adults nearby stay as its crew
+        const bid = this.buildingId, size = new Map<number, [number, number, number, number]>(); // id -> count, sumX, sumY, a cell
+        for (let i = 0; i < bid.length; i++) { const b = bid[i]; if (b < 0 || this.inZone[i] !== 0) continue; const t = size.get(b); if (t) { t[0]++; t[1] += i % this.w; t[2] += (i / this.w) | 0; } else size.set(b, [1, i % this.w, (i / this.w) | 0, i]); }
+        let best: [number, number, number, number] | null = null;
+        for (const t of size.values()) {
+          const cx = t[1] / t[0], cy = t[2] / t[0], d = this.distToZone(cx, cy);
+          if (d >= 25 && d <= C.EVENT_FAR_MAX && (!best || t[0] > best[0] || (t[0] === best[0] && t[3] < best[3]))) best = t;
+        }
+        if (best) {
+          const cx = best[1] / best[0] + 0.5, cy = best[2] / best[0] + 0.5;
+          const near: number[] = [];
+          for (let k = 0; k < this.civN; k++) if (this.bevOk(k, carriers, used, 18, 65) && hyp(this.ax[k] - cx, this.ay[k] - cy) < 40) near.push(k);
+          near.sort((a, b) => hyp(this.ax[a] - cx, this.ay[a] - cy) - hyp(this.ax[b] - cx, this.ay[b] - cy) || a - b);
+          if (near.length >= 4) {
+            people = near.slice(0, 6); lead = people[0]; building = best[3]; title = bevTitle("power", "", people.length); px = cx; py = cy;
+            const id = bid[best[3]]; cells = []; for (let i = 0; i < bid.length; i++) if (bid[i] === id && this.map.tile[i] === BUILDING) cells.push(i); // the plant stands while most of these do
+          }
+        }
+      }
+      if (!people.length) continue; // nothing fits this battle: the kind is skipped
+      for (const k of people) used.add(k);
+      const e: BevEvent = { kind, state: "reserved", people, lead, building, x: px, y: py, alertT: null, endT: null, reached: false, frac: 0, title, place: "" };
+      if (home) e.home = true; if (cells) e.cells = cells;
+      events.push(e);
+    }
+    if (!events.length) return;
+    this.bevMark = new Uint8Array(this.civN);
+    for (const e of events) {
+      const ki = BEV_KINDS.indexOf(e.kind);
+      if (e.kind === "power") {
+        const b = e.building, bx = b % this.w, by = (b / this.w) | 0; let post = -1;
+        for (let rr = 1; rr <= 14 && post < 0; rr++) for (let dy = -rr; dy <= rr && post < 0; dy++) for (let dx = -rr; dx <= rr && post < 0; dx++) {
+          const x = bx + dx, y = by + dy; if (x < 0 || y < 0 || x >= this.w || y >= this.h) continue;
+          const i = this.idx(x, y); if (walkable(this.map.tile[i])) post = i;
+        }
+        e.people.forEach((k, j) => { // at work inside the plant: gathered at its door
+          this.bevMark![k] = BM_CREW; this.plan[k] = PLAN_SHELTER; this.planT[k] = 0; this.note(k, EV_CREW);
+          if (post >= 0) { this.ax[k] = (post % this.w) + 0.3 + (j % 3) * 0.2; this.ay[k] = ((post / this.w) | 0) + 0.3 + ((j / 3) | 0) * 0.3; }
+          this.goal[k] = this.idx(Math.floor(this.ax[k]), Math.floor(this.ay[k]));
+        });
+      } else {
+        let x = 0, y = 0; for (const k of e.people) { x += this.ax[k]; y += this.ay[k]; } e.x = x / e.people.length; e.y = y / e.people.length;
+        for (const k of e.people) { this.bevMark[k] = BM_SHELTER; this.plan[k] = PLAN_SHELTER; this.goal[k] = this.idx(Math.floor(this.ax[k]), Math.floor(this.ay[k])); this.planT[k] = 0; this.note(k, EV_SHELTER, ki | (e.home ? 4 : 0) | (k === e.lead ? 8 : 0)); } // arg: kind, 4 at home, 8 the lead
+      }
+    }
+    this.bev = { events, nextT: firstAlertT(seed), order, fired: 0 };
+  }
+  /** The event running now (alerted, not resolved), or null; one with a countdown before the power station. */
+  bevLive(): BevEvent | null { const ev = this.bev?.events; if (!ev) return null; return ev.find(e => e.state === "live" && e.kind !== "power") ?? ev.find(e => e.state === "live") ?? null; }
+  /** Where F jumps: a live event with a countdown, else the power station while it is under siege. */
+  bevUrgent(): BevEvent | null { const e = this.bevLive(); return !e ? null : e.kind !== "power" || (e.siege ?? 0) > 0 ? e : null; }
+  /** The people of the live or reserved (not power) event person k belongs to, or null. */
+  bevGroupOf(k: number): number[] | null {
+    if (!this.bev) return null;
+    for (const e of this.bev.events) if (e.kind !== "power" && (e.state === "live" || e.state === "reserved") && e.people.includes(k)) return e.people;
+    return null;
+  }
+  /** Where the event's living people are (their middle), or the building for the power station. */
+  bevCenter(e: BevEvent): [number, number] | null {
+    if (e.kind === "power") return [e.x, e.y];
+    let x = 0, y = 0, n = 0; for (const k of e.people) if (this.state[k] === CIV || this.state[k] === SAFE_CIV) { x += this.ax[k]; y += this.ay[k]; n++; }
+    return n ? [x / n, y / n] : null;
+  }
+  private bevAlive(e: BevEvent) { return e.people.filter(k => this.state[k] === CIV || this.state[k] === SAFE_CIV).length; }
+  private stepBev(dt: number) {
+    const b = this.bev!, now = this.time - C.WARNING_S;
+    let busy = false; // 0.62: one event with a countdown at a time; the power station runs in the background
+    for (const e of b.events) if (e.state === "live") { this.stepBevLive(e, dt); if (e.state === "live" && e.kind !== "power") busy = true; }
+    if (busy || this.roundDone || b.fired >= C.EVENTS_MAX || now < b.nextT) return;
+    for (const e of b.events) {
+      if (e.state !== "reserved") continue;
+      const need = e.kind === "research" ? 3 : e.kind === "power" ? 3 : 1;
+      const gone = this.bevAlive(e) < need || (e.kind === "mayor" && this.state[e.lead] !== CIV) || (e.kind === "class" && !e.people.some(k => this.age[k] < 18 && this.state[k] === CIV));
+      if (gone) { e.state = "lost"; e.frac = -1; this.bevRelease(e); continue; } // gone before the call came: dropped, no score (a class: no child left)
+      e.state = "live"; e.alertT = this.time; const cd = bevCountdown(e.kind); e.endT = cd === null ? null : this.time + cd; b.fired++;
+      for (const k of e.people) if (this.bevMark![k]) this.bevMark![k] = e.kind === "power" ? BM_CREW_LIVE : BM_WAIT; // the crew draws the infected now; the others hold the round until reached
+      const c = this.bevCenter(e); if (c) { e.x = c[0]; e.y = c[1]; }
+      this.ping("event", e.x, e.y); St.event(this.stats, St.SE_EVENT_START, this.time, e.x, e.y, BEV_KINDS.indexOf(e.kind));
+      if (e.kind === "power") b.nextT = nextAlertT(this.seed, b.fired, now); // runs until the round ends: the next one does not wait for it
+      return;
+    }
+  }
+  private stepBevLive(e: BevEvent, dt: number, ending = this.roundDone) {
+    const kids = e.people.filter(k => this.age[k] < 18), safeOf = (a: number[]) => a.filter(k => this.state[k] === SAFE_CIV).length;
+    if (e.kind === "power") { // the crew is inside; a siege (EVENT_SIEGE_N infected within EVENT_SIEGE_R for EVENT_SIEGE_S) breaks in
+      const cells = e.cells ?? [e.building]; let up = 0; for (const i of cells) if (this.map.tile[i] === BUILDING) up++;
+      const standing = up * 2 > cells.length; // most of the plant still stands
+      let dx = 0, dy = 0; for (const k of e.people) { dx += this.ax[k]; dy += this.ay[k]; } // the siege is at the crew's door
+      const n = this.countInf(dx / e.people.length, dy / e.people.length, C.EVENT_SIEGE_R, C.EVENT_SIEGE_N);
+      e.siege = n >= C.EVENT_SIEGE_N ? (e.siege ?? 0) + dt : Math.max(0, (e.siege ?? 0) - dt * 0.5);
+      if (!standing || e.siege >= C.EVENT_SIEGE_S || this.bevAlive(e) < 3) { // (3 of the crew must live to run it)
+        for (const k of e.people) if (this.state[k] === CIV) { if (standing) { this.note(k, EV_OVERRUN); this.bevTurn(k); } else { this.state[k] = DEAD; this.note(k, EV_DIED); } }
+        this.bevResolve(e, false, 0); return;
+      }
+      if (ending) this.bevResolve(e, true, this.bevAlive(e) / e.people.length);
+      return;
+    }
+    const c = this.bevCenter(e); if (c) { e.x = c[0]; e.y = c[1]; }
+    if (!e.reached) {
+      let by: Unit | null = null;
+      for (const u of this.units) {
+        const nav = C.UNITS[u.kind].mobile?.nav;
+        if (nav === "air" || nav === "water" || u.deployT || u.hp === -1 || u.extractT !== undefined) continue;
+        if (c && hyp(u.x - c[0], u.y - c[1]) <= C.EVENT_REACH_R) { by = u; break; }
+      }
+      const zoned = e.people.some(k => this.state[k] === SAFE_CIV || this.inZone[this.idx(Math.floor(this.ax[k]), Math.floor(this.ay[k]))] === 1);
+      if (by || zoned) {
+        e.reached = true;
+        for (const k of e.people) if (this.state[k] === CIV) { this.bevMark![k] = 0; this.plan[k] = PLAN_STRAIGHT; this.goal[k] = -1; this.resetProgress(k); this.note(k, EV_RESCUED, by ? 0 : 1); } // arg 1: a zone, not a unit
+        const lead = this.state[e.lead] === CIV ? e.lead : e.people.find(k => this.state[k] === CIV) ?? -1;
+        if (by && lead >= 0 && this.canOrder(by) && !(by.orders?.length)) this.issue(by, { k: "escort", x: Math.floor(this.ax[lead]), y: Math.floor(this.ay[lead]), who: lead }, false);
+      } else if (e.endT !== null && this.time >= e.endT) { // overrun: the infected break in
+        for (const k of e.people) if (this.state[k] === CIV) { this.note(k, EV_OVERRUN); this.bevTurn(k); }
+        this.bevResolve(e, false, 0); return;
+      }
+    }
+    // the win / loss checks (reached or not: a zone drawn over them counts too)
+    if (e.kind === "mayor") {
+      if (this.state[e.lead] === SAFE_CIV) this.bevResolve(e, true, 1);
+      else if (this.state[e.lead] !== CIV) this.bevResolve(e, false, 0);
+      else if (ending) this.bevResolve(e, false, 0);
+    } else if (e.kind === "research") {
+      const safe = safeOf(e.people), alive = this.bevAlive(e);
+      if (safe >= 3) this.bevResolve(e, true, safe / e.people.length);
+      else if (alive < 3 || ending) this.bevResolve(e, false, safe / e.people.length);
+    } else { // class: done when no child is still out in the city
+      const out = kids.filter(k => this.state[k] === CIV).length, f = kids.length ? safeOf(kids) / kids.length : 0;
+      if (out === 0 || ending) this.bevResolve(e, f >= 0.5, f);
+    }
+  }
+  private bevTurn(v: number) {
+    this.note(v, EV_TURNED);
+    this.state[v] = INF; this.mutant[v] = 0; this.hp[v] = C.INF_HP * this.infHpMul; this.chase[v] = 0;
+    this.civWep[v] = 0; this.civAmmo[v] = 0; this.civMilitia[v] = 0; this.civCd[v] = 0;
+    if (this.bevMark) this.bevMark[v] = 0;
+    this.infectedEver++; this.grieve(v); this.scare(this.ax[v], this.ay[v], 8, 0.95); // as a bite does
+  }
+  /** The battle is ending (round over or pulled out): live events resolve as the round's end decides; reserved ones
+   *  are dropped and their people let go. Runs before the score is taken. */
+  private bevSettle() {
+    if (!this.bev) return;
+    for (const e of this.bev.events) {
+      if (e.state === "live") this.stepBevLive(e, 0, true);
+      else if (e.state === "reserved") { e.state = "lost"; e.frac = -1; this.bevRelease(e); }
+    }
+  }
+  private bevRelease(e: BevEvent) {
+    for (const k of e.people) { if (this.bevMark) this.bevMark[k] = 0; if (this.state[k] === CIV && this.plan[k] === PLAN_SHELTER) { this.plan[k] = PLAN_STRAIGHT; this.goal[k] = -1; } }
+  }
+  /** Close an event: score, XP and money (a win pays now), the record, the ping, and the next alert's time. */
+  bevResolve(e: BevEvent, won: boolean, frac: number) {
+    e.state = won ? "won" : "lost"; e.frac = frac;
+    const r = bevReward(e.kind, won, frac, this.diff.incomeMul, this.diff.xpMul);
+    this.bevScore += r.score; this.bevXp += r.xp; if (r.cash > 0) this.earned += r.cash;
+    St.event(this.stats, won ? St.SE_EVENT_WON : St.SE_EVENT_LOST, this.time, e.x, e.y, BEV_KINDS.indexOf(e.kind));
+    (this.stats.bevents ??= []).push({ kind: e.kind, won, frac, score: r.score, cash: r.cash, xp: r.xp, title: e.title });
+    this.bevRelease(e);
+    const b = this.bev!; if (e.kind !== "power") b.nextT = nextAlertT(this.seed, b.fired, this.time - C.WARNING_S);
+  }
+
   /** The score as it stands: evacuated share, medal, city damage bonus and XP. */
   scoreNow(reason: string, zoneCredit = 0): Score {
     const cnt = this.counts();
@@ -5489,11 +5717,11 @@ export class Sim {
     const { intact, bill } = this.cityDamage();
     const emptiedAfterS = this.roundDone && this.roundEmptied && this.roundAt !== null ? Math.max(0, this.roundAt - C.WARNING_S) : null;
     const parts = roundParts({ pct, emptiedAfterS, intact, kills: this.kills, infAlive: this.counts().inf });
-    const score = roundScore(parts), medal = medalFor(score, pct);
+    const score = Math.max(0, Math.min(100, roundScore(parts) + this.bevScore)), medal = medalFor(score, pct); // 0.62: Battle Events add or take points
     const bonus = intact >= C.INTACT_BONUS_PCT ? "Light Touch" : 100 - intact >= C.SCORCHED_BONUS_PCT || bill >= C.BILLION ? "Scorched Earth" : null;
     const spent = this.spent(), perM = spent > 0 ? saved / (spent / 1e6) : 0;
     const underBudget = !!medal && spent <= C.UNDER_BUDGET_PCT * (this.budget + this.earned);
-    const xp = Math.max(0, Math.round((score * 10 + this.wave * 20 + (bonus ? C.BONUS_XP : 0) - this.nukesUsed * C.NUKE_XP_PENALTY) * this.diff.xpMul));
+    const xp = Math.max(0, Math.round((score * 10 + this.wave * 20 + (bonus ? C.BONUS_XP : 0) - this.nukesUsed * C.NUKE_XP_PENALTY) * this.diff.xpMul)) + this.bevXp; // 0.62: event XP is already scaled
     return { saved, pct, medal, reason, intact, bonus, xp, waves: this.wave, round: this.roundDone && saved > 0, damage: bill, spent, perM, underBudget, score, parts, kills: this.kills, left: cnt.civ - cnt.refusing, zoneHeld: cnt.safe,
       refused: cnt.refusing, refusedLost: cnt.refusedLost, talkedOut: this.talkedOut, broke: this.broke, civKilledByUs: this.civKilledByUs, civFriendlyFire: this.civFriendlyFire };
   }
@@ -5530,21 +5758,24 @@ export class Sim {
     this.roundDone = true; this.roundAt = this.time; this.roundEmptied = emptied;
     St.event(this.stats, St.SE_ROUND, this.time, 0, 0); // 0.57
     this.killsAtRound = this.kills; this.damageAtRound = this.cityDamage().bill;
+    this.bevSettle(); // 0.62: before the score freezes
     this.roundResult = this.scoreNow(reason, zoneCredit);
   }
 
+  /** 0.62: a Battle Event was called and nobody has reached its people yet (its countdown bounds the wait). */
+  private bevWaiting(): boolean { return !!this.bev && this.bev.events.some(e => e.state === "live" && e.kind !== "power" && !e.reached); }
   /** 0.40: someone is still on a family errand or waiting for family (the round isn't stalled). */
   private errandsActive(): boolean {
-    for (let k = 0; k < this.civN; k++) { const q = this.plan[k]; if (q >= PLAN_GATHER && q !== PLAN_REFUSE && (this.state[k] === CIV || this.state[k] === SAFE_CIV)) return true; }
+    for (let k = 0; k < this.civN; k++) { const q = this.plan[k]; if (q >= PLAN_GATHER && q !== PLAN_REFUSE && q !== PLAN_SHELTER && (this.state[k] === CIV || this.state[k] === SAFE_CIV)) return true; } // 0.62: sheltering is not an errand
     return false;
   }
   private checkEnd(force = false) {
     if (!force && this.tick % 10) return;
     const c = this.counts();
     if (!this.roundDone && this.phase === "battle") {
-      const left = c.civ - c.refusing + c.safe, out = this.evacuated.toLocaleString(); // 0.42: refusers at home don't hold the round up
+      const left = c.civ - c.refusing - c.bevStay + c.safe, out = this.evacuated.toLocaleString(); // 0.42: refusers at home don't hold the round up (0.62: nor sheltering event people)
       const few = left <= this.civN * C.ROUND_STRAGGLERS_PCT / 100;
-      if (c.safe > this.lastSafe || this.liftsFlown > this.lastLifts || (few && this.dayLife && this.errandsActive())) this.lastProgressT = this.time; // 0.40: families still on errands aren't a stall
+      if (c.safe > this.lastSafe || this.liftsFlown > this.lastLifts || (few && this.dayLife && this.errandsActive()) || this.bevWaiting()) this.lastProgressT = this.time; // 0.40: families still on errands aren't a stall
       this.lastSafe = c.safe; this.lastLifts = this.liftsFlown;
       const stay = c.refusing ? ` ${c.refusing.toLocaleString()} refused to leave.` : "";
       if (left === 0) this.endRound(this.evacuated ? `Round complete: everyone left alive is out. ${out} people saved.${stay}` : `Everyone is lost.${stay}`, true);
@@ -5563,6 +5794,7 @@ export class Sim {
         this.result = { ...r, reason: `You pulled out after ${this.wave} hordes. ${killsAfter.toLocaleString()} more infected killed after the round.`, killsAfter, damageAfter, civKilledByUs: this.civKilledByUs, civFriendlyFire: this.civFriendlyFire, mayhem: mayhem(killsAfter, damageAfter), xp: r.xp + Math.round(killsAfter * C.MAYHEM_XP_PER_KILL * this.diff.xpMul), waves: this.wave, damage: bill, intact, bonus };
       }
     } else {
+      this.bevSettle(); // 0.62
       this.result = this.scoreNow(this.calledIt ? `You called it there: ${this.evacuated.toLocaleString()} people got out.` : this.evacuated ? `You pulled out. ${this.evacuated.toLocaleString()} people got out.` : "You pulled out.");
     }
     this.phase = "over";

@@ -25,6 +25,7 @@ export type ShotOp =
   | { op: "retry" } // 0.58: ends a running battle as End here would, then Try again (plan kept)
   | { op: "ammo"; kind: string; n: number } // 0.60: every unit of a kind down to n rounds, spares gone
   | { op: "supply"; cls: "small" | "vehicle"; n: number } // 0.60: buy crates for the first zone
+  | { op: "bev"; kind: string } // 0.62: bring that Battle Event's alert forward to now
   | { op: "engineer"; scale: number } // 0.60: camera on the busiest engineer
   | { op: "store"; scale: number }; // 0.60: camera on the first zone's store point
 
@@ -62,6 +63,7 @@ export function parseOp(line: string): ShotOp {
     case "ammo": return a.length === 2 && /^[a-z0-9_]+$/.test(a[0]) ? { op, kind: a[0], n: num(a[1], line) } : bad(line);
     case "supply": return a.length === 2 && (a[0] === "small" || a[0] === "vehicle") ? { op, cls: a[0], n: num(a[1], line) } : bad(line);
     case "engineer": case "store": return a.length === 1 ? { op, scale: num(a[0], line) } : bad(line);
+    case "bev": return a.length === 1 && ["mayor", "class", "research", "power"].includes(a[0]) ? { op, kind: a[0] } : bad(line);
     case "report": return a.length === 1 && ["overview", "timeline", "units", "strikes", "town", "money", "heatmap"].includes(a[0]) ? { op, tab: a[0] } : bad(line);
     default: return bad(line);
   }

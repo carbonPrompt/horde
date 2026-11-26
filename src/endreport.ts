@@ -4,7 +4,8 @@ import { BY_ID } from "./achievements";
 import * as C from "./config";
 import { formatClock } from "./people";
 import { COLS, type Col, SE_SIRENS, SE_HORDE, SE_BREACH, SE_GATE_TO_WALL, SE_WALL_TO_GATE, SE_GATES_LOCKED, SE_BRIDGE, SE_STRIKE, SE_UNIT_PLACED,
-  SE_UNIT_LOST, SE_LIFT, SE_LIFT_ABORT, SE_DEMOLISH, SE_ROUND, SE_KEEP_FIGHTING, type OtherKill } from "./stats";
+  SE_UNIT_LOST, SE_LIFT, SE_LIFT_ABORT, SE_DEMOLISH, SE_ROUND, SE_KEEP_FIGHTING, SE_EVENT_START, SE_EVENT_WON, SE_EVENT_LOST, type OtherKill } from "./stats";
+import { bevReportHtml } from "./eventui";
 import type { BattleRecord } from "./battlerecord";
 
 export type Tab = "overview" | "timeline" | "units" | "strikes" | "town" | "money" | "heatmap";
@@ -29,7 +30,7 @@ export const DEFAULT_COLS: Col[] = ["saved", "inZone", "infected"];
 const OTHER_NAMES: Record<OtherKill, string> = { guard: "Wall guards", civilian: "Armed civilians", train: "Trains", bridge: "Bridges blown", demolition: "Demolitions", env: "Fire, fallout and other" };
 const EV_NAMES: Record<number, string> = { [SE_SIRENS]: "Sirens", [SE_HORDE]: "Horde", [SE_BREACH]: "Breach", [SE_GATE_TO_WALL]: "Gate closed to a wall", [SE_WALL_TO_GATE]: "Wall opened to a gate",
   [SE_GATES_LOCKED]: "Gates locked", [SE_BRIDGE]: "Bridge blown", [SE_STRIKE]: "Strike", [SE_UNIT_PLACED]: "Unit placed", [SE_UNIT_LOST]: "Unit lost", [SE_LIFT]: "Lift flown",
-  [SE_LIFT_ABORT]: "Lift waved off", [SE_DEMOLISH]: "Building brought down", [SE_ROUND]: "Round complete", [SE_KEEP_FIGHTING]: "Keep fighting" };
+  [SE_LIFT_ABORT]: "Lift waved off", [SE_DEMOLISH]: "Building brought down", [SE_ROUND]: "Round complete", [SE_KEEP_FIGHTING]: "Keep fighting", [SE_EVENT_START]: "Battle event", [SE_EVENT_WON]: "Battle event won", [SE_EVENT_LOST]: "Battle event lost" };
 const STRIP: Record<number, string> = { [SE_SIRENS]: "#facc15", [SE_HORDE]: "#f87171", [SE_BREACH]: "#ef4444", [SE_STRIKE]: "#fb923c", [SE_BRIDGE]: "#e879f9", [SE_GATES_LOCKED]: "#8b95a7", [SE_UNIT_LOST]: "#94a3b8", [SE_DEMOLISH]: "#c084fc" };
 const unitName = (k: string) => (C.UNITS as Record<string, { name: string }>)[k]?.name ?? k;
 const strikeName = (k: string) => (C.ABILITIES as Record<string, { name: string }>)[k]?.name ?? k;
@@ -136,7 +137,7 @@ function overview(r: BattleRecord, ctx: TabCtx): string {
   const broken = ctx.broken.length ? ctx.broken.map(x => `<div>${esc(BROKEN_NAMES[x.key] ?? x.key)}: <b>${x.key === "held" ? mmss(x.now) : x.key === "damage" ? money(x.now) : n0(x.now)}</b>${x.was !== null ? ` <span class="er-dim">was ${x.key === "held" ? mmss(x.was) : x.key === "damage" ? money(x.was) : n0(x.was)}</span>` : ""}</div>`).join("") : `<div class="er-dim">None this time.</div>`;
   return `<div class="er-kpis">${kpis}</div><div class="er-grid2"><div class="er-panel"><h3>The battle, minute by minute <span>hover for exact numbers</span></h3>${timelineSvg(r, DEFAULT_COLS, 880, 360)}</div>` +
     `<div class="er-panel"><h3>Kills by unit <span>${n0(t.kills)} total</span></h3>${kills}${top && top.kills ? `<div class="er-dim er-mt">Top unit: ${esc(top.label)}, ${n0(top.kills)} kills${t.longShot ? ` · longest sniper shot ${n0(t.longShot)} m` : ""}</div>` : ""}` +
-    `<h3 class="er-mt">What happened to the ${n0(t.people)} people</h3>${people}${ctx.live ? `<h3 class="er-mt">Records broken</h3><div class="er-records">${broken}</div>` : ""}</div></div>`; // 0.58: a past battle's report has no "broken" list
+    `<h3 class="er-mt">What happened to the ${n0(t.people)} people</h3>${people}${bevReportHtml(r.bevents ?? [])}${ctx.live ? `<h3 class="er-mt">Records broken</h3><div class="er-records">${broken}</div>` : ""}</div></div>`; // 0.58: a past battle's report has no "broken" list
 }
 
 function timeline(r: BattleRecord, ctx: TabCtx): string {

@@ -30,10 +30,11 @@ export const PING_STYLE: Record<PingKind, { color: string; r: number; label: str
   bite: { color: "#ff5252", r: 7, label: "People bitten in the city" },
   ammo: { color: "#ffd740", r: 10, label: "A unit is out of ammo" }, // 0.60
   crew: { color: "#ffb74d", r: 9, label: "An engineer was lost" }, // 0.60.1
+  event: { color: "#ffd54f", r: 12, label: "A battle event needs you" }, // 0.62
 };
 /** Which ring F jumps to: the newest of the most urgent kind still showing. */
 export function pickPing(pings: Ping[], now: number, life: number): Ping | null {
-  const rank: Record<PingKind, number> = { zone: 5, breach: 5, unit: 4, abort: 4, ammo: 4, wall: 3, crew: 3, bite: 1 };
+  const rank: Record<PingKind, number> = { zone: 5, breach: 5, unit: 4, abort: 4, ammo: 4, wall: 3, crew: 3, event: 5, bite: 1 };
   let best: Ping | null = null;
   for (const p of pings) if (now - p.t < life && (!best || rank[p.kind] > rank[best.kind] || (rank[p.kind] === rank[best.kind] && p.t > best.t))) best = p;
   return best;

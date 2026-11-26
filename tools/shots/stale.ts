@@ -9,6 +9,7 @@ export type Recipe = {
   action?: string[]; // clips: ops run while recording, one per frame step unless "advance"
   camera: { x: number; y: number; scale: number };
   seconds?: number; // clips: recording length
+  mutators?: string[]; // 0.62: mutators switched on for this recipe
   crop?: [number, number, number, number]; // x, y, w, h in CSS px
   rev: number; // bump to force a reshoot with no other change
 };

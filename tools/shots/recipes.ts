@@ -86,5 +86,7 @@ export const RECIPES: Recipe[] = [
     setup: [...BASE, "battle", "advance 240", "endround", "stats achievements", "cursor off"] },
   { ...FH, id: "stats-career", kind: "shot", size: [1600, 900], crop: [80, 16, 1440, 868], camera: { x: 191, y: 106, scale: 3 },
     setup: [...BASE, "battle", "advance 240", "endround", "retry", ...BASE, "battle", "advance 240", "endround", "stats career", "cursor off"] },
+  // 0.62: Battle Events (the mutator is on for this one; the alert key takes the camera to the event)
+  { ...FH, id: "bev-card", kind: "shot", mutators: ["battle_events"], camera: { x: 191, y: 106, scale: 4 }, setup: [...BASE, "battle", "advance 4", "bev mayor", "advance 1", "key `", "advance 0.5", "cursor off"] },
   { ...FH, id: "howto-12-pause", kind: "shot", camera: { x: 191, y: 106, scale: 3 }, setup: [...BASE, "battle", "advance 10", "key Escape", "cursor off"] },
 ];

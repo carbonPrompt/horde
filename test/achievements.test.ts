@@ -9,7 +9,7 @@ const zeroC = () => Object.fromEntries(REC_COUNTER_KEYS.map(k => [k, 0])) as any
 function bf(p: Partial<BattleFacts> = {}): BattleFacts {
   return { kind: "campaign", cityId: "fairhaven", difficulty: "medium", sirenMin: 600, round: false, medal: null, mayhem: 0, underBudget: false, bonus: null, left: -1, refused: 0,
     saved: 0, byTrain: 0, lifts: 0, liftsAborted: 0, kills: 0, hordes: 0, held: 0, breaches: 0, damage: 0, intact: 100, nukes: 0, bridges: 0, civKilledByUs: 0, unitsLost: 0,
-    counters: zeroC(), units: [], strikes: [], town: null, ...p };
+    counters: zeroC(), units: [], strikes: [], town: null, bevents: [], ...p };
 }
 const cnt = (p: any) => ({ ...zeroC(), ...p });
 function cf(p: Partial<CareerFacts> = {}): CareerFacts {
@@ -122,11 +122,11 @@ const CASES: [string, any, any][] = [
   ["back_to_school", bf({ ...done, difficulty: "insane", town: town({ schoolKids: 40, schoolKidsSafe: 40 }) }), bf({ ...done, difficulty: "insane", town: town({ schoolKids: 40, schoolKidsSafe: 39 }) })],
 ];
 
-test("117 achievements in the ten groups, ids unique", () => {
-  expect(ACHIEVEMENTS.length).toBe(117);
-  expect(new Set(ACHIEVEMENTS.map(a => a.id)).size).toBe(117);
+test("122 achievements in the ten groups, ids unique", () => {
+  expect(ACHIEVEMENTS.length).toBe(122);
+  expect(new Set(ACHIEVEMENTS.map(a => a.id)).size).toBe(122);
   const per = Object.fromEntries(GROUPS.map(g => [g, ACHIEVEMENTS.filter(a => a.group === g).length]));
-  expect(per).toEqual({ Evacuation: 13, Combat: 16, Defense: 12, Destruction: 10, Units: 20, Strikes: 12, Cities: 14, Career: 8, Challenge: 6, People: 6 });
+  expect(per).toEqual({ Evacuation: 13, Combat: 16, Defense: 12, Destruction: 10, Units: 20, Strikes: 12, Cities: 14, Career: 8, Challenge: 11, People: 6 }); // 0.62: +5 Battle Events
 });
 
 test("the 16 achievements from before 0.59 keep their ids", () => {
@@ -261,4 +261,18 @@ test("paratrooper drop kills add to the drop, not to the kill buckets", () => {
   const u = { kind: "para" } as any; const ui = unitIndex(r, u, 0);
   for (let i = 0; i < 5; i++) { killBy(r, i, { unit: ui }); dropKill(r, si); }
   expect(r.strikes[si].dropKills).toBe(5); expect(r.strikes[si].kills).toBe(0); expect(killTotal(r)).toBe(5);
+});
+
+test("0.62: Battle Events achievements", () => {
+  const o = (kind: string, won: boolean, frac = won ? 1 : 0) => ({ kind, won, frac, score: won ? 4 : -5, cash: 0, xp: 0, title: "" });
+  expect(BY_ID.bev_mayor.test(bf({ bevents: [o("mayor", true)] }))).toBe(true);
+  expect(BY_ID.bev_mayor.test(bf({ bevents: [o("mayor", false)] }))).toBe(false);
+  expect(BY_ID.bev_class.test(bf({ bevents: [o("class", true, 1)] }))).toBe(true);
+  expect(BY_ID.bev_class.test(bf({ bevents: [o("class", true, 0.8)] }))).toBe(false);
+  expect(BY_ID.bev_research.test(bf({ bevents: [o("research", true)] }))).toBe(true);
+  expect(BY_ID.bev_power.test(bf({ bevents: [o("power", true)] }))).toBe(true);
+  expect(BY_ID.bev_all.test(bf({ bevents: [o("mayor", true), o("power", true), o("research", true)] }))).toBe(true);
+  expect(BY_ID.bev_all.test(bf({ bevents: [o("mayor", true), o("power", true)] }))).toBe(false);
+  for (const id of ["bev_mayor", "bev_class", "bev_research", "bev_power", "bev_all"]) { expect(BY_ID[id].group).toBe("Challenge"); expect(BY_ID[id].how).not.toContain("—"); }
+  expect(BY_ID.bev_all.tier).toBe(3);
 });

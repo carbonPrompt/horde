@@ -4,7 +4,7 @@
 // mode or with mods are kept in the history, marked, and stay out of the career and the records.
 import * as C from "./config";
 import type { Score } from "./sim";
-import { COLS, OTHER_KILLS, REC_COUNTER_KEYS, recCounters, type Col, type OtherKill, type RecCounters, type Recorder, type StrikeRec, type UnitRec } from "./stats";
+import { COLS, OTHER_KILLS, REC_COUNTER_KEYS, recCounters, type Col, type OtherKill, type RecCounters, type Recorder, type StrikeRec, type UnitRec, type BevOutcome } from "./stats";
 import type { TownReport, TownSummary, TownStory, TownRefuser, StoryTag } from "./townreport";
 
 export type BattleKind = "campaign" | "real" | "quick" | "daily" | "osm";
@@ -22,6 +22,7 @@ export interface BattleRecord {
   meta: BattleMeta; outcome: BattleOutcome; totals: BattleTotals; units: UnitRec[]; strikes: StrikeRec[]; other: Record<OtherKill, number>;
   roundAt: number | null; samples?: Record<Col, number[]>; events?: Recorder["ev"]; town?: TownReport;
   counters?: RecCounters; earned?: string[]; // 0.59: achievement inputs; ids earned in this battle
+  bevents?: BevOutcome[]; // 0.62: Battle Events and how they ended
 }
 export interface RecRef { v: number; id: string; city: string; diff: string }
 export interface Records { mostSaved?: RecRef; mostKills?: RecRef; unitKills?: RecRef & { label: string }; damage?: RecRef; held?: RecRef; perM?: RecRef; familiesWhole?: RecRef; city: Record<string, { saved: RecRef }> }
@@ -49,7 +50,7 @@ export function makeRecord(meta: BattleMeta, outcome: BattleOutcome, score: Scor
   const copy = <T>(v: T): T => JSON.parse(JSON.stringify(v));
   return { meta: copy(meta), outcome: copy(outcome), totals, units: copy(rec.units), strikes: copy(rec.strikes), other: copy(rec.other),
     roundAt: extras.roundAt, samples: compactSamples(rec.cols), events: compactEvents(rec.ev), ...(extras.town ? { town: copy(extras.town) } : {}),
-    counters: recCounters(rec, extras.roundAt), ...(extras.earned ? { earned: [...extras.earned] } : {}) };
+    counters: recCounters(rec, extras.roundAt), ...(extras.earned ? { earned: [...extras.earned] } : {}), ...(rec.bevents?.length ? { bevents: copy(rec.bevents) } : {}) };
 }
 
 // stored compactly (history files hold 200 timelines): times to 0.1 s, places to whole cells, counts and money whole
@@ -193,6 +194,8 @@ function cleanRecord(b: unknown): BattleRecord | null {
   const town = cleanTown(b.town); if (town) out.town = town;
   if (isObj(b.counters)) out.counters = Object.fromEntries(REC_COUNTER_KEYS.map(k => [k, pos(b.counters[k])])) as unknown as RecCounters;
   if (Array.isArray(b.earned)) out.earned = b.earned.filter((x: unknown): x is string => typeof x === "string" && /^[a-z0-9_]{1,40}$/.test(x)).slice(0, 200);
+  if (Array.isArray(b.bevents)) out.bevents = b.bevents.filter(isObj).slice(0, 10).map((e: any) => ({ kind: ["mayor", "class", "research", "power"].includes(e.kind) ? e.kind : "mayor", won: e.won === true, frac: Math.max(0, Math.min(1, Number(e.frac) || 0)),
+    score: Math.max(-10, Math.min(10, Number(e.score) || 0)), cash: Math.max(0, Math.min(1e9, Number(e.cash) || 0)), xp: Math.max(0, Math.min(1e5, Number(e.xp) || 0)), title: typeof e.title === "string" ? e.title.replace(/[<>&"]/g, "").slice(0, 160) : "" })); // 0.62
   return out;
 }
 

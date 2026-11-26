@@ -6,7 +6,7 @@ import * as C from "./config";
 import type { Score } from "./sim";
 import type { BattleKind, BattleRecord, Career, History } from "./battlerecord";
 import { countsInCareer } from "./battlerecord";
-import { recCounters, REC_COUNTER_KEYS, type RecCounters, type Recorder } from "./stats";
+import { recCounters, REC_COUNTER_KEYS, type RecCounters, type Recorder, type BevOutcome } from "./stats";
 import type { TownSummary } from "./townreport";
 import { RANKS } from "./progress";
 
@@ -26,6 +26,7 @@ export interface BattleFacts {
   units: { kind: string; kills: number; lost: boolean }[];
   strikes: { kind: string; kills: number; civ: number; dropKills: number }[];
   town: TownSummary | null;
+  bevents: BevOutcome[]; // 0.62: Battle Events this battle (empty without the mutator)
 }
 /** The career, as the achievements see it. medals: best medal per "<cityId>@<difficulty>" (legacy medals included). */
 export interface CareerFacts {
@@ -196,6 +197,13 @@ ccount("Career", "career_lifts_10k", "Ten Thousand Lifts", 3, "Fly 10,000 evac l
 ccount("Career", "general", "General", 4, "Reach the top rank (General), outside Dev mode.", c => c.xp, RANKS[RANKS.length - 1][1]);
 
 // Challenge (6)
+// 0.62: Battle Events (the mutator)
+const bevWon = (f: BF, kind: string) => f.bevents.some(e => e.kind === kind && e.won);
+battle("Challenge", "bev_mayor", "Chain of Command", 2, "Battle Events: get the Mayor into a safe zone alive.", f => bevWon(f, "mayor"));
+battle("Challenge", "bev_class", "Recess", 2, "Battle Events: save every child of a trapped class.", f => f.bevents.some(e => e.kind === "class" && e.won && e.frac >= 1));
+battle("Challenge", "bev_research", "Research Continues", 2, "Battle Events: get the research team out (at least 3 of 4).", f => bevWon(f, "research"));
+battle("Challenge", "bev_power", "Lights On", 2, "Battle Events: keep the power station running until the round ends.", f => bevWon(f, "power"));
+battle("Challenge", "bev_all", "All Hands", 3, "Battle Events: win 3 events in one battle.", f => f.bevents.filter(e => e.won).length >= 3, f => [f.bevents.filter(e => e.won).length, 3]);
 battle("Challenge", "ground_game", "Boots Only", 2, "Complete a round without calling in any strike.", f => f.round && f.saved > 0 && f.strikes.length === 0);
 battle("Challenge", "ground_pounder", "Ground Pounder", 3, "Complete a round with no aircraft: no Apache, no Reaper, no strikes from the air (Artillery Barrage and Tomahawk are allowed).",
   f => f.round && f.saved > 0 && !f.units.some(u => u.kind === "apache" || u.kind === "reaper") && !f.strikes.some(s => AIR_STRIKES.includes(s.kind)));
@@ -253,7 +261,7 @@ export function factsFromRecord(r: BattleRecord): BattleFacts {
     damage: t.damage, intact: t.intact, nukes: t.nukes, bridges: t.bridges, civKilledByUs: t.civKilledByUs, unitsLost: t.unitsLost, counters,
     units: r.units.map(u => ({ kind: u.kind, kills: u.kills, lost: u.lostT >= 0 })),
     strikes: r.strikes.map(s => ({ kind: s.kind, kills: s.kills, civ: s.civ, dropKills: s.dropKills ?? 0 })),
-    town: r.town?.summary ?? null,
+    town: r.town?.summary ?? null, bevents: r.bevents ?? [],
   };
 }
 
@@ -277,7 +285,7 @@ export function factsLive(s: LiveSim, kind: BattleKind, cityId: string): BattleF
     civKilledByUs: s.civKilledByUs, unitsLost: r.units.filter(u => u.lostT >= 0).length, counters: recCounters(r, s.roundAt),
     units: r.units.map(u => ({ kind: u.kind, kills: u.kills, lost: u.lostT >= 0 })),
     strikes: r.strikes.map(x => ({ kind: x.kind, kills: x.kills, civ: x.civ, dropKills: x.dropKills ?? 0 })),
-    town: null,
+    town: null, bevents: s.stats.bevents ?? [],
   };
 }
 

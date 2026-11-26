@@ -45,7 +45,7 @@ export async function runRecipe(cdp: Cdp, r: Recipe, outDir: string, pageUrl = "
       for (let i = 0; i < 100 && !(await cdp.eval("!!(window.hordeShot && document.readyState === 'complete')")); i++) await Bun.sleep(100);
     }
     const J = JSON.stringify;
-    await cdp.eval(`hordeShot.load(${J(r.city)}, ${r.seed}, ${r.startMin}); hordeShot.run([${J(`camera ${r.camera.x},${r.camera.y} ${r.camera.scale}`)}]); hordeShot.run(${J(r.setup)}); ${frames2}`, 300000); // 0.58: a setup can play two battles
+    await cdp.eval(`hordeShot.load(${J(r.city)}, ${r.seed}, ${r.startMin}, ${J(r.mutators ?? [])}); hordeShot.run([${J(`camera ${r.camera.x},${r.camera.y} ${r.camera.scale}`)}]); hordeShot.run(${J(r.setup)}); ${frames2}`, 300000); // 0.58: a setup can play two battles
     const out = join(outDir, mediaFile(r).replace(/^assets\/codex\//, ""));
     if (r.kind === "shot") {
       const raw = join(tmp, "raw.png"), small = join(tmp, "small.png");

@@ -185,6 +185,14 @@
   #s-record td:first-child { white-space: nowrap; }
   .st-link { cursor: pointer; } .st-link:hover { background: #1e2532; }
   /* 0.60: Inventory window (over the map, never pauses) */
+  /* 0.62: Battle Events card, under the top bar */
+  #bev { position: fixed; right: 12px; top: 96px; width: 300px; z-index: 30; background: rgba(20, 16, 6, 0.94); border: 1px solid #ffd54f; border-radius: 10px; padding: 9px 12px; box-shadow: 0 0 18px rgba(255, 213, 79, 0.35); font-size: 12px; line-height: 1.35; }
+  #bev .bev-head { font-size: 10px; font-weight: 800; letter-spacing: 1px; color: #ffd54f; }
+  #bev .bev-title { font-weight: 700; color: #fff; margin: 2px 0; }
+  #bev .bev-where, #bev .bev-goal { color: #cbd5e1; }
+  #bev .bev-clock { color: #ffd54f; font-weight: 700; margin-top: 4px; font-variant-numeric: tabular-nums; }
+  #bev .bev-out.won { color: #4ade80; font-weight: 800; margin-top: 4px; } #bev .bev-out.lost { color: #f87171; font-weight: 800; margin-top: 4px; }
+  #bev button { margin-top: 6px; padding: 2px 10px; font-size: 11px; }
   #inv { position: fixed; left: 50%; top: 64px; transform: translateX(-50%); width: min(820px, calc(100vw - 24px)); max-height: calc(100vh - 300px); overflow: auto; z-index: 40;
     background: rgba(17, 22, 31, 0.96); border: 1px solid var(--line-bright); border-radius: 12px; padding: 12px 16px; box-shadow: 0 12px 40px rgba(0,0,0,.5); font-size: 13px; }
   #inv[hidden] { display: none; }
@@ -662,7 +670,7 @@
     <button id="devbtn" hidden title="F10">DEV</button>
   </header>
   <main>
-    
+    <div id="bev" hidden></div>
     <div id="timepick" hidden><div class="tp-box">
       <h2>When does it start?</h2>
       <p>The sirens go off at this time. Everyone gets the phone alert at once. Where people are depends on the hour.</p>

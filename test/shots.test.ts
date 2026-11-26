@@ -137,3 +137,8 @@ test("0.60: supply shot ops", () => {
   expect(parseOp("store 4")).toEqual({ op: "store", scale: 4 });
   expect(() => parseOp("supply shells 3")).toThrow();
 });
+
+test("0.62: the bev op forces a Battle Event live", () => {
+  expect(parseOp("bev mayor")).toEqual({ op: "bev", kind: "mayor" });
+  expect(() => parseOp("bev nobody")).toThrow(/bad shot op/);
+});

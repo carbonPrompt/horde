@@ -165,11 +165,22 @@ export const EV_HEAD_HOME = 10, EV_HOME_WAIT = 11, EV_FAMILY_TOGETHER = 12, EV_F
 export const PLAN_NONE = 0, PLAN_STRAIGHT = 1, PLAN_GATHER = 2, PLAN_MEET = 3, PLAN_FETCH = 4, PLAN_SCHOOL_WAIT = 5,
   PLAN_HOME_WAIT = 6, PLAN_FOLLOW = 7, PLAN_CLASS = 8, // 0.41: PLAN_CLASS: a class lining up with its teachers, then walking to the zone
   PLAN_REFUSE = 9, // 0.42: refusing to leave, sheltering at home
-  PLAN_GO_BACK = 10; // 0.43: going back toward a loved one who just turned (goal: that person)
+  PLAN_GO_BACK = 10, // 0.43: going back toward a loved one who just turned (goal: that person)
+  PLAN_SHELTER = 11; // 0.62: a Battle Event's people: stay put at the goal cell (sheltering, or the power station crew holding on)
 // 0.42: refusers, teens going alone
 export const EV_REFUSE = 23, EV_BROKE = 24, EV_TALKED_OUT = 25, EV_SOLO = 26;
 // 0.43: loved ones turning (arg: the person who turned)
 export const EV_SAW_TURN = 27, EV_FROZE = 28, EV_GO_BACK = 29, EV_GRIEF_STAY = 30;
+// 0.62: Battle Events (arg: the event kind index in BEV_KINDS)
+export const EV_SHELTER = 31, EV_RESCUED = 32, EV_OVERRUN = 33, EV_CREW = 34;
+/** 0.62: EV_SHELTER's words. arg: event kind (0 mayor, 1 class, 2 research) | 4 at home | 8 the event's lead. */
+export function shelterWords(arg: number): string {
+  const kind = arg & 3, home = (arg & 4) !== 0, lead = (arg & 8) !== 0;
+  if (kind === 0) return lead ? `was the Mayor, ${home ? "at home with family" : "at work with staff"} when the sirens went, and sheltered there`
+    : `was ${home ? "at home" : "at work"} with the Mayor when the sirens went and sheltered there`;
+  if (kind === 1) return lead ? "was teaching when the sirens went and was trapped at school with the class" : "was trapped at school with the class";
+  return lead ? "led the research team that sheltered at work" : "sheltered at work with the research team";
+}
 export const FATE_EVAC = 3, FATE_TURNED = 4, FATE_CRUSHED = 5, FATE_KILLED_BY_US = 6, FATE_FRIENDLY_FIRE = 7, FATE_DIED = 8;
 /** True for the events that end a person's part in the round. */
 export function isEnding(code: number): boolean { return code >= EV_EVAC && code <= EV_DIED; }
@@ -196,6 +207,10 @@ export function storyLine(code: number, arg: number, nameOf: (k: number) => stri
     case EV_FROZE: return "froze in shock";
     case EV_GO_BACK: return `went back for ${nameOf(arg)}`;
     case EV_GRIEF_STAY: return `won't leave now, not after losing ${nameOf(arg)}`;
+    case EV_SHELTER: return shelterWords(arg);
+    case EV_RESCUED: return arg === 1 ? "was inside a safe zone drawn over them" : "was reached by a ground unit and led out";
+    case EV_OVERRUN: return "was there when the infected broke in";
+    case EV_CREW: return "stayed at the power station to keep it running";
     case EV_SAFE: return `reached Zone ${arg + 1}`;
     case EV_LEFT_ZONE: return `left Zone ${arg + 1}`;
     case EV_EVAC: return arg === 1 ? "left on an evacuation train" : "flown out";

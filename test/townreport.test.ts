@@ -133,3 +133,17 @@ test("a lone refuser who ran and died reads 'did not make it'", () => {
   const r = buildTownReport(input([[{ first: "Joe", last: "Smith", age: 70, refuser: 3, fate: FATE_TURNED }]]), 1);
   expect(r.refusers[0].what).toContain("did not make it");
 });
+
+test("0.62: an event person's story comes first and tells the event", async () => {
+  const { EV_SHELTER, EV_RESCUED } = await import("../src/people");
+  const base = three();
+  const inp = input([
+    ...[[{ first: "Rosa", last: "Alvarez", age: 41, fate: FATE_EVAC, story: [evac(1860)] }, { first: "Mateo", last: "Alvarez", age: 9, fate: FATE_EVAC, story: [evac(1860)] }]],
+    [{ first: "Ann", last: "Lee", age: 52, fate: FATE_EVAC, place: PL_WORK, story: [{ t: 0, code: EV_SHELTER, arg: 0 }, { t: 900, code: EV_RESCUED, arg: 0 }, evac(1500)] }],
+  ], { priority: [2] } as any);
+  expect(base.civN).toBe(6);
+  const r = buildTownReport(inp, 3);
+  expect(r.stories[0].members).toContain(2);
+  expect(r.stories[0].text).toMatch(/Mayor|meeting/);
+  expect(r.stories[0].text).toMatch(/reached/);
+});

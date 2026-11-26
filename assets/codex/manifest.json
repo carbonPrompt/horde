@@ -31,6 +31,14 @@
   "w": 960,
   "h": 262
  },
+ "bev-card": {
+  "version": "0.62.0",
+  "rev": 1,
+  "recipeHash": "94efd44dec1d",
+  "bytes": 67417,
+  "w": 960,
+  "h": 540
+ },
  "chinook-drop": {
   "version": "0.61.0",
   "rev": 1,
@@ -128,10 +136,10 @@
   "h": 178
  },
  "end-report-overview": {
-  "version": "0.61.0",
+  "version": "0.62.0",
   "rev": 1,
   "recipeHash": "10ef0fdf0bdf",
-  "bytes": 65047,
+  "bytes": 65045,
   "w": 1520,
   "h": 800
  },
@@ -200,10 +208,10 @@
   "h": 262
  },
  "howto-12-pause": {
-  "version": "0.61.0",
+  "version": "0.62.0",
   "rev": 1,
   "recipeHash": "836bece728ec",
-  "bytes": 118824,
+  "bytes": 118849,
   "w": 960,
   "h": 540
  },
@@ -328,18 +336,18 @@
   "h": 262
  },
  "stats-achievements": {
-  "version": "0.61.0",
+  "version": "0.62.0",
   "rev": 1,
   "recipeHash": "11881149e41d",
-  "bytes": 118535,
+  "bytes": 118802,
   "w": 1440,
   "h": 868
  },
  "stats-career": {
-  "version": "0.61.0",
+  "version": "0.62.0",
   "rev": 1,
   "recipeHash": "9b2bb22cfbe4",
-  "bytes": 78953,
+  "bytes": 79049,
   "w": 1440,
   "h": 868
  },

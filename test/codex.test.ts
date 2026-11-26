@@ -353,3 +353,11 @@ test("0.56 review #3: How to Play is added to the open sections once, not on eve
   const render = src.slice(src.indexOf("const render = () => {"), src.indexOf("const render = () => {") + 600);
   expect(render).not.toContain('openSet.add("howto")');
 });
+
+test("0.62: a Battle Events entry says what counts and what it pays", () => {
+  const { allEntries } = require("../src/codex");
+  const e = allEntries().find((x: any) => x.id === "battle-events");
+  expect(e).toBeTruthy();
+  const txt = JSON.stringify(e);
+  for (const w of ["Mayor", "class", "research", "power station", "score", "XP"]) expect(txt).toContain(w);
+});

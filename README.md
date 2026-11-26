@@ -63,7 +63,8 @@ crush infected they drive over. Shelling leaves craters that slow everyone cross
 rubble, and a Recall button pulls your mobile units back to the zone.
 
 Real-world prices (budgets in the millions), an arsenal from rifle squads to HIMARS, Abrams, Apaches, AC-130s and
-Tomahawks (with per-battle stockpiles), strike orders, XP unlocks, achievements, daily challenges, mutators, mods
+Tomahawks (with per-battle stockpiles), strike orders, XP unlocks, achievements, daily challenges, mutators (Battle
+Events adds rescues of real townspeople mid-battle: the Mayor, a trapped class, a research team, the power station), mods
 (see `MODDING.md`), and real cities from OpenStreetMap.
 
 ## Build it yourself
