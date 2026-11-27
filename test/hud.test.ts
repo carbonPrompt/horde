@@ -3,9 +3,9 @@ import { expect, test } from "bun:test";
 import { commandCard, selectionGrid, buildTabs, infoSource } from "../src/hud";
 
 const base = { phase: "battle" as const, orderable: [], anySelected: false, armed: null, tool: "pan" };
-const TOOLS = ["zone", "gate", "remove", "order", "pan", "heatmap", "recall", "closegates", "clear"];
+const TOOLS = ["zone", "gate", "remove", "order", "pan", "heatmap", "recall", "closegates"]; // 0.63.1: Clear Zone moved to the Esc menu
 
-test("RF1: nothing selected: the card holds the 9 tools, the current one is on", () => {
+test("RF1: nothing selected: the card holds the 8 tools, the current one is on", () => {
   const c = commandCard({ ...base, tool: "gate" });
   expect(c.map(b => b.id)).toEqual(TOOLS);
   expect(c.find(b => b.id === "gate")!.on).toBe(true);
@@ -85,7 +85,7 @@ test("0.51.1: the panel's buttons carry tooltips instead of text labels", () => 
   const html = fs.readFileSync(import.meta.dir + "/../index.html", "utf8") as string;
   const tools = /<div id="cmdtools">([\s\S]*?)<\/div>\s*<div id="cmdorders"/.exec(html)![1];
   const buttons = tools.match(/<button[^>]*>/g)!;
-  expect(buttons.length).toBe(13); // 0.60: + Inventory (two full rows of five); 0.63: + the Grid card's 3 menu buttons (hidden in WASD)
+  expect(buttons.length).toBe(12); // 0.60: + Inventory; 0.63: + the Grid card's 3 menu buttons (hidden in WASD); 0.63.1: - Clear Zone (Esc menu)
   for (const b of buttons) { expect(b).toContain("data-tip="); expect(b).not.toContain(" title="); }
   expect(html).toContain('id="uitip"');
   const main = fs.readFileSync(import.meta.dir + "/../src/main.ts", "utf8") as string;

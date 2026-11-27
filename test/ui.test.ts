@@ -453,7 +453,7 @@ test("0.51: the old selection bar is gone; the command card has a tools page and
   const act = /<div id="hud-actions">([\s\S]*?)<\/section>/.exec(html)![1];
   expect(act).toContain('id="cmdtools"'); expect(act).toContain('id="cmdorders"');
   for (const t of ["zone", "gate", "remove", "order", "pan"]) expect(act).toContain(`data-tool="${t}"`);
-  for (const id of ["heatmapbtn", "recall", "closegates", "clear"]) expect(act).toContain(`id="${id}"`);
+  for (const id of ["heatmapbtn", "recall", "closegates"]) expect(act).toContain(`id="${id}"`); // 0.63.1: Clear Zone moved to the Esc menu
 });
 
 test("0.51: the info card and the person window live in the info panel; the selection panel is drawn by main", () => {

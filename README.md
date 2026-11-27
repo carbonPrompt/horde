@@ -30,7 +30,8 @@ every release, and Settings can install updates automatically. Your save is back
 - **Command.** A classic RTS bottom panel: minimap, info card, selection, three build menus (Units, Actions,
   Support) and the selected units' orders, every button a picture with its key (hover for name, key and price). Two
   key layouts: **Grid (RTS)**, the default, where Q W E R T / A S D F G / Z X C V B match the 5x3 command card's places
-  (the build menus open in the card: Z then T is a tank, X then Q an airstrike; Shift keeps a menu open), and **WASD
+  (the build menus open in the card: Z then T is a tank, X then Q an airstrike; the other menus' keys switch in one
+  press; Shift keeps a menu open), and **WASD
   camera**, where WASD moves the map and the other keys sit around it. Every key can be changed on the Controls page in
   Settings, and each layout keeps its own changes. Camera spots: Ctrl+F6 to F9 saves a view, F6 to F9 jumps back. Battle groups: Ctrl+1 to Ctrl+5 saves a group (or a safe
   zone), the number selects it and twice jumps there, shown as tabs with unit pictures. Keys 6 to 0 are a quick bar you

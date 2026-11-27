@@ -49,7 +49,7 @@ export const ACTIONS: readonly Action[] = [
   A("tool.zone", "Nothing selected", "idle", "z", "Safe Zone"), A("tool.remove", "Nothing selected", "idle", "x", "Sell/Evac"),
   A("tool.order", "Nothing selected", "idle", "c", "Order"), A("tool.pan", "Nothing selected", "idle", "v", "Move/Aim"),
   A("tool.gate", "Nothing selected", "idle", "g", "Gate/Wall"), A("tool.recall", "Nothing selected", "idle", "q", "Recall"),
-  A("tool.closegates", "Nothing selected", "idle", "l", "Lock Gates"), A("tool.clear", "Nothing selected", "idle", "k", "Clear Zone"),
+  A("tool.closegates", "Nothing selected", "idle", "l", "Lock Gates"), // 0.63.1: Clear Zone has no key (pressed by accident too easily); it is in the Esc menu
   ...[1, 2, 3, 4, 5].map(n => A(`group.${n}`, "Battle groups", "always", String(n), `Group ${n}`)),
   ...["6", "7", "8", "9", "0"].map((k, i) => A(`quick.${i + 1}`, "Quick bar", "always", k, `Quick bar slot ${i + 1}`)),
   A("menu.units", "Build menus", "always", "b", "Units menu"), A("menu.actions", "Build menus", "always", "m", "Actions menu"), A("menu.support", "Build menus", "always", "y", "Support menu"),
@@ -61,18 +61,19 @@ export const ACTIONS: readonly Action[] = [
 const BY_ID = new Map(ACTIONS.map(a => [a.id, a]));
 /** 0.63: the Grid preset's defaults where they differ from the table's (WASD) key. Positions: design tables. */
 const GRID_ROWS: [string, string][] = [
-  ["tool.zone", "q"], ["tool.gate", "w"], ["tool.remove", "e"], ["tool.order", "r"], ["tool.pan", "t"], ["tool.recall", "a"], ["tool.closegates", "s"], ["tool.clear", "d"], ["tool.heatmap", "f"], ["tool.inventory", "g"],
-  ["menu.units", "z"], ["menu.actions", "x"], ["menu.support", "c"], ["menu.back", "b"],
+  ["tool.zone", "q"], ["tool.gate", "w"], ["tool.remove", "e"], ["tool.order", "r"], ["tool.pan", "t"], ["tool.recall", "a"], ["tool.closegates", "s"], ["tool.heatmap", "f"], ["tool.inventory", "g"],
+  ["menu.units", "z"], ["menu.actions", "x"], ["menu.support", "c"], // 0.63.1: no Back key on Grid (Esc), the other menus' keys switch
   ["order.amove", "q"], ["order.patrol", "w"], ["order.escort", "e"], ["order.target", "r"], ["order.topup", "t"], ["order.stop", "a"], ["order.standby", "s"], ["order.fortify", "d"], ["order.remove", "b"],
 ];
-const GRID_MENU: Record<MenuId, string[]> = {
-  units: ["garrison", "sniper", "turret", "apc", "tank", "mortar", "howitzer", "himars", "gunboat", "battleship", "apache", "reaper", "gunship"],
-  actions: ["airstrike", "a10", "firebomb", "cluster", "barrage", "tomahawk", "moab", "nuke", "para", "c4", "supply_drop", "depot"],
+/** Each menu's items by place (GRID_ORDER index; null = a place left for another menu's key, 0.63.1). */
+const GRID_MENU: Record<MenuId, (string | null)[]> = {
+  units: ["garrison", "sniper", "turret", "apc", "tank", "mortar", "howitzer", "himars", "gunboat", "battleship", "apache", null, null, "reaper", "gunship"],
+  actions: ["airstrike", "a10", "firebomb", "cluster", "barrage", "tomahawk", "moab", "nuke", "para", "c4", null, "supply_drop", null, "depot"],
   support: ["evac", "command", "repair", "radio", "supply", "budget", "police", "militia"],
 };
 const GRID_KEYS: Record<string, string | null> = Object.fromEntries([
   ...GRID_ROWS, ...["up", "left", "down", "right"].map(d => [`camera.${d}`, null] as [string, null]),
-  ...MENUS.flatMap(m => GRID_MENU[m].map((t, i) => [`build.${t}`, GRID_ORDER[i]] as [string, string])),
+  ...MENUS.flatMap(m => GRID_MENU[m].flatMap((t, i) => t ? [[`build.${t}`, GRID_ORDER[i]] as [string, string]] : [])),
 ]);
 /** 0.63: every action's default key in a preset. */
 export function presetDefaults(p: Preset): Binds { const b: Binds = {}; for (const a of ACTIONS) b[a.id] = p === "grid" && a.id in GRID_KEYS ? GRID_KEYS[a.id] : a.key; return b; }
@@ -120,7 +121,8 @@ export function bindProblem(id: string, key: string, b: Binds, p: Preset = "wasd
   for (const a of ACTIONS) {
     if (a.id === id || b[a.id] !== key) continue;
     const ac = ctxOf(a.id, p), otherBuild = MENU_CTX.has(ac), otherGlue = a.id.startsWith("camera.");
-    if (ctxClash(mc, ac) || (isBuild && otherGlue) || (isGlue && otherBuild)) hits.push(a);
+    const otherMenu = (build: string, menuId: string, bc: Ctx) => p === "grid" && menuId.startsWith("menu.") && menuId !== "menu.back" && MENU_CTX.has(bc) && menuId !== `menu.${bc}`; // 0.63.1: Grid: another menu's key always switches
+    if (ctxClash(mc, ac) || (isBuild && otherGlue) || (isGlue && otherBuild) || otherMenu(id, a.id, mc) || otherMenu(a.id, id, ac)) hits.push(a);
   }
   if (hits.length) { // 0.55 review: every holder is named; Swap is only offered for one
     const where = (a: Action) => MENU_CTX.has(a.ctx) ? MENU_NAME[a.ctx as MenuId] + " menu" : a.group;
@@ -189,6 +191,7 @@ export function menuStep(armed: MenuId | null, key: string, opts: { selected: bo
   const m = MENUS.find(x => b[`menu.${x}`] === key);
   if (armed) {
     if (key === "escape") return { armed: null, passThrough: false };
+    if (p === "grid" && m && m !== armed) return { armed: m, passThrough: false }; // 0.63.1: one press switches menus
     const act = actionFor(key, armed, b, p);
     if (act?.startsWith("build.")) return { armed: opts.shift ? armed : null, pick: act.slice(6), passThrough: false };
     if (b["menu.back"] === key) return { armed: null, passThrough: false };

@@ -1330,7 +1330,7 @@ addEventListener("keydown", e => {
   else if (act === "tool.pan") setTool("pan");
   else if (act === "tool.gate") setTool("gate"); // 0.41
   else if (act === "tool.recall") $("recall").click();
-  else if (act === "tool.closegates") $("closegates").click(); else if (act === "tool.clear") $("clear").click();
+  else if (act === "tool.closegates") $("closegates").click();
 });
 addEventListener("keyup", e => { keys.delete(keyOf(e)); keys.delete(e.key.toLowerCase()); });
 
@@ -2242,10 +2242,14 @@ function renderActions() {
   if (grid && armedMenu) { // 0.63: the open build menu fills the card, each item on its key's place, Back on its own
     tools.hidden = true; orders.hidden = false;
     const at = (h: string, i: number) => h.replace("<button ", `<button style="grid-row:${Math.floor(i / 5) + 1};grid-column:${i % 5 + 1}" `);
-    const slots = gridSlots<string>([...MENU_ITEMS[armedMenu].map(t => ({ item: t, key: keyFor(`build.${t}`) })), { item: "@back", key: keyFor("menu.back") }]);
+    const others = (["units", "actions", "support"] as MenuId[]).filter(m => m !== armedMenu); // 0.63.1: the other menus' buttons sit on their keys' places (one press switches)
+    const slots = gridSlots<string>([...others.map(m => ({ item: `@${m}`, key: keyFor(`menu.${m}`) })), ...MENU_ITEMS[armedMenu].map(t => ({ item: t, key: keyFor(`build.${t}`) })),
+      ...(keyFor("menu.back") ? [{ item: "@back", key: keyFor("menu.back") }] : [])]);
+    const menuBtn = (m: MenuId) => { const src = document.querySelector<HTMLImageElement>(`#cmdtools [data-menu="${m}"] img`)?.src ?? "", k = keyLabel(keyFor(`menu.${m}`));
+      return `<button class="cmd gmenu2" data-cmd="menu" data-menu2="${m}" data-tip="${MENU_NAME[m]} menu" data-tipkey="${k}" data-tipdesc="Switch to the ${MENU_NAME[m]} menu."><img src="${src}" alt="${MENU_NAME[m]}" draggable="false">${k ? `<span class="hk">${k}</span>` : ""}</button>`; };
     const html = slots.map((t, i) => !t ? "" : t === "@back"
-      ? at(`<button class="cmd" data-cmd="back" data-tip="Back" data-tipkey="${keyLabel(keyFor("menu.back")) || "Esc"}" data-tipdesc="Out of the ${MENU_NAME[armedMenu!]} menu."><b class="gback">Back</b>${keyFor("menu.back") ? `<span class="hk">${keyLabel(keyFor("menu.back"))}</span>` : ""}</button>`, i)
-      : at(buildTile(t, true), i)).join("");
+      ? at(`<button class="cmd" data-cmd="back" data-tip="Back" data-tipkey="${keyLabel(keyFor("menu.back"))}" data-tipdesc="Out of the ${MENU_NAME[armedMenu!]} menu."><b class="gback">Back</b><span class="hk">${keyLabel(keyFor("menu.back"))}</span></button>`, i)
+      : t.startsWith("@") ? at(menuBtn(t.slice(1) as MenuId), i) : at(buildTile(t, true), i)).join("");
     if (orders.innerHTML !== html) orders.innerHTML = html;
     if (tipEl) updateTip(); return;
   }
@@ -3513,7 +3517,7 @@ $("recall").addEventListener("click", () => { // 0.24
   say(!n ? "No units to recall." : sim.recalled ? `${n} unit${n > 1 ? "s" : ""} falling back to the safe zone. Press Recall again to send them back out.` : `${n} unit${n > 1 ? "s" : ""} heading back to their posts.`, 3500);
   refreshUi();
 });
-for (const [id, key] of [["heatmapbtn", "heatmap"], ["closegates", "closegates"], ["recall", "recall"], ["clear", "clear"]] as const) {
+for (const [id, key] of [["heatmapbtn", "heatmap"], ["closegates", "closegates"], ["recall", "recall"]] as const) {
   $(id).addEventListener("pointerenter", () => { hoverNavTool = key; });
   $(id).addEventListener("pointerleave", () => { if (hoverNavTool === key) hoverNavTool = null; });
 }
@@ -3550,6 +3554,7 @@ $("cmdorders").addEventListener("click", e => { // 0.51: the orders page of the 
   const b = (e.target as HTMLElement).closest<HTMLButtonElement>("[data-cmd]"); if (!b) return;
   const k = b.dataset.cmd!;
   if (k === "back") { setMenu(null); return; } // 0.63
+  if (k === "menu") { setMenu(b.dataset.menu2 as MenuId); return; } // 0.63.1: switch menus from the card
   if (k === "move") say("Right-click on the map where to send them (Shift queues).", 2500);
   else if (k === "topup") topUpSelected(); // 0.49
   else if ((k === "buytroops" || k === "buysniper") && selZone >= 0) { const e = sim.placeFromZone(k === "buytroops" ? "garrison" : "sniper", selZone); if (e) say(e); else { snd.radio(); refreshUi(); renderActions(); } } // 0.50
@@ -3562,7 +3567,11 @@ $("cmdorders").addEventListener("click", e => { // 0.51: the orders page of the 
   else if (k === "amove" || k === "patrol" || k === "escort") runIntent({ k: "arm", cmd: k });
   else if (k === "stop" || k === "standby") runIntent({ k, queue: false });
 });
-$("clear").addEventListener("click", () => { if (sim.phase === "plan") { sim.clearZone(); draft = []; buildZone(); refreshUi(); } });
+$("p-clearzone").addEventListener("click", () => { // 0.63.1: Clear Zone lives in the Esc menu (its key was too easy to press by accident)
+  resume();
+  if (sim.phase !== "plan") { say("The safe zone can only be cleared while planning.", 2500); return; }
+  sim.clearZone(); draft = []; buildZone(); refreshUi(); say("Safe zone cleared. Draw a new one.", 2500);
+});
 $("end-retry").addEventListener("click", () => newSim(true));
 $("end-continue").addEventListener("click", () => { $("end").hidden = true; sim.markKeepFighting(); /* 0.57 */ speed = battleSpeed(); log("info", "round-continue", { t: +sim.time.toFixed(1) }); refreshUi(); });
 $("end-stop").addEventListener("click", () => { $("end").hidden = true; sim.callIt(); });

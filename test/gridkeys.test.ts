@@ -8,16 +8,16 @@ const G = (): Record<string, string | null> => presetDefaults("grid");
 test("grid defaults follow the design tables", () => {
   const g = G();
   const want: Record<string, string | null> = {
-    "tool.zone": "q", "tool.gate": "w", "tool.remove": "e", "tool.order": "r", "tool.pan": "t", "tool.recall": "a", "tool.closegates": "s", "tool.clear": "d",
+    "tool.zone": "q", "tool.gate": "w", "tool.remove": "e", "tool.order": "r", "tool.pan": "t", "tool.recall": "a", "tool.closegates": "s",
     "tool.heatmap": "f", "tool.inventory": "g", "menu.units": "z", "menu.actions": "x", "menu.support": "c",
     "order.amove": "q", "order.patrol": "w", "order.escort": "e", "order.target": "r", "order.topup": "t", "order.stop": "a", "order.standby": "s", "order.fortify": "d", "order.remove": "b",
-    "menu.back": "b", "camera.up": null, "camera.left": null, "camera.down": null, "camera.right": null,
+    "menu.back": null, "camera.up": null, "camera.left": null, "camera.down": null, "camera.right": null,
     "group.1": "1", "group.5": "5", "quick.1": "6", "quick.5": "0", pause: " ", alert: "`", "view.heatmap": "h", inventory: "i", "view.heights": "j", "view.ranges": "n",
     "cam.spot1": "f6", "cam.spot2": "f7", "cam.spot3": "f8", "cam.spot4": "f9",
   };
   const items: [string, string][] = [["garrison", "q"], ["sniper", "w"], ["turret", "e"], ["apc", "r"], ["tank", "t"], ["mortar", "a"], ["howitzer", "s"], ["himars", "d"], ["gunboat", "f"], ["battleship", "g"],
-    ["apache", "z"], ["reaper", "x"], ["gunship", "c"], ["airstrike", "q"], ["a10", "w"], ["firebomb", "e"], ["cluster", "r"], ["barrage", "t"], ["tomahawk", "a"], ["moab", "s"], ["nuke", "d"],
-    ["para", "f"], ["c4", "g"], ["supply_drop", "z"], ["depot", "x"], ["evac", "q"], ["command", "w"], ["repair", "e"], ["radio", "r"], ["supply", "t"], ["budget", "a"], ["police", "s"], ["militia", "d"]];
+    ["apache", "z"], ["reaper", "v"], ["gunship", "b"], ["airstrike", "q"], ["a10", "w"], ["firebomb", "e"], ["cluster", "r"], ["barrage", "t"], ["tomahawk", "a"], ["moab", "s"], ["nuke", "d"],
+    ["para", "f"], ["c4", "g"], ["supply_drop", "x"], ["depot", "v"], ["evac", "q"], ["command", "w"], ["repair", "e"], ["radio", "r"], ["supply", "t"], ["budget", "a"], ["police", "s"], ["militia", "d"]];
   for (const [t, k] of items) want[`build.${t}`] = k;
   for (const [id, k] of Object.entries(want)) expect([id, g[id]]).toEqual([id, k]);
 });
@@ -68,8 +68,9 @@ test("grid: inside Units, Z is Apache, not the Units menu again", () => {
 test("shift keeps the menu open", () => {
   expect(menuStep("actions", "q", { selected: false, shift: true }, G(), "grid")).toEqual({ armed: "actions", pick: "airstrike", passThrough: false });
 });
-test("B goes back", () => {
-  expect(menuStep("support", "b", no, G(), "grid")).toEqual({ armed: null, passThrough: false });
+test("0.63.1: Esc closes a menu; B is the AC-130 in Units", () => {
+  expect(menuStep("support", "escape", no, G(), "grid")).toEqual({ armed: null, passThrough: false });
+  expect(menuStep("units", "b", no, G(), "grid").pick).toBe("gunship");
 });
 test("grid: openers do nothing with units selected", () => {
   expect(menuStep(null, "z", { selected: true, shift: false }, G(), "grid")).toEqual({ armed: null, passThrough: true });
@@ -122,4 +123,28 @@ test("M3: the Codex no longer claims rules 0.63 changed", () => {
   const cp = allEntries().find(e => e.id === "controls-page")!.body, bm = allEntries().find(e => e.id === "build-menus")!.body;
   expect(cp).not.toContain("another menu key");
   expect(bm).not.toContain("Either way, the same menu key again");
+});
+
+// ---- 0.63.1 ----
+test("0.63.1: one press switches menus; a menu's own key is an item", () => {
+  const sw = (a: any, k: string) => menuStep(a, k, no, G(), "grid");
+  expect(sw("units", "x")).toEqual({ armed: "actions", passThrough: false });
+  expect(sw("units", "c")).toEqual({ armed: "support", passThrough: false });
+  expect(sw("actions", "z")).toEqual({ armed: "units", passThrough: false });
+  expect(sw("actions", "c")).toEqual({ armed: "support", passThrough: false });
+  expect(sw("support", "z")).toEqual({ armed: "units", passThrough: false });
+  expect(sw("support", "x")).toEqual({ armed: "actions", passThrough: false });
+  expect(sw("actions", "x").pick).toBe("supply_drop");
+  expect(sw("units", "v").pick).toBe("reaper");
+});
+test("0.63.1: grid: an item can't take another menu's key", () => {
+  expect(bindProblem("build.tank", "x", G(), "grid")?.other).toBe("menu.actions");
+  expect(bindProblem("build.tank", "z", { ...G(), "build.apache": null }, "grid")).toBeNull(); // its own menu's key is fine
+});
+test("0.63.1: Clear Zone has no key and no card button; it lives in the Esc menu", () => {
+  expect(ACTIONS.some(a => a.id === "tool.clear")).toBe(false);
+  const html = require("fs").readFileSync(import.meta.dir + "/../index.html", "utf8") as string;
+  const tools = /<div id="cmdtools">([\s\S]*?)<\/div>\s*<div id="cmdorders"/.exec(html)![1];
+  expect(tools).not.toContain('id="clear"');
+  expect(html).toContain('id="p-clearzone"');
 });

@@ -8,7 +8,6 @@ const K = (id: string) => keyLabel(keyFor(id)); // 0.55: the live binding
 const TOOLS = (): [string, string, string, boolean][] => [ // id, label, key, is a map tool (0.54: every one has a key, keymap.ts)
   ["zone", "Safe Zone", K("tool.zone"), true], ["gate", "Gate/Wall", K("tool.gate"), true], ["remove", "Sell/Evac", K("tool.remove"), true], ["order", "Order", K("tool.order"), true],
   ["pan", "Move/Aim", K("tool.pan"), true], ["heatmap", "Heatmap", K("view.heatmap"), false], ["recall", "Recall", K("tool.recall"), false], ["closegates", "Lock Gates", K("tool.closegates"), false],
-  ["clear", "Clear Zone", K("tool.clear"), false],
 ];
 
 /** 0.51.1: the one line under a command's name in its hover tooltip (the card shows pictures only). */
