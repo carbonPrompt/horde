@@ -10,7 +10,7 @@ const CODEX_SECTIONS: string[] = SECTIONS.map(s => s.id);
 // 0.45: Plan.units entries: 5th = the unit's orders (present = commanded), 6th = stand by
 export interface Plan { poly: [number, number][]; zones?: [number, number][][]; walls: number[]; units: [C.UnitKind, number, number, C.TargetMode?, Order[]?, boolean?][]; supports?: [C.SupportKind, number, number][]; abilities?: Partial<Record<C.AbilityKind, number>>; c4?: number[]; demo?: number[]; start?: number; groups?: PlanGroup[];
   supply?: { small: number; vehicle: number; auto: boolean; prio: "ammo" | "repair"; engineers: number }[]; reserves?: [number, number][] } // 0.60: supply bought in planning, per zone; battery reserves (plan unit index, magazines) // 0.50: battle groups (unit indices into units, or a zone)
-export interface Settings { fullscreen: boolean; edgeScroll: boolean; showRanges: boolean; devMode?: boolean; crowd?: number; quickbar?: (string | null)[]; quickKeys?: (string | null)[]; keys?: Record<string, string | null>; /* 0.55: key overrides (keymap.ts action ids) */ vol?: { master: number; sfx: number; music: number }; difficulty?: C.Difficulty; codexSeen?: string; codexOpen?: string[]; /* 0.47: last version the Codex was opened in, open sections */
+export interface Settings { fullscreen: boolean; edgeScroll: boolean; showRanges: boolean; devMode?: boolean; crowd?: number; quickbar?: (string | null)[]; quickKeys?: (string | null)[]; keys?: Record<string, string | null>; /* 0.55: key overrides (keymap.ts action ids; 0.63: the WASD preset's) */ keysGrid?: Record<string, string | null>; /* 0.63: the Grid preset's overrides */ keyPreset?: "grid" | "wasd"; gridNoteSeen?: boolean; vol?: { master: number; sfx: number; music: number }; difficulty?: C.Difficulty; codexSeen?: string; codexOpen?: string[]; /* 0.47: last version the Codex was opened in, open sections */
   autoUpdate?: boolean; checkUpdates?: boolean; updatePin?: string; speed?: number; tips?: boolean; tipsSeen?: string[] } // 0.26 updater: install by itself / look on start / stay on a picked older version
 export interface Best { pct: number; medal: string | null; mayhem?: number; perM?: number; underBudget?: boolean } // 0.48: best people saved per $1M, Under Budget badge // pct: round score 0..100 since 0.20 ("% evacuated" before)
 /** 0.33: the battle frozen in this slot (the file itself sits beside the profile). */
@@ -28,7 +28,7 @@ export const desktop: { setFullscreen(on: boolean): void; quit(): void; readSave
   (globalThis as any).hordeDesktop;
 
 export function defaults(): SaveData {
-  return { settings: { fullscreen: true, edgeScroll: !!desktop, showRanges: false }, best: {}, plans: {}, daily: {} };
+  return { settings: { fullscreen: true, edgeScroll: !!desktop, showRanges: false, gridNoteSeen: true }, best: {}, plans: {}, daily: {} }; // 0.63: a new save never had the old layout: no "switch back" note
 }
 
 const MEDAL_NAMES = ["Platinum", "Gold", "Silver", "Bronze"];
@@ -74,9 +74,12 @@ export function clean(s: SaveData): SaveData {
   if (!Array.isArray(qb) || qb.length > 9 || !qb.every(x => x === null || (typeof x === "string" && ID.test(x)))) delete settings.quickbar;
   const qk = settings.quickKeys as unknown;
   if (!Array.isArray(qk) || qk.length > 9 || !qk.every(x => x === null || (typeof x === "string" && x.length >= 1 && x.length <= 3))) delete settings.quickKeys;
-  { const ks = settings.keys as unknown; // 0.55: every key settable; only well-formed id -> key|null pairs (keymap.cleanKeys checks the rest)
-    if (!ks || typeof ks !== "object" || Array.isArray(ks)) delete settings.keys;
-    else settings.keys = Object.fromEntries(Object.entries(ks as Record<string, unknown>).filter(([id, v]) => /^[a-z0-9_.]{1,32}$/.test(id) && (v === null || (typeof v === "string" && v.length >= 1 && v.length <= 12)))) as Record<string, string | null>; }
+  for (const f of ["keys", "keysGrid"] as const) { const ks = settings[f] as unknown; // 0.55: every key settable; only well-formed id -> key|null pairs (keymap.cleanKeys checks the rest) (0.63: one map per preset)
+    if (ks === undefined) continue;
+    if (!ks || typeof ks !== "object" || Array.isArray(ks)) delete settings[f];
+    else settings[f] = Object.fromEntries(Object.entries(ks as Record<string, unknown>).filter(([id, v]) => /^[a-z0-9_.]{1,32}$/.test(id) && (v === null || (typeof v === "string" && v.length >= 1 && v.length <= 12)))) as Record<string, string | null>; }
+  if (settings.keyPreset !== undefined && settings.keyPreset !== "grid" && settings.keyPreset !== "wasd") delete settings.keyPreset; // 0.63
+  if (settings.gridNoteSeen !== undefined && typeof settings.gridNoteSeen !== "boolean") delete settings.gridNoteSeen;
   if (settings.tips !== undefined && typeof settings.tips !== "boolean") delete settings.tips; // 0.41
   if (settings.tipsSeen !== undefined) { const ts = settings.tipsSeen as unknown; settings.tipsSeen = Array.isArray(ts) ? ts.filter((x): x is string => typeof x === "string" && /^[a-zA-Z]{1,24}$/.test(x)).slice(0, 64) : undefined; if (!settings.tipsSeen) delete settings.tipsSeen; }
   const diff = settings.difficulty as unknown;

@@ -4,7 +4,11 @@
 // helpers (clash rules, swap, cleaning) take a Binds map so the tests and the Controls page can try changes first.
 // 0.54 history: WASD camera, orders around WASD, tools Z X C V, groups 1-5, quick bar 6-0 (design rulings).
 
-export type Ctx = "always" | "selected" | "idle" | "units" | "actions" | "support";
+export type Ctx = "always" | "selected" | "idle" | "units" | "actions" | "support" | "menu"; // 0.63: "menu" = inside any open build menu (Back)
+/** 0.63: the two key layouts. grid: Q-T / A-G / Z-B match the command card's places (the default); wasd: the 0.62 keys. */
+export type Preset = "grid" | "wasd";
+/** 0.63: the card's 15 places, row by row. */
+export const GRID_ORDER = "qwertasdfgzxcvb";
 export type MenuId = "units" | "actions" | "support";
 export type Group = "Camera" | "Always" | "With units selected" | "Nothing selected" | "Battle groups" | "Quick bar" | "Build menus";
 export interface Action { id: string; group: Group; ctx: Ctx; key: string | null; label: string; tool?: string }
@@ -49,9 +53,34 @@ export const ACTIONS: readonly Action[] = [
   ...[1, 2, 3, 4, 5].map(n => A(`group.${n}`, "Battle groups", "always", String(n), `Group ${n}`)),
   ...["6", "7", "8", "9", "0"].map((k, i) => A(`quick.${i + 1}`, "Quick bar", "always", k, `Quick bar slot ${i + 1}`)),
   A("menu.units", "Build menus", "always", "b", "Units menu"), A("menu.actions", "Build menus", "always", "m", "Actions menu"), A("menu.support", "Build menus", "always", "y", "Support menu"),
+  A("menu.back", "Build menus", "menu", null, "Back (out of a menu)"), // 0.63
+  A("tool.heatmap", "Nothing selected", "idle", null, "Kill heatmap (card button)"), A("tool.inventory", "Nothing selected", "idle", null, "Inventory (card button)"), // 0.63: the grid card's own keys
+  ...[1, 2, 3, 4].map(n => A(`cam.spot${n}`, "Camera", "always", `f${n + 5}`, `Camera spot ${n} (Ctrl: save it)`)), // 0.63
   ...MENUS.flatMap(m => ITEMS[m].map(([t, label, k]) => A(`build.${t}`, "Build menus", m, k, label, t))),
 ];
 const BY_ID = new Map(ACTIONS.map(a => [a.id, a]));
+/** 0.63: the Grid preset's defaults where they differ from the table's (WASD) key. Positions: design tables. */
+const GRID_ROWS: [string, string][] = [
+  ["tool.zone", "q"], ["tool.gate", "w"], ["tool.remove", "e"], ["tool.order", "r"], ["tool.pan", "t"], ["tool.recall", "a"], ["tool.closegates", "s"], ["tool.clear", "d"], ["tool.heatmap", "f"], ["tool.inventory", "g"],
+  ["menu.units", "z"], ["menu.actions", "x"], ["menu.support", "c"], ["menu.back", "b"],
+  ["order.amove", "q"], ["order.patrol", "w"], ["order.escort", "e"], ["order.target", "r"], ["order.topup", "t"], ["order.stop", "a"], ["order.standby", "s"], ["order.fortify", "d"], ["order.remove", "b"],
+];
+const GRID_MENU: Record<MenuId, string[]> = {
+  units: ["garrison", "sniper", "turret", "apc", "tank", "mortar", "howitzer", "himars", "gunboat", "battleship", "apache", "reaper", "gunship"],
+  actions: ["airstrike", "a10", "firebomb", "cluster", "barrage", "tomahawk", "moab", "nuke", "para", "c4", "supply_drop", "depot"],
+  support: ["evac", "command", "repair", "radio", "supply", "budget", "police", "militia"],
+};
+const GRID_KEYS: Record<string, string | null> = Object.fromEntries([
+  ...GRID_ROWS, ...["up", "left", "down", "right"].map(d => [`camera.${d}`, null] as [string, null]),
+  ...MENUS.flatMap(m => GRID_MENU[m].map((t, i) => [`build.${t}`, GRID_ORDER[i]] as [string, string])),
+]);
+/** 0.63: every action's default key in a preset. */
+export function presetDefaults(p: Preset): Binds { const b: Binds = {}; for (const a of ACTIONS) b[a.id] = p === "grid" && a.id in GRID_KEYS ? GRID_KEYS[a.id] : a.key; return b; }
+/** 0.63: an action's context in a preset: the Grid card's menu openers live on the idle page only. */
+export function ctxOf(id: string, p: Preset): Ctx { const a = BY_ID.get(id)!; return p === "grid" && id.startsWith("menu.") && id !== "menu.back" ? "idle" : a.ctx; }
+let livePreset: Preset = "wasd";
+export function setPreset(p: Preset) { livePreset = p; }
+export function preset(): Preset { return livePreset; }
 export const FIXED: ReadonlySet<string> = new Set(["escape", "arrowup", "arrowdown", "arrowleft", "arrowright", "enter", "delete", "backspace", "shift", "control", "alt", "meta"]);
 const MENU_CTX = new Set<Ctx>(["units", "actions", "support"]);
 const MODIFIERS = new Set(["shift", "control", "alt", "meta", "capslock"]);
@@ -77,20 +106,21 @@ const usable = (k: string) => k === " " || k === "tab" || /^f(?:[1-9]|1[0-2])$/.
 
 function ctxClash(a: Ctx, b: Ctx): boolean {
   if (a === b) return true;
+  if (a === "menu" || b === "menu") return MENU_CTX.has(a === "menu" ? b : a); // 0.63: Back is live inside every menu
   if (MENU_CTX.has(a) || MENU_CTX.has(b)) return false;
   return a === "always" || b === "always";
 }
 /** Can action `id` take `key` under bindings `b`? null if so; otherwise why not, and the action holding it (for Swap). */
-export function bindProblem(id: string, key: string, b: Binds): { why: string; other?: string; others?: string[] } | null {
+export function bindProblem(id: string, key: string, b: Binds, p: Preset = "wasd"): { why: string; other?: string; others?: string[] } | null {
   const me = BY_ID.get(id); if (!me) return { why: "Unknown action." };
   if (FIXED.has(key)) return { why: `${keyName(key)} can't be changed: it always does its own job.` };
   if (!usable(key)) return { why: `${keyName(key)} can't be used for a key.` };
-  const isBuild = MENU_CTX.has(me.ctx), isGlue = id.startsWith("camera.") || id.startsWith("menu.");
+  const mc = ctxOf(id, p), isBuild = MENU_CTX.has(mc), isGlue = id.startsWith("camera."); // 0.63: menu keys no longer guard the letters (inside a menu its item wins)
   const hits: Action[] = [];
   for (const a of ACTIONS) {
     if (a.id === id || b[a.id] !== key) continue;
-    const otherBuild = MENU_CTX.has(a.ctx), otherGlue = a.id.startsWith("camera.") || a.id.startsWith("menu.");
-    if (ctxClash(me.ctx, a.ctx) || (isBuild && otherGlue) || (isGlue && otherBuild)) hits.push(a);
+    const ac = ctxOf(a.id, p), otherBuild = MENU_CTX.has(ac), otherGlue = a.id.startsWith("camera.");
+    if (ctxClash(mc, ac) || (isBuild && otherGlue) || (isGlue && otherBuild)) hits.push(a);
   }
   if (hits.length) { // 0.55 review: every holder is named; Swap is only offered for one
     const where = (a: Action) => MENU_CTX.has(a.ctx) ? MENU_NAME[a.ctx as MenuId] + " menu" : a.group;
@@ -107,24 +137,25 @@ export function swap(id: string, other: string, b: Binds): Binds { return { ...b
 /** Bindings from the save: defaults, then every valid override in table order; an override that clashes is dropped,
  *  and a default left clashing by an earlier override becomes unbound. 0.54 quick bar keys fill quick.1-5 when the
  *  new setting doesn't name them. */
-export function cleanKeys(saved: unknown, legacyQuick?: unknown): Binds {
+export function cleanKeys(saved: unknown, legacyQuick?: unknown, p: Preset = "wasd"): Binds {
+  const def = presetDefaults(p);
   const ov: Record<string, string | null> = {}, legacy: Record<string, string | null> = {};
   if (saved && typeof saved === "object" && !Array.isArray(saved))
     for (const [id, v] of Object.entries(saved as Record<string, unknown>)) if (BY_ID.has(id) && (v === null || typeof v === "string")) ov[id] = typeof v === "string" ? v.toLowerCase() : null;
   if (Array.isArray(legacyQuick)) legacyQuick.slice(0, QUICK_SLOTS).forEach((v, i) => { const id = `quick.${i + 1}`; if (!(id in ov) && (v === null || typeof v === "string")) legacy[id] = typeof v === "string" ? v.toLowerCase() : null; });
   const out: Binds = {};
   for (const a of ACTIONS) out[a.id] = null;
-  const put = (a: Action, k: string | null) => { if (k === null) { out[a.id] = null; return true; } if (!bindProblem(a.id, k, out)) { out[a.id] = k; return true; } return false; };
-  for (const a of ACTIONS) if (a.id in ov && ov[a.id] !== a.key) put(a, ov[a.id]); // the player's 0.55 choices first
-  for (const a of ACTIONS) if (!(a.id in legacy) && out[a.id] === null && !(a.id in ov && ov[a.id] === null)) put(a, a.key); // then defaults where still free
+  const put = (a: Action, k: string | null) => { if (k === null) { out[a.id] = null; return true; } if (!bindProblem(a.id, k, out, p)) { out[a.id] = k; return true; } return false; };
+  for (const a of ACTIONS) if (a.id in ov && ov[a.id] !== def[a.id]) put(a, ov[a.id]); // the player's 0.55 choices first
+  for (const a of ACTIONS) if (!(a.id in legacy) && out[a.id] === null && !(a.id in ov && ov[a.id] === null)) put(a, def[a.id]); // then defaults where still free
   // 0.54 quick keys last (0.55 review): one on a key 0.55 gives a menu or the camera falls back to its slot's default
-  for (const a of ACTIONS) if (a.id in legacy) { if (!(legacy[a.id] !== null && put(a, legacy[a.id])) && legacy[a.id] !== null) put(a, a.key); }
+  for (const a of ACTIONS) if (a.id in legacy) { if (!(legacy[a.id] !== null && put(a, legacy[a.id])) && legacy[a.id] !== null) put(a, def[a.id]); }
   return out;
 }
 /** What the save stores: only the bindings that differ from the defaults. */
-export function overrides(b: Binds): Record<string, string | null> {
-  const o: Record<string, string | null> = {};
-  for (const a of ACTIONS) if ((b[a.id] ?? null) !== a.key) o[a.id] = b[a.id] ?? null;
+export function overrides(b: Binds, p: Preset = "wasd"): Record<string, string | null> {
+  const o: Record<string, string | null> = {}, def = presetDefaults(p);
+  for (const a of ACTIONS) if ((b[a.id] ?? null) !== def[a.id]) o[a.id] = b[a.id] ?? null;
   return o;
 }
 
@@ -133,34 +164,47 @@ export function setBinds(b: Binds) { live = { ...b }; }
 export function binds(): Binds { return live; }
 export function keyFor(id: string): string | null { return live[id] ?? null; }
 /** The action `key` triggers in `ctx`. "always" actions answer in "selected" and "idle"; a menu context only its letters. */
-export function actionFor(key: string, ctx: Ctx, b: Binds = live): string | null {
+export function actionFor(key: string, ctx: Ctx, b: Binds = live, p: Preset = livePreset): string | null {
   let always: string | null = null;
   for (const a of ACTIONS) {
     if (b[a.id] !== key) continue;
-    if (a.ctx === ctx) return a.id;
-    if (a.ctx === "always" && !MENU_CTX.has(ctx)) always = a.id;
+    const ac = ctxOf(a.id, p);
+    if (ac === ctx) return a.id;
+    if (ac === "always" && !MENU_CTX.has(ctx) && ctx !== "menu") always = a.id;
   }
   return always;
 }
 /** "{key:order.amove}" -> "Q" with the live (or given) bindings. */
-export function withKeys(text: string, b: Binds = live): string {
-  return text.replace(/\{key:([a-z0-9_.]+)\}/g, (_, id: string) => keyLabel(b[id]) || "(unbound)");
+export function withKeys(text: string, b: Binds = live): string { // 0.63: {key:id|fallback} shows the fallback when unbound
+  return text.replace(/\{key:([a-z0-9_.]+)(?:\|([^}]*))?\}/g, (_, id: string, fb?: string) => keyLabel(b[id]) || (fb ?? "(unbound)"));
 }
 export const actionById = (id: string) => BY_ID.get(id);
 
-/** 0.55: one key while a build menu may be waiting for its letter. A menu key arms its menu (the same one again
- *  disarms, another switches); while armed, a letter of that menu picks its item; Esc only disarms; any other key
- *  disarms and passes through to its normal job (so the camera keys still move the map). */
-export function menuStep(armed: MenuId | null, key: string, b: Binds = live): { armed: MenuId | null; pick?: string; passThrough: boolean } {
-  const m = MENUS.find(x => b[`menu.${x}`] === key);
-  if (m) return { armed: armed === m ? null : m, passThrough: false };
+/** 0.55: one key while a build menu may be waiting for its letter. 0.63: while a menu is open, Esc closes it, its
+ *  item letter picks (Shift keeps the menu open), Back closes, another menu key switches (the same one closes), a
+ *  modifier keeps it waiting, anything else closes and passes through. Closed: a menu key opens its menu where its
+ *  context allows (Grid: only with nothing selected). */
+export function menuStep(armed: MenuId | null, key: string, opts: { selected: boolean; shift: boolean }, b: Binds = live, p: Preset = livePreset): { armed: MenuId | null; pick?: string; passThrough: boolean } {
   if (MODIFIERS.has(key)) return { armed, passThrough: true }; // 0.55 review: Shift (to place several) keeps the menu waiting
-  if (!armed) return { armed: null, passThrough: true };
-  if (key === "escape") return { armed: null, passThrough: false };
-  const act = actionFor(key, armed, b);
-  if (act?.startsWith("build.")) return { armed: null, pick: act.slice(6), passThrough: false };
+  const m = MENUS.find(x => b[`menu.${x}`] === key);
+  if (armed) {
+    if (key === "escape") return { armed: null, passThrough: false };
+    const act = actionFor(key, armed, b, p);
+    if (act?.startsWith("build.")) return { armed: opts.shift ? armed : null, pick: act.slice(6), passThrough: false };
+    if (b["menu.back"] === key) return { armed: null, passThrough: false };
+    if (m) return { armed: armed === m ? null : m, passThrough: false };
+    if (p === "grid" && key.length === 1 && GRID_ORDER.includes(key)) return { armed, passThrough: false }; // 0.63 review M1: an empty place in the card does nothing
+    return { armed: null, passThrough: true };
+  }
+  if (m && (ctxOf(`menu.${m}`, p) !== "idle" || !opts.selected)) return { armed: m, passThrough: false };
   return { armed: null, passThrough: true };
 }
+
+/** 0.63: a preset switch lets go of any open build menu (the card redraws for the new layout). */
+export function presetSwitchResets(_p: Preset, _armed: MenuId | null): { armed: null } { return { armed: null }; }
+
+/** 0.63 review I3: a click on the map lets go of an open menu, unless Shift kept it open (placing several). */
+export function menuAfterMapClick(armed: MenuId | null, kept: boolean): MenuId | null { return kept ? armed : null; }
 
 export const GROUPS: Group[] = ["Camera", "Always", "With units selected", "Nothing selected", "Battle groups", "Quick bar", "Build menus"];
 /** 0.55: the Controls page: each group's actions with their current key label (build items carry their menu as `sub`). */
@@ -168,10 +212,10 @@ export function controlsRows(b: Binds): { group: Group; rows: { id: string; labe
   return GROUPS.map(group => ({ group, rows: ACTIONS.filter(a => a.group === group).map(a => ({ id: a.id, label: a.label, key: keyLabel(b[a.id]), ...(MENU_CTX.has(a.ctx) ? { sub: MENU_NAME[a.ctx as MenuId] } : {}) })) }));
 }
 /** 0.55: one group back to its defaults; a default another group has taken since comes back unbound (never a clash). */
-export function resetGroup(group: Group, b: Binds): Binds {
-  const out = { ...b };
+export function resetGroup(group: Group, b: Binds, p: Preset = "wasd"): Binds {
+  const out = { ...b }, def = presetDefaults(p);
   const mine = ACTIONS.filter(a => a.group === group);
   for (const a of mine) out[a.id] = null;
-  for (const a of mine) if (a.key && !bindProblem(a.id, a.key, out)) out[a.id] = a.key;
+  for (const a of mine) { const k = def[a.id]; if (k && !bindProblem(a.id, k, out, p)) out[a.id] = k; }
   return out;
 }

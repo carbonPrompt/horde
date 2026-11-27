@@ -558,11 +558,11 @@ test("0.55: Settings has a Controls page", () => {
 test("0.55 review #2/#4: build menu keys run before the always-keys; a rebind refreshes every key label", () => {
   const main = require("fs").readFileSync(import.meta.dir + "/../src/main.ts", "utf8") as string;
   const kd = main.slice(main.indexOf('addEventListener("keydown", e => {\n  const k = e.key;'));
-  expect(kd.indexOf("menuStep(armedMenu, kk)")).toBeGreaterThan(0);
-  expect(kd.indexOf("menuStep(armedMenu, kk)")).toBeLessThan(kd.indexOf('act === "fullscreen"'));
+  expect(kd.indexOf("menuStep(armedMenu, kk,")).toBeGreaterThan(0);
+  expect(kd.indexOf("menuStep(armedMenu, kk,")).toBeLessThan(kd.indexOf('act === "fullscreen"'));
   const ab = main.slice(main.indexOf("function applyBinds("), main.indexOf("function ctxNow("));
   for (const s of ["codex?.refresh()", "renderHelpKeys()", "labelSpeedKeys()"]) expect(ab).toContain(s); // 0.56: no tutorial banner to refresh
-  const boot = main.slice(main.indexOf("setBinds(cleanKeys(save.settings.keys"), main.indexOf("setBinds(cleanKeys(save.settings.keys") + 300);
+  const boot = main.slice(main.indexOf("setBinds(cleanKeys(presetKeys()"), main.indexOf("setBinds(cleanKeys(presetKeys()") + 300) // 0.63: per-preset keys;
   expect(boot).toContain("renderHelpKeys()");
   expect(main).not.toContain("Press H or Menu");
   const html = require("fs").readFileSync(import.meta.dir + "/../index.html", "utf8") as string;

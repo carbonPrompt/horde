@@ -28,10 +28,11 @@ every release, and Settings can install updates automatically. Your save is back
   reach of the infected; right-click a street and they come down and fight as a fire team. Lost soldiers can be
   replaced mid-battle.
 - **Command.** A classic RTS bottom panel: minimap, info card, selection, three build menus (Units, Actions,
-  Support) and the selected units' orders, every button a picture with its key (hover for name, key and price). Buy
-  without the mouse: B, M or Y opens a menu, then the item's letter (B then K is a tank). WASD always moves the
-  camera; orders sit around it (Q attack-move, R patrol, E escort, F stop, G stand by, C fortify), map tools on Z X C V.
-  Every key can be changed on the Controls page in Settings. Battle groups: Ctrl+1 to Ctrl+5 saves a group (or a safe
+  Support) and the selected units' orders, every button a picture with its key (hover for name, key and price). Two
+  key layouts: **Grid (RTS)**, the default, where Q W E R T / A S D F G / Z X C V B match the 5x3 command card's places
+  (the build menus open in the card: Z then T is a tank, X then Q an airstrike; Shift keeps a menu open), and **WASD
+  camera**, where WASD moves the map and the other keys sit around it. Every key can be changed on the Controls page in
+  Settings, and each layout keeps its own changes. Camera spots: Ctrl+F6 to F9 saves a view, F6 to F9 jumps back. Battle groups: Ctrl+1 to Ctrl+5 saves a group (or a safe
   zone), the number selects it and twice jumps there, shown as tabs with unit pictures. Keys 6 to 0 are a quick bar you
   fill by dragging build tiles. Select units with a click or a dragged box: right-click to move (they shoot what's in
   range on the way and never get dragged off chasing), Shift to queue. The cursor label tells you what's under it and

@@ -47,7 +47,7 @@ test("0.54/0.55: the key map: quick bar 6-0, orders and tools keyed, none on WAS
   const d = K.defaultBinds();
   expect([1, 2, 3, 4, 5].map(n => d[`quick.${n}`])).toEqual(["6", "7", "8", "9", "0"]);
   expect(K.keyLabel("f7")).toBe("F7"); expect(K.keyLabel(",")).toBe(","); expect(K.keyLabel(" ")).toBe("Space");
-  for (const a of K.ACTIONS) if (a.id.startsWith("order.") || a.id.startsWith("tool.")) { expect(a.key).toBeTruthy(); expect(["w", "a", "s", "d"]).not.toContain(a.key); }
+  for (const a of K.ACTIONS) if ((a.id.startsWith("order.") || a.id.startsWith("tool.")) && a.id !== "tool.heatmap" && a.id !== "tool.inventory") { expect(a.key).toBeTruthy(); expect(["w", "a", "s", "d"]).not.toContain(a.key); } // 0.63: the grid card buttons tool.heatmap/inventory have no WASD key (H and I do it there)
 });
 
 test("0.55: keys follow the bindings (orders, camera, groups)", () => {

@@ -85,7 +85,7 @@ test("0.51.1: the panel's buttons carry tooltips instead of text labels", () => 
   const html = fs.readFileSync(import.meta.dir + "/../index.html", "utf8") as string;
   const tools = /<div id="cmdtools">([\s\S]*?)<\/div>\s*<div id="cmdorders"/.exec(html)![1];
   const buttons = tools.match(/<button[^>]*>/g)!;
-  expect(buttons.length).toBe(10); // 0.60: + Inventory (two full rows of five)
+  expect(buttons.length).toBe(13); // 0.60: + Inventory (two full rows of five); 0.63: + the Grid card's 3 menu buttons (hidden in WASD)
   for (const b of buttons) { expect(b).toContain("data-tip="); expect(b).not.toContain(" title="); }
   expect(html).toContain('id="uitip"');
   const main = fs.readFileSync(import.meta.dir + "/../src/main.ts", "utf8") as string;
@@ -119,4 +119,22 @@ test("0.55: the command card shows the live keys", () => {
     expect(commandCard({ ...base }).find(b => b.id === "zone")!.key).toBe("P");
     expect(commandCard({ ...base }).find(b => b.id === "heatmap")!.key).toBe("H"); // the heatmap view key
   } finally { K.setBinds(K.defaultBinds()); }
+});
+
+// 0.63: the grid card places buttons by their key's place (Q W E R T / A S D F G / Z X C V B)
+import { gridSlots } from "../src/hud";
+test("0.63 slot: items land on their key's slot", () => {
+  const s = gridSlots([{ item: "a", key: "t" }, { item: "b", key: "q" }]);
+  expect(s.length).toBe(15); expect(s[4]).toBe("a"); expect(s[0]).toBe("b"); expect(s.filter(x => x !== null).length).toBe(2);
+});
+test("0.63 slot: a key outside the grid takes the first free slot", () => {
+  const s = gridSlots([{ item: "tank", key: "k" }, { item: "troops", key: "q" }]);
+  expect(s[0]).toBe("troops"); expect(s[1]).toBe("tank");
+});
+test("0.63 slot: null keys fill free slots; the first item wins a taken slot", () => {
+  const s = gridSlots([{ item: "x", key: null }, { item: "y", key: "q" }, { item: "z", key: "q" }]);
+  expect(s[0]).toBe("y"); expect(s[1]).toBe("x"); expect(s[2]).toBe("z");
+});
+test("0.63 slot: never more than 15", () => {
+  expect(gridSlots(Array.from({ length: 20 }, (_, i) => ({ item: i, key: null }))).filter(x => x !== null).length).toBe(15);
 });

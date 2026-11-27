@@ -4,8 +4,8 @@ import { fetchLiveOsmCity } from "./osm";
 import { CIV, INF, SAFE_CIV, SHOT_CANNON, SHOT_ROCKET, SHOT_SHELL, SHOT_SNIPER, Sim } from "./sim";
 import type { Score, Entity, Orbit, Unit } from "./sim";
 import { groupsToPlan, groupsFromPlan, pruneGroups, assignGroup, groupUnits, groupSummary } from "./groups";
-import { commandCard, selectionGrid, infoSource, buildTabs, CMD_DESC, squadState, tabOrder, nextInTab, type CardButton } from "./hud";
-import { QUICK_SLOTS, keyLabel, keyFor, keyOf, actionFor, setBinds, cleanKeys, overrides, bindProblem, binds, withKeys, menuStep, menuOfTool, MENU_NAME, controlsRows, resetGroup, defaultBinds, type Group, type Binds, type Ctx, type MenuId } from "./keymap";
+import { commandCard, selectionGrid, infoSource, buildTabs, CMD_DESC, squadState, tabOrder, nextInTab, gridSlots, type CardButton } from "./hud";
+import { menuAfterMapClick, QUICK_SLOTS, keyLabel, keyFor, keyOf, actionFor, setBinds, cleanKeys, overrides, bindProblem, binds, withKeys, menuStep, menuOfTool, MENU_NAME, MENU_ITEMS, controlsRows, resetGroup, presetDefaults, setPreset, preset, presetSwitchResets, type Group, type Binds, type Ctx, type MenuId, type Preset } from "./keymap";
 import { orderIcon } from "./ordericons";
 import { cleanQuickbar, setSlot, swapSlots, clearSlot, type Slots } from "./quickbar";
 import { describeCell, estimateAt } from "./cursorinfo";
@@ -65,11 +65,26 @@ document.querySelectorAll<HTMLImageElement>("img[data-sprite]").forEach(img => {
 document.querySelectorAll<HTMLImageElement>("img[data-oicon]").forEach(img => { img.src = orderIcon(img.dataset.oicon!); }); // 0.51.1
 /** 0.54: every tool's key top-left on its button (0.55: the live binding; re-run after a rebind). */
 function labelToolCards() {
+  const grid = preset() === "grid", slotted: { item: HTMLElement; key: string | null }[] = [];
   document.querySelectorAll<HTMLElement>("#cmdtools button").forEach(b => {
-    const k = b.dataset.tool ?? (b.id === "heatmapbtn" ? "heatmap" : b.id); b.dataset.tipdesc = CMD_DESC[k] ?? "";
-    const key = keyLabel(keyFor(k === "heatmap" ? "view.heatmap" : `tool.${k}`)); b.dataset.tipkey = key; const hk = b.querySelector(".hk"); if (hk) hk.textContent = key;
+    const k = b.dataset.tool ?? (b.id === "heatmapbtn" ? "heatmap" : b.id); b.dataset.tipdesc = withKeys(CMD_DESC[k] ?? "");
+    const id = cardActionId(b), raw = keyFor(id), key = keyLabel(raw); b.dataset.tipkey = key; const hk = b.querySelector(".hk"); if (hk) hk.textContent = key;
+    if (b.dataset.menu) b.hidden = !grid; // 0.63: the Grid card opens the build menus itself
+    slotted.push({ item: b, key: raw });
   });
+  // 0.63: Grid: every button sits on its key's place (Q-T / A-G / Z-B); WASD: the 0.62 order
+  const slots = grid ? gridSlots(slotted.filter(x => !x.item.hidden)) : [];
+  for (const { item } of slotted) { const i = slots.indexOf(item); item.style.gridRow = i >= 0 ? String(Math.floor(i / 5) + 1) : ""; item.style.gridColumn = i >= 0 ? String(i % 5 + 1) : ""; }
 }
+/** 0.63: the keymap action behind a tools-page button. */
+function cardActionId(b: HTMLElement): string {
+  if (b.dataset.menu) return `menu.${b.dataset.menu}`;
+  if (b.id === "heatmapbtn") return preset() === "grid" ? "tool.heatmap" : "view.heatmap";
+  if (b.id === "invbtn") return preset() === "grid" ? "tool.inventory" : "inventory";
+  return `tool.${b.dataset.tool ?? b.id}`;
+}
+/** 0.63: the live preset's saved overrides. */
+function presetKeys() { return save.settings.keyPreset === "wasd" ? save.settings.keys : save.settings.keysGrid; }
 const perf = new Perf();
 
 type Tool = "pan" | "order" | "zone" | "gate" | C.UnitKind | C.SupportKind | "remove" | C.AbilityKind | "c4" | "depot";
@@ -91,7 +106,8 @@ addEventListener("keydown", () => snd.unlock());
 document.addEventListener("click", e => { if ((e.target as HTMLElement).closest("button")) snd.click(); }); // map + agents on the graphics card; 2D canvas on top for the rest
 
 let save = Save.load();
-setBinds(cleanKeys(save.settings.keys, save.settings.quickKeys)); // 0.55: every key settable (keymap.ts)
+save.settings.keyPreset ??= "grid"; setPreset(save.settings.keyPreset); // 0.63: Grid (RTS) is the default for every save
+setBinds(cleanKeys(presetKeys(), save.settings.quickKeys, preset())); // 0.55: every key settable (keymap.ts)
 labelToolCards(); renderHelpKeys(); labelSpeedKeys();
 const slotVersions = new Map<number | null, string | undefined>(); // 0.47.1: per slot, the version that wrote it before this session (Codex badges)
 slotPrevVersion(slotVersions, Save.activeSlot(), save.gameVersion); // read before the updater stamps the current version
@@ -303,7 +319,8 @@ function importPlanInner(p: Plan) {
 }
 function newSim(keepPlan: boolean, newSeed = false) {
   closeOutBattle(); // 0.57: a battle left before it ended is recorded as abandoned
-  armedMenu = null; // 0.55
+  armedMenu = null; menuKept = false; // 0.55
+  camSpots = [null, null, null, null]; // 0.63: camera spots are per battle
   clearTicker(); closePerson();
   const plan = keepPlan ? exportPlan() : null;
   if (newSeed) seed = Math.floor(Math.random() * 1e9);
@@ -531,6 +548,15 @@ function renderPerson() {
   }
   $("person").classList.toggle("following", following);
   $("person").hidden = false;
+}
+/** 0.63: camera spots: Ctrl+key saves the view, the key jumps back (per battle). */
+var camSpots: ([number, number, number] | null)[] = [null, null, null, null];
+function camSpot(i: number, store: boolean) {
+  if (mode !== "game" || stack.length) return;
+  const k = keyLabel(keyFor(`cam.spot${i + 1}`));
+  if (store) { camSpots[i] = [cam.x, cam.y, cam.scale]; say(`Camera spot ${i + 1} saved (${k} jumps back).`, 1500); return; }
+  const c = camSpots[i]; if (!c) { say(`Camera spot ${i + 1} is empty. Ctrl+${k} saves one.`, 2000); return; }
+  following = false; cam.x = c[0]; cam.y = c[1]; cam.scale = c[2]; miniT = 0;
 }
 function centerOn(x: number, y: number) { cam.x = canvas.width / 2 - x * cam.scale; cam.y = canvas.height / 2 - y * cam.scale; }
 function followTick() {
@@ -919,7 +945,7 @@ function toggleTool(t: Tool) { if (tool === t && t !== "pan") setTool("pan"); el
 function setTool(t: Tool) {
   if (!isOpen(t)) { say(`${toolName(t)} unlocks at ${P.UNLOCK_XP[t].toLocaleString()} XP. You have ${(save.xp ?? 0).toLocaleString()}.`, 3500); return; }
   orderSel = null; nukeArm = null;
-  if (t === "order") { t = "pan"; say("Select units (click them or drag a box), then right-click where to send them. Q attack-move, R patrol, E escort, F stop, G stand by.", 6000); } // 0.45: the Order card now opens unit control
+  if (t === "order") { t = "pan"; say(withKeys("Select units (click them or drag a box), then right-click where to send them. {key:order.amove} attack-move, {key:order.patrol} patrol, {key:order.escort} escort, {key:order.stop} stop, {key:order.standby} stand by."), 6000); } // 0.45: the Order card now opens unit control
   if (t !== "pan" && (sel.length || armedCmd)) { sel = []; armedCmd = null; renderActions(); } // 0.44: the strip goes with the selection
   tool = t; strikeStart = null;
   openCatFor(t); // 0.51 review: after tool = t, so the right tile lights
@@ -927,8 +953,8 @@ function setTool(t: Tool) {
   document.querySelectorAll<HTMLButtonElement>("[data-tool]").forEach(b => b.classList.toggle("on", b.dataset.tool === t));
   renderQuickbar();
   const hints: Record<Tool, string> = {
-    pan: "Right-drag to move the map, wheel to zoom. Click a unit to select it (drag a box for several): right-click sends mobile units or an AC-130, T changes what it shoots first, X or Delete removes it (an AC-130 goes home).",
-    order: "Unit control: select units with Move/Aim (click or drag a box), then right-click where to send them. Q attack-move, R patrol, E escort, F stop, G stand by.",
+    pan: "Right-drag to move the map, wheel to zoom. Click a unit to select it (drag a box for several): right-click sends mobile units or an AC-130, {key:order.target} changes what it shoots first, {key:order.remove} or Delete removes it (an AC-130 goes home).",
+    order: "Unit control: select units with Move/Aim (click or drag a box), then right-click where to send them. {key:order.amove} attack-move, {key:order.patrol} patrol, {key:order.escort} escort, {key:order.stop} stop, {key:order.standby} stand by.",
     barrage: C.ABILITIES.barrage.hint, moab: C.ABILITIES.moab.hint, nuke: C.ABILITIES.nuke.hint,
     a10: C.ABILITIES.a10.hint, cluster: C.ABILITIES.cluster.hint, tomahawk: C.ABILITIES.tomahawk.hint, gunship: C.ABILITIES.gunship.hint,
     himars: "Click a street or park, ideally inside your zone (free reloads). Ripples 6 rockets at the thickest crowd up to 460 m away. Nothing closer than 60 m.",
@@ -954,7 +980,7 @@ function setTool(t: Tool) {
     supply_drop: C.ABILITIES.supply_drop.hint,
     c4: "Click a bridge or a building to plant a charge, click again to remove it. Battle: click a charged one to blow it. A building drops into rubble that slows everyone: block a road or clear a sight line.",
   };
-  $("hint").textContent = hints[t]; $("hint").title = hints[t]; // one line in the footer; the full text on hover
+  const ht = withKeys(hints[t]); $("hint").textContent = ht; $("hint").title = ht; // 0.63: keys follow the live layout // one line in the footer; the full text on hover
 }
 
 function closeDraft() {
@@ -1098,7 +1124,7 @@ function click(cx: number, cy: number) {
 let drag: { x: number; y: number; moved: boolean; pan: boolean } | null = null;
 canvas.addEventListener("contextmenu", e => e.preventDefault());
 canvas.addEventListener("pointerdown", e => {
-  if (armedMenu) setMenu(null); // 0.55: a click on the map lets go of a waiting build menu
+  if (armedMenu && menuAfterMapClick(armedMenu, menuKept) === null) setMenu(null); // 0.55: a click on the map lets go of a waiting build menu (0.63 review I3: not one Shift kept open)
   if (mode !== "game") return;
   canvas.setPointerCapture(e.pointerId);
   drag = { x: e.clientX, y: e.clientY, moved: false, pan: e.button !== 0 }; // 0.45: left-drag with Move/Aim draws a selection box; right/middle-drag pans
@@ -1253,9 +1279,9 @@ addEventListener("keydown", e => {
   // 0.55: build menus: menu key, then the item's letter. First of all game keys (review #2): a letter wins over any
   // always-key bound to it while its menu waits, and any other key lets go of the menu.
   if (mode === "game" && !stack.length && !e.ctrlKey && !e.metaKey && !e.altKey && rebindSlot === null && !e.repeat && !typingInField(e.target)) {
-    const ms = menuStep(armedMenu, kk);
+    const ms = menuStep(armedMenu, kk, { selected: sel.length > 0, shift: e.shiftKey }); // 0.63
     if (ms.armed !== armedMenu) setMenu(ms.armed);
-    if (ms.pick) { e.preventDefault(); pickTool(ms.pick); return; }
+    if (ms.pick) { e.preventDefault(); menuKept = ms.armed !== null; pickTool(ms.pick); return; } // 0.63 review I3: a Shift pick keeps the menu through map clicks
     if (!ms.passThrough) { e.preventDefault(); return; }
   }
   if (k === "F10") { e.preventDefault(); toggleDevPanel(); return; }
@@ -1290,12 +1316,13 @@ addEventListener("keydown", e => {
     if (it) { e.preventDefault(); runIntent(it); return; } }
   if (act === "order.topup" && plain && sel.length) { topUpSelected(); return; } // 0.49
   if (act === "pause") { e.preventDefault(); if (sim.phase === "battle") setSpeed(speed ? 0 : battleSpeed()); return; }
+  if (act?.startsWith("cam.spot") && !e.altKey && !e.metaKey) { e.preventDefault(); camSpot(Number(act.slice(8)) - 1, e.ctrlKey); return; } // 0.63
   if (!plain) return;
   if (act === "alert") { if (sim.phase === "battle") jumpToPing(); return; } // 0.48 (0.54: was F)
   if (act === "view.heights") showHeights = !showHeights;
   else if (act === "view.ranges") showRanges = !showRanges;
-  else if (act === "inventory") toggleInv(); // 0.60
-  else if (act === "view.heatmap") { showHeatmap = !showHeatmap; if (endDismissed && !showHeatmap) endDismissed = false; refreshUi(); } // 0.57: heatmap off again brings the report back
+  else if (act === "inventory" || act === "tool.inventory") toggleInv(); // 0.60 (0.63: the Grid card's key too)
+  else if (act === "view.heatmap" || act === "tool.heatmap") { showHeatmap = !showHeatmap; if (endDismissed && !showHeatmap) endDismissed = false; refreshUi(); } // 0.57: heatmap off again brings the report back
   else if (k === "Enter" && tool === "zone" && draft.length) closeDraft();
   else if (act === "tool.zone") setTool("zone");
   else if (act === "tool.remove") setTool("remove");
@@ -1325,6 +1352,7 @@ function startBattle() {
   if (planKey) { save.plans[planKey] = exportPlan(); Save.store(save); }
   if (sim.units.filter(u => sim.canOrder(u)).length >= 2) tip("groups"); // 0.50
   sim.startBattle(); speed = battleSpeed(); setTool("pan"); refreshUi(); tip("views"); // 0.41
+  if (!save.settings.gridNoteSeen) { save.settings.gridNoteSeen = true; Save.store(save); if (preset() === "grid") notify("Hotkeys now use the grid: the keys match the buttons' places. Switch back in Settings > Controls.", false, sim.time + 40); } // 0.63: once per save
   sim.stats.flags = { dev: !!save.settings.devMode, modded: modReports.some(m => m.changes > 0) }; // 0.57
   if ((save.career?.battles ?? 0) >= 1) tip("report"); // 0.57: from the second battle on
   if (sim.classKids > 0) notify("Schools are walking their students to your safe zone. Parents: meet your kids there.", false, sim.time + 30); // 0.41 (Insane school day)
@@ -2209,6 +2237,18 @@ function renderActions() {
   const us = orderable(), os = selOrbits(), anySelected = sel.length > 0 && mode === "game";
   const card = commandCard({ phase: sim.phase, anySelected, armed: armedCmd, tool, zone: !sel.length && selZone >= 0 && !!sim.zones[selZone],
     orderable: us.map(u => ({ kind: u.kind, fort: u.fort, standby: u.standby, damaged: !!u.soldiers?.some(so => !so.alive) })) });
+  const grid = preset() === "grid";
+  if (grid && armedMenu && anySelected) { armedMenu = null; menuKept = false; renderBuild(); } // 0.63: selecting units closes the menu (orders win)
+  if (grid && armedMenu) { // 0.63: the open build menu fills the card, each item on its key's place, Back on its own
+    tools.hidden = true; orders.hidden = false;
+    const at = (h: string, i: number) => h.replace("<button ", `<button style="grid-row:${Math.floor(i / 5) + 1};grid-column:${i % 5 + 1}" `);
+    const slots = gridSlots<string>([...MENU_ITEMS[armedMenu].map(t => ({ item: t, key: keyFor(`build.${t}`) })), { item: "@back", key: keyFor("menu.back") }]);
+    const html = slots.map((t, i) => !t ? "" : t === "@back"
+      ? at(`<button class="cmd" data-cmd="back" data-tip="Back" data-tipkey="${keyLabel(keyFor("menu.back")) || "Esc"}" data-tipdesc="Out of the ${MENU_NAME[armedMenu!]} menu."><b class="gback">Back</b>${keyFor("menu.back") ? `<span class="hk">${keyLabel(keyFor("menu.back"))}</span>` : ""}</button>`, i)
+      : at(buildTile(t, true), i)).join("");
+    if (orders.innerHTML !== html) orders.innerHTML = html;
+    if (tipEl) updateTip(); return;
+  }
   const toolsPage = card.length > 0 && card[0].tool !== undefined; // the tools list: show the static page
   tools.hidden = !toolsPage; orders.hidden = toolsPage;
   if (toolsPage) { if (tipEl) updateTip(); return; }
@@ -2224,8 +2264,11 @@ function renderActions() {
     : orderIcon(b.id === "fortify" && b.label === "Dismount" ? "dismount" : b.id);
   const desc = (b: CardButton) => b.id === "remove" && onlyAir ? "Send the AC-130 home (before it arrives you get the charge back)."
     : b.id === "remove" && sim.phase === "plan" ? "Remove it and get its cost back." : b.id === "remove" ? "A helicopter pulls it out; you get its cost back once it is out."
-    : CMD_DESC[b.id === "fortify" && b.label === "Dismount" ? "dismount" : b.id] ?? "";
-  const html = card.filter(b => b.id !== "target" || armedU).map(b => `<button class="cmd${b.on ? " on" : ""}" data-cmd="${b.id}" data-tip="${esc(label(b))}" data-tipkey="${b.key === "RMB" ? "Right-click" : b.key}" data-tipdesc="${esc(desc(b))}"><img src="${icon(b)}" alt="${esc(label(b))}" draggable="false">${b.key && b.key !== "RMB" ? `<span class="hk">${b.key}</span>` : ""}</button>`).join("");
+    : withKeys(CMD_DESC[b.id === "fortify" && b.label === "Dismount" ? "dismount" : b.id] ?? "");
+  const btn = (b: CardButton, style = "") => `<button class="cmd${b.on ? " on" : ""}"${style} data-cmd="${b.id}" data-tip="${esc(label(b))}" data-tipkey="${b.key === "RMB" ? "Right-click" : b.key}" data-tipdesc="${esc(desc(b))}"><img src="${icon(b)}" alt="${esc(label(b))}" draggable="false">${b.key && b.key !== "RMB" ? `<span class="hk">${b.key}</span>` : ""}</button>`;
+  const shown = card.filter(b => (b.id !== "target" || armedU) && !(grid && b.id === "move")); // 0.63: Grid: right-click moves; the card keeps its places for keys
+  const html = grid ? gridSlots(shown.map(b => ({ item: b, key: keyFor(`order.${b.id}`) }))).map((b, i) => b ? btn(b, ` style="grid-row:${Math.floor(i / 5) + 1};grid-column:${i % 5 + 1}"`) : "").join("")
+    : shown.map(b => btn(b)).join("");
   if (orders.innerHTML !== html) orders.innerHTML = html;
   if (tipEl) updateTip();
 }
@@ -2349,6 +2392,7 @@ function renderInv() {
 }
 function toggleInv(on = !invOpen) { invOpen = on; $("inv").hidden = !on; renderInv(); }
 $("invbtn").addEventListener("click", () => toggleInv());
+document.querySelectorAll<HTMLElement>("#cmdtools [data-menu]").forEach(b => b.addEventListener("click", () => { const m = b.dataset.menu as MenuId; setMenu(armedMenu === m ? null : m); })); // 0.63: the Grid card's menu buttons
 $("inv").addEventListener("click", ev => {
   const el = ev.target as HTMLElement;
   if (el.closest("#inv-close")) { toggleInv(false); return; }
@@ -2788,14 +2832,14 @@ function toolInfoHtml(t: string): { html: string; accent: string } | null {
   if (t === "zone" || t === "gate" || t === "c4" || t === "depot" || t === "remove" || t === "pan" || t === "order" || t === "heatmap" || t === "closegates" || t === "clear") {
     const meta: Record<string, [string, string, string, string, SpriteKey]> = {
       zone: ["Safe Zone Perimeter", `${C.money(C.ZONE_BASE_COST)} base`, "Engineering · Quarantine Perimeter", "Click polygon corners around city blocks, then click the first corner (or press Enter) to close. Road crossings become guarded Gates; interior buildings can host Support Facilities.", "zone"],
-      gate: ["Gate / Wall Toggle [G]", `${sim.gateMaxHp()} / ${sim.wallMaxHp()} HP`, "Fortification · Access Control", "Gates (blue, 3,000 HP) let fleeing civilians enter while blocking infected. Walls (white, 8,000 HP) block everyone and withstand 2.6x more punishment. Close gates once civilians are inside.", "gate"],
+      gate: ["Gate / Wall Toggle [{key:tool.gate}]", `${sim.gateMaxHp()} / ${sim.wallMaxHp()} HP`, "Fortification · Access Control", "Gates (blue, 3,000 HP) let fleeing civilians enter while blocking infected. Walls (white, 8,000 HP) block everyone and withstand 2.6x more punishment. Close gates once civilians are inside.", "gate"],
       c4: ["Bridge Demolition Charge", `${C.money(C.C4_COST)}`, "Combat Engineering · River Denial", "Plant charges on river bridges or buildings during planning or battle, then detonate during battle. A bridge drops into the river (Swimmer mutants still swim across). A building comes down in a controlled demolition: rubble fills its footprint and spills into the street, slowing everyone. Block a road or clear a sight line. Not on safe zone buildings or roofs you hold.", "c4"],
       depot: ["Fuel Depot Detonation", `${sim.depots.filter(d => !d.used).length} remaining`, "Environmental Hazard · Massive Blast", "Pre-existing industrial fuel tanks (orange triangles). Click during battle for a 22 m explosion (5,000 dmg) that levels adjacent buildings into rubble and ignites fires.", "depot"],
       remove: ["Remove / Helicopter Extraction", "100% Refund", "Logistics · Redeployment", "In Planning, removes a unit or support building immediately for a full refund. In Battle, dispatches an extraction helicopter (1.5x deploy time; Troops 10 s) to pull the unit out and refund its cost.", "remove"],
-      order: ["Unit Orders", "Free", "Command & Control", "Select mobile units with Move/Aim (click, Shift-click or drag a box). Right-click: move (straight there, shooting on the way). A: attack-move. P: patrol. E: escort a person and their family. S: stop. D: stand by (hold fire). Shift queues orders.", "order"],
-      pan: ["Move/Aim: Select & Command", "Click / Drag", "Command & Control", "Right-drag to pan, wheel to zoom. Click a unit or building to select it, drag a box to select mobile units. Right-click sends selected units (Q attack-move, R patrol, E escort, F stop, G stand by; Shift queues) or a selected AC-130. T cycles target priority (Nearest, Wall Biters, Infected Chasing Civilians); Delete removes it (full refund in Planning, extraction in Battle).", "pan"],
-      heatmap: ["Spatial Kill Heatmap [H]", `${sim.kills.toLocaleString()} kills`, "Battlefield Intelligence", "Overlays a smoothed thermal density map of every infected kill. Hover a unit in the build panel during battle to isolate kills made by that unit class.", "heatmap"],
-      recall: ["Recall Units [Q]", sim.recalled ? "Recalled" : "Instant", "Command & Control", "Every APC, tank, squad, paratrooper and aircraft falls back to the nearest safe zone and holds there. Boats and street emplacements stay put. Press again to send them all back to their posts; a strike order sends one unit out on its own.", "order"],
+      order: ["Unit Orders", "Free", "Command & Control", "Select mobile units with Move/Aim (click, Shift-click or drag a box). Right-click: move (straight there, shooting on the way). {key:order.amove}: attack-move. {key:order.patrol}: patrol. {key:order.escort}: escort a person and their family. {key:order.stop}: stop. {key:order.standby}: stand by (hold fire). Shift queues orders.", "order"],
+      pan: ["Move/Aim: Select & Command", "Click / Drag", "Command & Control", "Right-drag to pan, wheel to zoom. Click a unit or building to select it, drag a box to select mobile units. Right-click sends selected units ({key:order.amove} attack-move, {key:order.patrol} patrol, {key:order.escort} escort, {key:order.stop} stop, {key:order.standby} stand by; Shift queues) or a selected AC-130. T cycles target priority (Nearest, Wall Biters, Infected Chasing Civilians); Delete removes it (full refund in Planning, extraction in Battle).", "pan"],
+      heatmap: ["Spatial Kill Heatmap [{key:view.heatmap}]", `${sim.kills.toLocaleString()} kills`, "Battlefield Intelligence", "Overlays a smoothed thermal density map of every infected kill. Hover a unit in the build panel during battle to isolate kills made by that unit class.", "heatmap"],
+      recall: ["Recall Units [{key:tool.recall}]", sim.recalled ? "Recalled" : "Instant", "Command & Control", "Every APC, tank, squad, paratrooper and aircraft falls back to the nearest safe zone and holds there. Boats and street emplacements stay put. Press again to send them all back to their posts; a strike order sends one unit out on its own.", "order"],
       closegates: ["Lock Down All Gates", "Instant", "Emergency Perimeter Seal", "Immediately converts every intact blue Gate across all Safe Zones into a reinforced white Wall (scaling current HP proportionally).", "gate"],
       clear: ["Clear Safe Zone", "Full Refund", "Planning Reset", "Removes your drawn Safe Zone polygon and refunds its cost so you can redraw your perimeter from scratch (available during Planning phase).", "remove"],
     };
@@ -2803,9 +2847,9 @@ function toolInfoHtml(t: string): { html: string; accent: string } | null {
     if (m) {
       const spUrl = SPRITE_URL[m[4]];
       return out(
-        `<div class="ip-top">${spUrl ? `<img class="ip-portrait" src="${spUrl}" alt="" />` : ""}<div class="ip-meta"><div class="ip-head"><span class="ip-title">${m[0]}</span><span class="ip-cost">${m[1]}</span></div>` +
+        `<div class="ip-top">${spUrl ? `<img class="ip-portrait" src="${spUrl}" alt="" />` : ""}<div class="ip-meta"><div class="ip-head"><span class="ip-title">${withKeys(m[0])}</span><span class="ip-cost">${m[1]}</span></div>` +
         `<div class="ip-role">${m[2]}</div></div></div>` +
-        `<div class="ip-desc">${m[3]}</div>`,
+        `<div class="ip-desc">${withKeys(m[3])}</div>`,
         "#7cfc9a"
       );
     }
@@ -3202,13 +3246,14 @@ const catOf = (t: string) => Object.keys(catTools).find(c => catTools[c].include
 let buildCat: string | null = null; // 0.51: the build panel's open tab (null until first drawn: the first category)
 function sellAbility(k: C.AbilityKind) { if (sim.sellAbility(k)) { say(`Sold a ${C.ABILITIES[k].name.toLowerCase()}.`, 2000); refreshUi(); } }
 /** 0.51: one build tile: the tool's icon, lock and hotkey; name and price or charges go in its tooltip (0.51.1). From its hidden source card. */
-function buildTile(t: string) {
+function buildTile(t: string, inCard = false) {
   const c = toolCard(t)!, img = c.querySelector("img")?.getAttribute("src") ?? "";
   const name = c.querySelector(".tc-name")?.textContent ?? toolName(t), sm = c.querySelector("small")?.textContent ?? "";
   const hk = keyLabel(keyFor(`build.${t}`)), m = menuOfTool(t), mk = m ? keyLabel(keyFor(`menu.${m}`)) : ""; // 0.55: menu key + letter
   const cls = ["btile", c.classList.contains("locked") ? "locked" : "", c.disabled ? "off" : "", tool === t ? "on" : "", m && armedMenu === m ? "armed" : ""].join(" ");
   // 0.51.1: picture only; name, hotkey and price or charges show in the hover tooltip (full details in the info panel)
-  return `<button class="${cls}" data-ptool="${t}" data-tip="${esc(name)}" data-tipkey="${hk ? (mk ? `${mk} then ${hk}` : hk) : ""}" data-tipsub="${esc(sm)}"><img src="${img}" alt="${esc(name)}" draggable="false">${hk ? `<span class="hk">${hk}</span>` : ""}</button>`;
+  const shown = inCard || preset() !== "grid" || !mk ? hk : hk ? `${mk}\u00b7${hk}` : ""; // 0.63: Grid: the middle tiles show the two-key combo (Z·T)
+  return `<button class="${cls}" data-ptool="${t}" data-tip="${esc(name)}" data-tipkey="${hk ? (mk && !inCard ? `${mk} then ${hk}` : hk) : ""}" data-tipsub="${esc(sm)}"><img src="${img}" alt="${esc(name)}" draggable="false">${shown ? `<span class="hk">${shown}</span>` : ""}</button>`;
 }
 /** 0.51: the build panel: category tabs over the open category's tiles (always shown; replaces the pop-up picker). */
 function renderBuild() {
@@ -3216,14 +3261,15 @@ function renderBuild() {
   const armedCat = armedMenu ? MENU_NAME[armedMenu] : null;
   const tabs = bt.cats.map(c => { const m = (Object.keys(MENU_NAME) as MenuId[]).find(x => MENU_NAME[x] === c), mk = m ? keyLabel(keyFor(`menu.${m}`)) : "";
     return `<button data-cat="${c}" class="${[c === buildCat ? "on" : "", c === armedCat ? "armed" : ""].join(" ").trim()}"${mk ? ` title="${mk}"` : ""}>${c}${mk ? ` <span class="tk">${mk}</span>` : ""}</button>`; }).join("");
-  const grid = catTools[buildCat].map(buildTile).join("");
+  const grid = catTools[buildCat].map(t => buildTile(t)).join("");
   if ($("btabs").innerHTML !== tabs) $("btabs").innerHTML = tabs;
   if ($("bgrid").innerHTML !== grid) $("bgrid").innerHTML = grid;
   if (tipEl) updateTip();
 }
 /** 0.55: the build menu waiting for its letter (null: none). Its tab lights up and its letters turn gold. */
 var armedMenu: MenuId | null = null; // var: newSim/pause can run before this line
-function setMenu(m: MenuId | null) { armedMenu = m; if (m) setBuildTab(MENU_NAME[m]); else renderBuild(); }
+var menuKept = false; // 0.63 review I3: the open menu was kept with Shift (map clicks don't close it)
+function setMenu(m: MenuId | null) { if (m !== armedMenu || !m) menuKept = false; armedMenu = m; if (m) setBuildTab(MENU_NAME[m]); else renderBuild(); if (preset() === "grid" && typeof sel !== "undefined") renderActions(); } // 0.63: the Grid card shows the menu
 function setBuildTab(cat: string) { if (catTools[cat]) { buildCat = cat; tip("build"); renderBuild(); } }
 /** setTool() calls this: open the tab of the tool picked (a key or a tile) so its tile shows as on. */
 function openCatFor(t: string) { const c = catOf(t); if (c && c !== buildCat) buildCat = c; renderBuild(); }
@@ -3278,11 +3324,18 @@ function buildToolSet() { return new Set(Object.values(catTools).flat()); }
 /** 0.55: use these bindings everywhere and save them (only what differs from the defaults). */
 function applyBinds(b: Binds) {
   setBinds(b);
-  const ov = overrides(b);
-  if (Object.keys(ov).length) save.settings.keys = ov; else delete save.settings.keys;
+  const ov = overrides(b, preset()), f = preset() === "grid" ? "keysGrid" : "keys"; // 0.63: each preset keeps its own changes
+  if (Object.keys(ov).length) save.settings[f] = ov; else delete save.settings[f];
   delete save.settings.quickKeys; // folded into settings.keys
   Save.store(save);
   labelToolCards(); labelSpeedKeys(); renderHelpKeys(); renderQuickbar(); refreshUi(); codex?.refresh(); // review #4: every key label follows
+}
+/** 0.63: switch the key layout: its defaults plus its own saved changes; any open menu lets go. */
+function applyPreset(p: Preset) {
+  setPreset(p); save.settings.keyPreset = p;
+  armedMenu = presetSwitchResets(p, armedMenu).armed; menuKept = false;
+  applyBinds(cleanKeys(presetKeys(), undefined, p));
+  renderBuild(); renderActions();
 }
 /** The context the keyboard is in right now (which actions a key can mean). */
 /** 0.55 review #4: the speed and pause buttons, the Save game button and the slots line show the live keys. */
@@ -3295,14 +3348,15 @@ function labelSpeedKeys() {
 }
 function ctxNow(): Ctx { return sel.length ? "selected" : "idle"; }
 function renderHelpKeys() { // the help line under the panel (function scope: applyBinds can run before module consts)
-  const el = document.getElementById("helpkeys"); if (el) el.textContent = withKeys("{key:tool.zone} zone · {key:tool.remove} sell · {key:tool.order} order · {key:tool.pan} move/aim · {key:menu.units} {key:menu.actions} {key:menu.support} build menus · {key:group.1}-{key:group.5} groups · quick bar {key:quick.1}-{key:quick.5} · {key:view.heights} heights · {key:view.ranges} ranges · {key:view.heatmap} heatmap · {key:camera.up}{key:camera.left}{key:camera.down}{key:camera.right} move");
+  const camKeys = withKeys("{key:camera.up}{key:camera.left}{key:camera.down}{key:camera.right}"), cam = camKeys.includes("(unbound)") ? "arrows" : camKeys; // 0.63: Grid leaves WASD free
+  const el = document.getElementById("helpkeys"); if (el) el.textContent = withKeys("{key:tool.zone} zone · {key:tool.remove} sell · {key:tool.order} order · {key:tool.pan} move/aim · {key:menu.units} {key:menu.actions} {key:menu.support} build menus · {key:group.1}-{key:group.5} groups · quick bar {key:quick.1}-{key:quick.5} · {key:view.heights} heights · {key:view.ranges} ranges · {key:view.heatmap} heatmap · ") + `${cam} move`;
 }
 // ---- 0.55: Settings > Controls: every key settable (rules in keymap.ts bindProblem) ----
 var promptAct: string | null = null; // the action waiting for its new key
 const FIXED_ROWS: [string, string][] = [["Menu / cancel", "Esc"], ["Move the map", "Arrow keys"], ["Close the safe zone", "Enter"], ["Remove the selection", "Delete, Backspace"], ["Select, place, aim", "Left mouse"], ["Move, put a tool down", "Right mouse"]];
 function renderControls() {
-  const list = $("controls-list");
-  let html = "";
+  const list = $("controls-list"), p = preset();
+  let html = `<section class="preset"><h3>Key layout</h3><div class="crow"><button class="keybox${p === "grid" ? " on" : ""}" data-preset="grid">Grid (RTS)</button><button class="keybox${p === "wasd" ? " on" : ""}" data-preset="wasd">WASD camera</button></div><p class="hint">${p === "grid" ? "Grid: Q W E R T / A S D F G / Z X C V B match the command card's places; the build menus open in the card. Camera: arrow keys, right or middle drag, the minimap, the screen edge." : "WASD camera: W A S D move the map; the build menus open with their letters in the Build panel."} Each layout keeps its own key changes.</p></section>`; // 0.63
   for (const g of controlsRows(binds())) {
     html += `<section><h3>${g.group}<button class="greset" data-greset="${esc(g.group)}">Reset</button></h3>`;
     let sub = "";
@@ -3322,18 +3376,19 @@ function setControlsMsg(text: string, swapWith?: { id: string; other: string; ke
     const b = document.createElement("button"); b.textContent = "Swap";
     b.addEventListener("click", () => { // the action takes the key; the other gets the old key if it fits there, else none
       const b0 = binds(), { id, other, key } = swapWith, nb: Binds = { ...b0, [id]: key, [other]: null }, old = b0[id];
-      if (old && !bindProblem(other, old, nb)) nb[other] = old;
+      if (old && !bindProblem(other, old, nb, preset())) nb[other] = old;
       applyBinds(nb); promptAct = null; renderControls(); setControlsMsg(nb[other] ? "Swapped." : "Done. The other action has no key now (the old one doesn't fit there).");
     });
     m.appendChild(b);
   }
 }
 $("controls-list").addEventListener("click", e => {
-  const t = e.target as HTMLElement, box = t.closest<HTMLElement>("[data-act]"), gr = t.closest<HTMLElement>("[data-greset]");
+  const t = e.target as HTMLElement, box = t.closest<HTMLElement>("[data-act]"), gr = t.closest<HTMLElement>("[data-greset]"), pr = t.closest<HTMLElement>("[data-preset]");
+  if (pr) { applyPreset(pr.dataset.preset as Preset); promptAct = null; renderControls(); setControlsMsg(pr.dataset.preset === "grid" ? "Grid (RTS) layout." : "WASD camera layout."); return; } // 0.63
   if (box) { promptAct = promptAct === box.dataset.act ? null : box.dataset.act!; setControlsMsg(promptAct ? "Press the new key (Esc keeps the old one, Backspace clears it)." : ""); renderControls(); }
-  else if (gr) { applyBinds(resetGroup(gr.dataset.greset as Group, binds())); promptAct = null; renderControls(); setControlsMsg(`${gr.dataset.greset}: back to the default keys.`); }
+  else if (gr) { applyBinds(resetGroup(gr.dataset.greset as Group, binds(), preset())); promptAct = null; renderControls(); setControlsMsg(`${gr.dataset.greset}: back to the default keys.`); }
 });
-$("controls-reset").addEventListener("click", () => { applyBinds(defaultBinds()); promptAct = null; renderControls(); setControlsMsg("Every key is back to its default."); });
+$("controls-reset").addEventListener("click", () => { applyBinds(presetDefaults(preset())); promptAct = null; renderControls(); setControlsMsg("Every key is back to its default."); });
 // the next key press goes to the action being rebound (captured before everything else, including Esc = Back)
 addEventListener("keydown", e => {
   if (promptAct === null || $("s-controls").hidden) return;
@@ -3343,7 +3398,7 @@ addEventListener("keydown", e => {
   const id = promptAct;
   if (k === "escape") { promptAct = null; renderControls(); setControlsMsg(""); return; }
   if (k === "backspace" || k === "delete") { promptAct = null; applyBinds({ ...binds(), [id]: null }); renderControls(); setControlsMsg("Cleared: that action has no key now."); return; }
-  const p = bindProblem(id, k, binds());
+  const p = bindProblem(id, k, binds(), preset());
   if (p && !p.other) { setControlsMsg(p.why); return; }
   if (p && p.other) { setControlsMsg(p.why, p.others?.length === 1 ? { id, other: p.other, key: k } : undefined); return; } // review #1: Swap trades with one action only
   promptAct = null; applyBinds({ ...binds(), [id]: k }); renderControls(); setControlsMsg(`Set to ${keyLabel(k)}.`);
@@ -3490,8 +3545,11 @@ $("hud-sel").addEventListener("dblclick", e => { // 0.52: roster double-click ju
   if (u) { const [x, y] = sim.squadCenter(u); centerOn(x, y); following = false; }
 });
 $("cmdorders").addEventListener("click", e => { // 0.51: the orders page of the command card
+  const pt = (e.target as HTMLElement).closest<HTMLButtonElement>("[data-ptool]"); // 0.63: a build item in the Grid card (Shift-click keeps the menu open)
+  if (pt) { const m = armedMenu; pickTool(pt.dataset.ptool!); if (!e.shiftKey || !m) setMenu(null); else { menuKept = true; renderActions(); } return; }
   const b = (e.target as HTMLElement).closest<HTMLButtonElement>("[data-cmd]"); if (!b) return;
   const k = b.dataset.cmd!;
+  if (k === "back") { setMenu(null); return; } // 0.63
   if (k === "move") say("Right-click on the map where to send them (Shift queues).", 2500);
   else if (k === "topup") topUpSelected(); // 0.49
   else if ((k === "buytroops" || k === "buysniper") && selZone >= 0) { const e = sim.placeFromZone(k === "buytroops" ? "garrison" : "sniper", selZone); if (e) say(e); else { snd.radio(); refreshUi(); renderActions(); } } // 0.50
@@ -3795,7 +3853,7 @@ async function loadBattle(n: number) {
 function applyProfile() {
   if (save.xp == null) { save.xp = P.grandfatherXp(save.best); Save.store(save); }
   seedAchievements(); // 0.59
-  quick = cleanQuickbar(save.settings.quickbar, t => buildToolSet().has(t)); applyBinds(cleanKeys(save.settings.keys, save.settings.quickKeys)); // 0.54 (0.55: all keys)
+  quick = cleanQuickbar(save.settings.quickbar, t => buildToolSet().has(t)); save.settings.keyPreset ??= "grid"; setPreset(save.settings.keyPreset); armedMenu = null; applyBinds(cleanKeys(presetKeys(), save.settings.quickKeys, preset())); // 0.54 (0.55: all keys; 0.63: the slot's own layout)
   pausedSpeed = save.settings.speed ?? 1;
   showRanges = save.settings.showRanges;
   applyVolumes(); applyFullscreen(); updateDailyButton(); syncDifficultyButtons(); syncDev();

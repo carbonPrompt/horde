@@ -29,7 +29,9 @@ export const RECIPES: Recipe[] = [
     setup: [ZONE, "place garrison 172,78", "place garrison 190,106", "place sniper 186,78", "battle", "advance 3", "select 190,106", "key Ctrl+1", "select 172,78", "key Ctrl+2", "select 186,78", "key Ctrl+3", "key 1", "cursor off"] },
   { ...FH, rev: 2, id: "clip-troops-fortify", kind: "clip", camera: { x: 191, y: 119, scale: 8 }, crop: [180, 140, 600, 180], seconds: 12.5,
     setup: [ZONE, "place garrison 191,119", "battle", "advance 3", "select 191,119", "click 192,126 right"], action: ["advance 12.5"] },
-  { ...FH, rev: 4, id: "controls-hud", kind: "shot", size: [1093, 615], camera: { x: 191, y: 106, scale: 4 }, crop: [0, 415, 1093, 178], setup: [...BATTLE(3), "select 172,78", "cursor off"] }, // 0.51
+  { ...FH, rev: 5, id: "controls-hud", kind: "shot", size: [1366, 768], camera: { x: 191, y: 106, scale: 4 }, crop: [0, 568, 1366, 178], setup: [...BATTLE(3), "select 172,78", "cursor off"] }, // 0.51 (0.63: the Grid card)
+  { ...FH, rev: 1, id: "grid-card-idle", kind: "shot", size: [1366, 768], camera: { x: 191, y: 106, scale: 4 }, crop: [0, 568, 1366, 178], setup: [...BATTLE(3), "cursor off"] }, // 0.63
+  { ...FH, rev: 1, id: "grid-card-units", kind: "shot", size: [1366, 768], camera: { x: 191, y: 106, scale: 4 }, crop: [0, 568, 1366, 178], setup: [...BATTLE(3), "key z", "cursor off"] }, // 0.63
   // ---------- clips ----------
   { ...FH, id: "clip-draw-zone", kind: "clip", camera: { x: 191, y: 106, scale: 4.5 }, crop: MAP, seconds: 5, setup: [],
     action: ["tool zone", "click 165,82", "advance 0.7", "click 217,82", "advance 0.7", "click 217,130", "advance 0.7", "click 165,130", "advance 0.7", "click 165,82"] },

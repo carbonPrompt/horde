@@ -128,11 +128,11 @@
   "h": 58
  },
  "controls-hud": {
-  "version": "0.61.0",
-  "rev": 4,
-  "recipeHash": "fdd23176bbc2",
-  "bytes": 33595,
-  "w": 1093,
+  "version": "0.63.0",
+  "rev": 5,
+  "recipeHash": "fcf30b6632a1",
+  "bytes": 40264,
+  "w": 1366,
   "h": 178
  },
  "end-report-overview": {
@@ -158,6 +158,22 @@
   "bytes": 15867,
   "w": 960,
   "h": 262
+ },
+ "grid-card-idle": {
+  "version": "0.63.0",
+  "rev": 1,
+  "recipeHash": "e076131a82ae",
+  "bytes": 37079,
+  "w": 1366,
+  "h": 178
+ },
+ "grid-card-units": {
+  "version": "0.63.0",
+  "rev": 1,
+  "recipeHash": "d5a24c2d1717",
+  "bytes": 42491,
+  "w": 1366,
+  "h": 178
  },
  "howto-1-battle": {
   "version": "0.61.0",
@@ -328,7 +344,7 @@
   "h": 540
  },
  "start-cursor-label": {
-  "version": "0.61.0",
+  "version": "0.63.0",
   "rev": 1,
   "recipeHash": "5c71586276ad",
   "bytes": 29595,

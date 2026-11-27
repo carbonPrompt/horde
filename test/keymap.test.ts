@@ -28,7 +28,7 @@ test("0.55: clashes name the holder (for Swap); swap trades the two keys", () =>
   expect(bindProblem("tool.order", "f", d)).toBeNull(); // f is an order: another context
   expect(bindProblem("build.garrison", "r", d)?.other).toBe("build.mortar");
   expect(bindProblem("build.garrison", "q", d)).toBeNull(); // menu letters win while the menu waits
-  expect(bindProblem("build.garrison", "m", d)?.other).toBe("menu.actions");
+  expect(bindProblem("build.garrison", "m", d)).toBeNull(); // 0.63: inside a menu its item wins over a menu key
   expect(bindProblem("build.garrison", "w", d)?.other).toBe("camera.up");
   expect(bindProblem("menu.units", "t", d)?.other).toBeTruthy(); // a build letter
   expect(bindProblem("order.amove", "w", d)?.other).toBe("camera.up"); // camera is always on
@@ -91,16 +91,16 @@ test("0.55: the save keeps a well-formed settings.keys and drops junk", () => {
 test("0.55: menuStep: menu key arms, its letter picks, anything else disarms and passes through", async () => {
   const { menuStep } = await import("../src/keymap");
   const d = defaultBinds();
-  expect(menuStep(null, "b", d)).toEqual({ armed: "units", passThrough: false });
-  expect(menuStep("units", "t", d)).toEqual({ armed: null, pick: "garrison", passThrough: false });
-  expect(menuStep("units", "m", d)).toEqual({ armed: "actions", passThrough: false });
-  expect(menuStep("units", "b", d)).toEqual({ armed: null, passThrough: false });
-  expect(menuStep("units", "w", d)).toEqual({ armed: null, passThrough: true });
-  expect(menuStep("units", "q", d)).toEqual({ armed: null, passThrough: true });
-  expect(menuStep("actions", "r", d)).toEqual({ armed: null, pick: "airstrike", passThrough: false });
-  expect(menuStep("support", "e", d)).toEqual({ armed: null, pick: "evac", passThrough: false });
-  expect(menuStep(null, "t", d)).toEqual({ armed: null, passThrough: true });
-  expect(menuStep("units", "escape", d)).toEqual({ armed: null, passThrough: false });
+  expect(menuStep(null, "b", { selected: false, shift: false }, d, "wasd")).toEqual({ armed: "units", passThrough: false });
+  expect(menuStep("units", "t", { selected: false, shift: false }, d, "wasd")).toEqual({ armed: null, pick: "garrison", passThrough: false });
+  expect(menuStep("units", "m", { selected: false, shift: false }, d, "wasd")).toEqual({ armed: "actions", passThrough: false });
+  expect(menuStep("units", "b", { selected: false, shift: false }, d, "wasd")).toEqual({ armed: null, passThrough: false });
+  expect(menuStep("units", "w", { selected: false, shift: false }, d, "wasd")).toEqual({ armed: null, passThrough: true });
+  expect(menuStep("units", "q", { selected: false, shift: false }, d, "wasd")).toEqual({ armed: null, passThrough: true });
+  expect(menuStep("actions", "r", { selected: false, shift: false }, d, "wasd")).toEqual({ armed: null, pick: "airstrike", passThrough: false });
+  expect(menuStep("support", "e", { selected: false, shift: false }, d, "wasd")).toEqual({ armed: null, pick: "evac", passThrough: false });
+  expect(menuStep(null, "t", { selected: false, shift: false }, d, "wasd")).toEqual({ armed: null, passThrough: true });
+  expect(menuStep("units", "escape", { selected: false, shift: false }, d, "wasd")).toEqual({ armed: null, passThrough: false });
 });
 
 test("0.55: controlsRows lists every action in Controls-page groups", async () => {
@@ -108,10 +108,10 @@ test("0.55: controlsRows lists every action in Controls-page groups", async () =
   const g = controlsRows(defaultBinds());
   expect(g.map(x => x.group)).toEqual(["Camera", "Always", "With units selected", "Nothing selected", "Battle groups", "Quick bar", "Build menus"]);
   const build = g.find(x => x.group === "Build menus")!;
-  expect(build.rows.length).toBe(3 + 33);
+  expect(build.rows.length).toBe(3 + 1 + 33); // 0.63: + Back
   expect(build.rows.slice(0, 3).map(r => r.id)).toEqual(["menu.units", "menu.actions", "menu.support"]);
   expect(build.rows.find(r => r.id === "build.garrison")).toEqual({ id: "build.garrison", label: "Troops", key: "T", sub: "Units" });
-  expect(g.find(x => x.group === "Camera")!.rows.map(r => r.key)).toEqual(["W", "A", "S", "D"]);
+  expect(g.find(x => x.group === "Camera")!.rows.map(r => r.key)).toEqual(["W", "A", "S", "D", "F6", "F7", "F8", "F9"]); // 0.63: camera spots
   expect(g.flatMap(x => x.rows).length).toBe(ACTIONS.length);
 });
 

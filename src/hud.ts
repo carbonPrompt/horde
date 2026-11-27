@@ -1,6 +1,6 @@
 // 0.51: the RTS bottom panel's rules: what the command card offers, what the selection panel lists, which build tab is
 // open and what the info panel shows. Pure (no DOM, no Sim): main.ts draws it.
-import { keyFor, keyLabel } from "./keymap";
+import { GRID_ORDER, keyFor, keyLabel } from "./keymap";
 
 export interface CardButton { id: string; label: string; key: string; on?: boolean; off?: boolean; tool?: string }
 
@@ -28,7 +28,7 @@ export const CMD_DESC: Record<string, string> = {
   escort: "Follow and guard a person you click.",
   stop: "Drop all orders and stay put.",
   standby: "Hold fire and stay put until ordered again.",
-  fortify: "C, then click a roof (or right-click a roof): the squad climbs up and digs in.",
+  fortify: "{key:order.fortify}, then click a roof (or right-click a roof): the squad climbs up and digs in.",
   dismount: "Climb down from the roof onto the street.",
   topup: "Fly in replacements for the soldiers this squad lost.",
   target: "Change what this unit shoots first: nearest, closest to the walls, or chasers.",
@@ -98,4 +98,13 @@ export function nextInTab(order: number[], current: number, back: boolean): numb
   const at = order.indexOf(current);
   if (at < 0) return back ? order[order.length - 1] : order[0];
   return order[(at + (back ? order.length - 1 : 1)) % order.length];
+}
+
+/** 0.63: the Grid card's 15 places (GRID_ORDER, row by row). An item whose key is a grid key takes that place (the
+ *  first one wins it); the rest (keys off the grid, no key, or a place already taken) fill the free places in order. */
+export function gridSlots<T>(items: { item: T; key: string | null }[]): (T | null)[] {
+  const out: (T | null)[] = new Array(15).fill(null), rest: T[] = [];
+  for (const { item, key } of items) { const i = key ? GRID_ORDER.indexOf(key) : -1; if (i >= 0 && key!.length === 1 && out[i] === null) out[i] = item; else rest.push(item); }
+  for (const item of rest) { const i = out.indexOf(null); if (i < 0) break; out[i] = item; }
+  return out;
 }

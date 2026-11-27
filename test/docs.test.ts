@@ -133,3 +133,14 @@ test("0.56 review #5: the manual's facts match the game", () => {
   expect(body("howto-12")).toContain("End round"); expect(body("howto-12")).toMatch(/any time/);
   void C;
 });
+
+import { presetDefaults } from "../src/keymap";
+for (const p of ["grid", "wasd"] as const) test(`0.63: the Codex names both key presets, the grid card and camera spots (${p} keys)`, () => {
+  const all = allEntries(), body = (id: string) => withKeys(all.find(e => e.id === id)!.body, presetDefaults(p));
+  const ca = body("controls-all"), bm = body("build-menus"), cp = body("controls-page");
+  for (const t of [ca, cp]) { expect(t).toContain("Grid (RTS)"); expect(t).toContain("WASD camera"); }
+  expect(ca).toContain("F6"); expect(ca).toContain("Ctrl+");
+  expect(bm).toContain("Shift"); expect(bm).toContain("[[fig:grid-card-units]]");
+  expect(cp).toContain("[[fig:grid-card-idle]]");
+  expect(ca).not.toContain("(unbound)"); expect(bm).not.toContain("(unbound)");
+});
