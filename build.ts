@@ -4,9 +4,9 @@ import { VERSION } from "./src/config";
 const out = await Bun.build({ entrypoints: ["src/main.ts"], minify: true, target: "browser" });
 if (!out.success) { console.error(out.logs); process.exit(1); }
 const js = await out.outputs[0].text();
-// Music: assets/music/<title|battle>.ogg (Ogg Opus), embedded as data URLs when present.
+// Music: assets/music/title.ogg + battle-1..4.ogg (Ogg Opus), embedded as data URLs when present.
 const music: Record<string, string> = {};
-for (const t of ["title", "battle"]) {
+for (const t of ["title", "battle-1", "battle-2", "battle-3", "battle-4"]) {
   const f = Bun.file(`assets/music/${t}.ogg`);
   if (await f.exists()) music[t] = "data:audio/ogg;base64," + Buffer.from(await f.arrayBuffer()).toString("base64");
 }

@@ -3,7 +3,7 @@
 // Nothing plays until the first click or key press (browsers require a user gesture).
 import type { UnitKind } from "./config";
 
-type Track = "title" | "battle";
+type Track = "title" | `battle-${number}`; // 0.64: battle-1..4, rotated per level (src/playlist.ts)
 const MUSIC: Partial<Record<Track, string>> = (globalThis as any).HORDE_MUSIC ?? {};
 const SFX: Record<string, string> = (globalThis as any).HORDE_SFX ?? {};
 
@@ -19,6 +19,8 @@ const GAP: Partial<Record<UnitKind, number>> = { garrison: 140, militia: 160, pa
 /** Looping beds and what drives them. */
 const LOOPS = ["horde-far-1", "horde-close-1", "crowd-panic-1", "crowd-far-1", "fire-1", "siren-1"] as const;
 type Loop = typeof LOOPS[number];
+/** 0.64: zombie sounds are off for now (the horde beds, the lone snarl and their synth fallback). */
+const ZOMBIE_SOUNDS = false;
 
 export class Sound {
   private ctx: AudioContext | null = null;
@@ -166,6 +168,7 @@ export class Sound {
     if (!this.ctx || near <= 0.02 || zoom <= 0.01) return;
     const now = performance.now(), gaps: Record<string, number> = { zombie: 900, scream: 700, autocannon: 300, tankgun: 400, heli: 1500, collapse: 400 };
     if (now - (this.lastShot["ev:" + name] ?? 0) < (gaps[name] ?? 0)) return;
+    if (name === "zombie" && !ZOMBIE_SOUNDS) return;
     this.lastShot["ev:" + name] = now;
     this.play(`${name}-1`, pan, (0.3 + 0.7 * near) * zoom);
   }
@@ -211,9 +214,9 @@ export class Sound {
     if (!this.ctx) return;
     const t = this.ctx.currentTime, set = (n: Loop, v: number, tc = 0.6) => this.loops[n]?.gain.setTargetAtTime(Math.max(0, Math.min(1, v)), t, tc);
     const real = !!this.loops["horde-far-1"];
-    if (this.amb) this.amb.g.gain.setTargetAtTime(real ? 0 : Math.min(1, horde) * 0.55 * near, t, 0.5);
+    if (this.amb) this.amb.g.gain.setTargetAtTime(real || !ZOMBIE_SOUNDS ? 0 : Math.min(1, horde) * 0.55 * near, t, 0.5);
     if (this.fire) this.fire.gain.setTargetAtTime(this.loops["fire-1"] ? 0 : Math.min(1, fire) * 0.12 * (0.7 + 0.3 * Math.random()), t, 0.1);
-    const h = Math.min(1, horde);
+    const h = ZOMBIE_SOUNDS ? Math.min(1, horde) : 0;
     set("horde-far-1", h * 0.35 * near);                           // the chorus around you
     set("horde-close-1", h * near * 0.9);                          // growls up close
     set("crowd-panic-1", Math.min(1, panic) * 0.9 * near);         // screaming people near the camera

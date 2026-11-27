@@ -55,6 +55,7 @@ import { mountCodex, stripCodexLinks } from "./codexui";
 import { seenFor, slotPrevVersion } from "./codex";
 import { DIAGRAMS } from "./codexDiagrams";
 import { runOps, shotsAllowed, type ShotOp } from "./shotmode";
+import { Playlist } from "./playlist";
 
 installErrorHooks();
 initSprites();
@@ -101,6 +102,7 @@ const canvas = $<HTMLCanvasElement>("view");
 const ctx = canvas.getContext("2d")!;
 const glv = new GLView($<HTMLCanvasElement>("gl"));
 const snd = new Sound();
+const playlist = new Playlist(); // 0.64: battle music rotation
 addEventListener("pointerdown", () => snd.unlock());
 addEventListener("keydown", () => snd.unlock());
 document.addEventListener("click", e => { if ((e.target as HTMLElement).closest("button")) snd.click(); }); // map + agents on the graphics card; 2D canvas on top for the rest
@@ -1356,7 +1358,7 @@ function startBattle() {
   sim.stats.flags = { dev: !!save.settings.devMode, modded: modReports.some(m => m.changes > 0) }; // 0.57
   if ((save.career?.battles ?? 0) >= 1) tip("report"); // 0.57: from the second battle on
   if (sim.classKids > 0) notify("Schools are walking their students to your safe zone. Parents: meet your kids there.", false, sim.time + 30); // 0.41 (Insane school day)
-  snd.music("battle");
+  snd.music(`battle-${playlist.next()}`); // 0.64: one track per level, rotated
   log("info", "battle-start", { ...cityTag(), ...planSummary(), sites: sim.sites.map(([x, y]) => [Math.round(x), Math.round(y)]) });
   messageT = -1e9; // the planning tip goes; battle news runs in the ticker
 }
@@ -3854,7 +3856,7 @@ async function loadBattle(n: number) {
   syncDev();
   setTool(sim.phase === "plan" ? "zone" : "pan");
   speed = 0; refreshUi();
-  if (sim.phase === "battle") snd.music("battle");
+  if (sim.phase === "battle") snd.music(`battle-${playlist.next()}`); // 0.64: a loaded battle counts as a new level for the music
   say(`Loaded the battle from Slot ${n} (${fmtT(Math.max(0, sim.time))} in). ${sim.phase === "battle" ? "Paused: press Space to carry on." : ""}`, 6000);
   log("info", "battle-loaded", { slot: n, ...cityTag(), t: +sim.time.toFixed(1), phase: sim.phase });
 }
